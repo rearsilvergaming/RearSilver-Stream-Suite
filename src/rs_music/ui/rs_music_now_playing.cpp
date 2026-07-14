@@ -1,5 +1,6 @@
 ﻿#include "rs_music_now_playing.hpp"
 #include "rs_music/state/rs_music_state.hpp"
+#include "rs_music/rs_music_controller.hpp"
 
 #include <QVBoxLayout>
 #include <QHBoxLayout>
@@ -18,7 +19,10 @@ static QLabel *makeTitle(const QString &text)
 	return lbl;
 }
 
-RsMusicNowPlaying::RsMusicNowPlaying(RsMusicState *state, QWidget *parent) : QWidget(parent), m_state(state)
+RsMusicNowPlaying::RsMusicNowPlaying(RsMusicState *state, RsMusicController *controller, QWidget *parent)
+	: QWidget(parent),
+	  m_state(state),
+	  m_controller(controller)
 {
 	auto *layout = new QVBoxLayout(this);
 	layout->setContentsMargins(8, 8, 8, 8);
@@ -46,30 +50,15 @@ RsMusicNowPlaying::RsMusicNowPlaying(RsMusicState *state, QWidget *parent) : QWi
 	m_btnRestart = new QPushButton("Restart");
 	m_btnStop = new QPushButton("Stop");
 
-	// --------------------
-	// Control → State wiring
-	// --------------------
-	if (m_state) {
-
-		connect(m_btnPlay, &QPushButton::clicked, this,
-			[this]() { m_state->setPlaybackStatus(RsMusicState::PlaybackStatus::Playing); });
-
-		connect(m_btnPause, &QPushButton::clicked, this,
-			[this]() { m_state->setPlaybackStatus(RsMusicState::PlaybackStatus::Paused); });
-
-		connect(m_btnStop, &QPushButton::clicked, this,
-			[this]() { m_state->setPlaybackStatus(RsMusicState::PlaybackStatus::Stopped); });
-
-connect(m_btnSkip, &QPushButton::clicked, this, [this]() {
-			// Phase 6: Skip is a command, NOT a state change
-			// Actual track advance will be handled by the playback backend later
-			// Do nothing here for now
-		});
-
-		connect(m_btnRestart, &QPushButton::clicked, this, [this]() {
-			// Restart implies re-playing current track
-			m_state->setPlaybackStatus(RsMusicState::PlaybackStatus::Playing);
-		});
+	if (m_controller) {
+		connect(m_btnPlay, &QPushButton::clicked, m_controller, &RsMusicController::actionPlay);
+		connect(m_btnPause, &QPushButton::clicked, m_controller, &RsMusicController::actionPause);
+		connect(m_btnStop, &QPushButton::clicked, m_controller, &RsMusicController::actionStop);
+		connect(m_btnSkip, &QPushButton::clicked, this, [this]() { m_controller->actionSkip("ui"); });
+		connect(m_btnRestart, &QPushButton::clicked, m_controller, &RsMusicController::actionRestart);
+	} else {
+		for (QPushButton *button : {m_btnPlay, m_btnPause, m_btnSkip, m_btnRestart, m_btnStop})
+			button->setEnabled(false);
 	}
 
 
@@ -101,7 +90,8 @@ connect(m_btnSkip, &QPushButton::clicked, this, [this]() {
 	layout->addStretch(1);
 
 	// 🔌 State binding
-	connect(m_state, &RsMusicState::stateChanged, this, &RsMusicNowPlaying::updateFromState);
+	if (m_state)
+		connect(m_state, &RsMusicState::stateChanged, this, &RsMusicNowPlaying::updateFromState);
 
 	updateFromState();
 }

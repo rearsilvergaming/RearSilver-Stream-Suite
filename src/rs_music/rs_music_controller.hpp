@@ -42,5 +42,7 @@ public:
 					       bool isModOrBroadcaster = false);
 
 private:
+	void syncQueueFromBackend();
+
 	RsMusicState *m_state = nullptr; // non-owning
 };

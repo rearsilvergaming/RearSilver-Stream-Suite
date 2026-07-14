@@ -78,4 +78,6 @@ private:
 	int m_pollIntervalSec = 5;
 
 	QTimer m_pollTimer;
+	QTimer m_deviceExpiryTimer;
 };
+

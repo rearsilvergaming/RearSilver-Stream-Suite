@@ -1,4 +1,3 @@
-
 ; ----------------------------------------
 ; RearSilver Stream Suite Installer
 ; Modern UI 2 – CLEAN BASE

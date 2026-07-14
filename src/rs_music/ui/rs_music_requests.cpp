@@ -1,5 +1,6 @@
 ﻿#include "rs_music_requests.hpp"
 #include "rs_music/state/rs_music_state.hpp"
+#include "rs_music/rs_music.hpp"
 
 #include <QVBoxLayout>
 #include <QLabel>
@@ -9,6 +10,7 @@
 #include <QFormLayout>
 #include <QFrame>
 #include <QSignalBlocker>
+#include <QSettings>
 
 static QLabel *makeTitle(const QString &text)
 {
@@ -28,13 +30,8 @@ RsMusicRequests::RsMusicRequests(RsMusicState *state, QWidget *parent) : QWidget
 
 	layout->addWidget(makeTitle("Music — Requests"));
 
-	auto *hint = new QLabel("Skeleton request rules panel.\n\n"
-				"Later this will control:\n"
-				"• Requests enabled\n"
-				"• Per-user limit\n"
-				"• Max queued requests\n"
-				"• Max track length\n"
-				"• Category checks\n");
+	auto *hint = new QLabel("Control who can add songs and how many requests may wait in the queue. "
+				"A value of 0 means unlimited.");
 	hint->setWordWrap(true);
 	hint->setStyleSheet("opacity: 0.75;");
 	layout->addWidget(hint);
@@ -47,20 +44,21 @@ RsMusicRequests::RsMusicRequests(RsMusicState *state, QWidget *parent) : QWidget
 	toggle->setEnabled(true);
 	form->addRow("", toggle);
 
-	auto *perUser = new QSpinBox();
-	perUser->setRange(1, 20);
-	perUser->setEnabled(false);
-	form->addRow("Per-user queued limit:", perUser);
+	m_perUser = new QSpinBox();
+	m_perUser->setRange(0, 20);
+	m_perUser->setSpecialValueText("Unlimited");
+	form->addRow("Per-user queued limit:", m_perUser);
 
-	auto *maxQueue = new QSpinBox();
-	maxQueue->setRange(0, 200);
-	maxQueue->setEnabled(false);
-	form->addRow("Max total requests queued:", maxQueue);
+	m_maxQueue = new QSpinBox();
+	m_maxQueue->setRange(0, 200);
+	m_maxQueue->setSpecialValueText("Unlimited");
+	form->addRow("Max total requests queued:", m_maxQueue);
 
-	auto *maxMinutes = new QSpinBox();
-	maxMinutes->setRange(1, 60);
-	maxMinutes->setEnabled(false);
-	form->addRow("Max track length (minutes):", maxMinutes);
+	m_maxMinutes = new QSpinBox();
+	m_maxMinutes->setRange(0, 60);
+	m_maxMinutes->setSpecialValueText("Unlimited");
+	m_maxMinutes->setToolTip("Applied when track metadata is available.");
+	form->addRow("Max track length (minutes):", m_maxMinutes);
 
 	layout->addLayout(form);
 
@@ -79,11 +77,36 @@ RsMusicRequests::RsMusicRequests(RsMusicState *state, QWidget *parent) : QWidget
 		connect(m_state, &RsMusicState::stateChanged, this, &RsMusicRequests::updateFromState);
 	}
 
-	// 🔁 UI → State
 	if (m_state && m_toggle) {
-		connect(m_toggle, &QCheckBox::toggled, this,
-			[this](bool checked) { m_state->setRequestsEnabled(checked); });
+		rsMusicSetRequestsEnabled(m_state->requestsEnabled());
+		connect(m_toggle, &QCheckBox::toggled, this, [this](bool checked) {
+			m_state->setRequestsEnabled(checked);
+			rsMusicSetRequestsEnabled(checked);
+		});
 	}
+
+	QSettings settings("RearSilver", "RearSilver-Stream-Suite");
+	m_perUser->setValue(settings.value("music/maxPerUser", rsMusicMaxPerUser()).toInt());
+	m_maxQueue->setValue(settings.value("music/maxQueueTotal", rsMusicMaxQueueTotal()).toInt());
+	m_maxMinutes->setValue(settings.value("music/maxTrackLengthMinutes", rsMusicMaxTrackLengthSec() / 60).toInt());
+	rsMusicSetMaxPerUser(m_perUser->value());
+	rsMusicSetMaxQueueTotal(m_maxQueue->value());
+	rsMusicSetMaxTrackLengthSec(m_maxMinutes->value() * 60);
+
+	connect(m_perUser, &QSpinBox::valueChanged, this, [this](int value) {
+		QSettings("RearSilver", "RearSilver-Stream-Suite").setValue("music/maxPerUser", value);
+		rsMusicSetMaxPerUser(value);
+		updateFromState();
+	});
+	connect(m_maxQueue, &QSpinBox::valueChanged, this, [this](int value) {
+		QSettings("RearSilver", "RearSilver-Stream-Suite").setValue("music/maxQueueTotal", value);
+		rsMusicSetMaxQueueTotal(value);
+		updateFromState();
+	});
+	connect(m_maxMinutes, &QSpinBox::valueChanged, this, [](int value) {
+		QSettings("RearSilver", "RearSilver-Stream-Suite").setValue("music/maxTrackLengthMinutes", value);
+		rsMusicSetMaxTrackLengthSec(value * 60);
+	});
 
 	updateFromState();
 }
@@ -95,7 +118,12 @@ void RsMusicRequests::updateFromState()
 
 	const bool enabled = m_state->requestsEnabled();
 
-	m_status->setText(QString("Status: %1").arg(enabled ? "Enabled" : "Disabled"));
+	m_status->setText(QString("Requests %1 · %2 queued maximum · %3 per user")
+				  .arg(enabled ? "enabled" : "disabled")
+				  .arg(m_maxQueue && m_maxQueue->value() > 0 ? QString::number(m_maxQueue->value())
+										 : QString("unlimited"))
+				  .arg(m_perUser && m_perUser->value() > 0 ? QString::number(m_perUser->value())
+									       : QString("unlimited")));
 
 	if (m_toggle) {
 		QSignalBlocker blocker(m_toggle);

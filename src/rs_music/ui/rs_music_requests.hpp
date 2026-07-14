@@ -4,6 +4,7 @@
 
 class QLabel;
 class QCheckBox;
+class QSpinBox;
 class RsMusicState;
 
 class RsMusicRequests : public QWidget {
@@ -16,4 +17,7 @@ private:
 	RsMusicState *m_state = nullptr; // non-owning
 	QLabel *m_status = nullptr;
 	QCheckBox *m_toggle = nullptr;
+	QSpinBox *m_perUser = nullptr;
+	QSpinBox *m_maxQueue = nullptr;
+	QSpinBox *m_maxMinutes = nullptr;
 };

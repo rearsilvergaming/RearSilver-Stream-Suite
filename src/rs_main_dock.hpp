@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 
 #include <QWidget>
 #include <QSplitter>
@@ -31,6 +31,7 @@ class RsMainDock : public QWidget {
 
 public:
 	explicit RsMainDock(QWidget *parent = nullptr);
+	~RsMainDock() override;
 
 protected:
 	void resizeEvent(QResizeEvent *event) override;
@@ -244,3 +245,4 @@ private:
 	void updateControlStates();
 	static void onFrontendEvent(obs_frontend_event event, void *data);
 };
+

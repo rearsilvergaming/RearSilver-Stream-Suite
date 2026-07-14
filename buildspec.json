@@ -1,3 +1,4 @@
+
 {
     "dependencies": {
         "obs-studio": {
@@ -33,13 +34,13 @@
     },
     "platformConfig": {
         "macos": {
-            "bundleId": "com.example.plugintemplate-for-obs"
+            "bundleId": "com.rearsilvergaming.rearsilver-stream-suite"
         }
     },
     "name": "RearSilver-Stream-Suite",
     "displayName": "RearSilver Stream Suite",
     "version": "1.0.0",
-    "author": "RearSilver",
-    "website": "https://example.com",
-    "email": "me@example.com"
+    "author": "RearSilver Gaming",
+    "website": "https://github.com/rearsilvergaming/RearSilver-Stream-Suite"
 }
+

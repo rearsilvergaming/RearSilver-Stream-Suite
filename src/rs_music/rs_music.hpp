@@ -3,6 +3,8 @@
 #include <QString>
 #include <QStringList>
 #include <QJsonObject>
+#include <QObject>
+#include <QVector>
 
 // Forward declarations (OBS)
 struct obs_source;
@@ -64,6 +66,28 @@ struct RsMusicRequestResult {
 	QString reason;  // human-readable rejection reason
 	QString trackId; // set if accepted
 };
+
+struct RsMusicQueueEntry {
+	QString trackId;
+	QString youtubeId;
+	QString pendingQuery;
+	QString title;
+	QString requesterDisplay;
+	int durationSeconds = 0;
+};
+
+class RsMusicBackendEvents : public QObject {
+	Q_OBJECT
+
+public:
+	using QObject::QObject;
+
+signals:
+	void queueChanged();
+};
+
+RsMusicBackendEvents &rsMusicBackendEvents();
+QVector<RsMusicQueueEntry> rsMusicQueueSnapshot();
 
 // Add a song request.
 // - input can be a YouTube URL or free text like "Never Gonna Give You Up Rick Astley".

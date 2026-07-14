@@ -6,18 +6,20 @@ class QLabel;
 class QPushButton;
 
 class RsMusicState;
+class RsMusicController;
 
 class RsMusicNowPlaying : public QWidget {
 	Q_OBJECT
 
 public:
-	explicit RsMusicNowPlaying(RsMusicState *state, QWidget *parent = nullptr);
+	explicit RsMusicNowPlaying(RsMusicState *state, RsMusicController *controller, QWidget *parent = nullptr);
 
 private slots:
 	void updateFromState();
 
 private:
 	RsMusicState *m_state = nullptr;
+	RsMusicController *m_controller = nullptr;
 
 	QLabel *m_lblTitle = nullptr;
 	QLabel *m_lblArtist = nullptr;

@@ -1,10 +1,12 @@
 # Build output and downloaded dependencies
 /build/
 /build-*/
+/build_*/
 /.deps/
 /.vs/
 /package/
 /RearSilver-Stream-Suite/
+/installer/
 
 # Generated installers and debugging artefacts
 /*.exe
@@ -24,4 +26,3 @@
 
 # Exclude CMake build number cache
 /cmake/.CMakeBuildNumber
-

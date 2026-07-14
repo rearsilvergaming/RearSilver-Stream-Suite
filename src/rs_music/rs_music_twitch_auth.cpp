@@ -1,4 +1,4 @@
-﻿#include "rs_music_twitch_auth.hpp"
+#include "rs_music_twitch_auth.hpp"
 
 #include <QDesktopServices>
 #include <QJsonDocument>
@@ -32,6 +32,12 @@ RsMusicTwitchAuth::RsMusicTwitchAuth(const QString &settingsRoot, QObject *paren
 	loadFromSettings();
 
 	connect(&m_pollTimer, &QTimer::timeout, this, &RsMusicTwitchAuth::pollForToken);
+	m_deviceExpiryTimer.setSingleShot(true);
+	connect(&m_deviceExpiryTimer, &QTimer::timeout, this, [this]() {
+		m_pollTimer.stop();
+		m_deviceCode.clear();
+		emit authFailed("Twitch login request expired. Please try again.");
+	});
 }
 
 
@@ -57,12 +63,17 @@ QString RsMusicTwitchAuth::userId() const
 
 void RsMusicTwitchAuth::beginDeviceAuth()
 {
+	m_pollTimer.stop();
+	m_deviceExpiryTimer.stop();
+	m_deviceCode.clear();
 	emit connecting();
 	requestDeviceCode();
 }
 
 void RsMusicTwitchAuth::clearAuth()
 {
+	m_pollTimer.stop();
+	m_deviceExpiryTimer.stop();
 	clearSettings();
 
 	m_accessToken.clear();
@@ -86,10 +97,11 @@ void RsMusicTwitchAuth::requestDeviceCode()
 	QNetworkRequest req(url);
 
 	QNetworkReply *reply = net->post(req, QByteArray());
-	connect(reply, &QNetworkReply::finished, this, [this, reply]() {
+	connect(reply, &QNetworkReply::finished, this, [this, reply, net]() {
+		net->deleteLater();
 		reply->deleteLater();
 
-if (reply->error() != QNetworkReply::NoError) {
+		if (reply->error() != QNetworkReply::NoError) {
 			const QString err = reply->errorString();
 			blog(LOG_ERROR, "[RS Music] Device code request failed: %s", err.toUtf8().constData());
 			blog(LOG_ERROR, "[RS Music] QSslSocket::supportsSsl=%s",
@@ -105,12 +117,19 @@ if (reply->error() != QNetworkReply::NoError) {
 		m_userCode = json["user_code"].toString();
 		m_verifyUrl = json["verification_uri"].toString();
 		m_pollIntervalSec = json["interval"].toInt(5);
+		const int expiresInSec = json["expires_in"].toInt(600);
+
+		if (m_deviceCode.isEmpty() || m_userCode.isEmpty() || m_verifyUrl.isEmpty()) {
+			emit authFailed("Twitch returned an incomplete login request");
+			return;
+		}
 
 		emit deviceCodeReady(m_userCode, m_verifyUrl);
 
 		QDesktopServices::openUrl(QUrl(m_verifyUrl));
 
 		m_pollTimer.start(m_pollIntervalSec * 1000);
+		m_deviceExpiryTimer.start(qMax(1, expiresInSec) * 1000);
 	});
 }
 
@@ -133,20 +152,42 @@ void RsMusicTwitchAuth::requestAccessToken()
 	QNetworkRequest req(url);
 
 	QNetworkReply *reply = net->post(req, QByteArray());
-	connect(reply, &QNetworkReply::finished, this, [this, reply]() {
+	connect(reply, &QNetworkReply::finished, this, [this, reply, net]() {
+		net->deleteLater();
 		reply->deleteLater();
 
-		// While waiting for user authorisation, Twitch returns errors.
-		// We silently keep polling until access_token is returned.
-		if (reply->error() != QNetworkReply::NoError)
-			return;
-
 		const QJsonObject json = QJsonDocument::fromJson(reply->readAll()).object();
+		if (reply->error() != QNetworkReply::NoError) {
+			const QString reason = json["message"].toString(json["error"].toString());
+
+			if (reason == "authorization_pending")
+				return;
+
+			if (reason == "slow_down") {
+				m_pollIntervalSec += 5;
+				m_pollTimer.start(m_pollIntervalSec * 1000);
+				return;
+			}
+
+			m_pollTimer.stop();
+			m_deviceExpiryTimer.stop();
+			m_deviceCode.clear();
+
+			if (reason == "access_denied")
+				emit authFailed("Twitch login was denied");
+			else if (reason == "expired_token")
+				emit authFailed("Twitch login request expired. Please try again.");
+			else
+				emit authFailed("Twitch login failed");
+			return;
+		}
 
 		if (!json.contains("access_token"))
 			return;
 
 		m_pollTimer.stop();
+		m_deviceExpiryTimer.stop();
+		m_deviceCode.clear();
 
 		m_accessToken = json["access_token"].toString();
 		m_refreshToken = json["refresh_token"].toString();
@@ -163,7 +204,8 @@ void RsMusicTwitchAuth::requestAccessToken()
 		userReq.setRawHeader("Client-Id", TWITCH_CLIENT_ID);
 
 		QNetworkReply *userReply = userNet->get(userReq);
-		connect(userReply, &QNetworkReply::finished, this, [this, userReply]() {
+		connect(userReply, &QNetworkReply::finished, this, [this, userReply, userNet]() {
+			userNet->deleteLater();
 			userReply->deleteLater();
 
 			if (userReply->error() != QNetworkReply::NoError) {
@@ -236,10 +278,12 @@ void RsMusicTwitchAuth::reconnect()
 	req.setRawHeader("Client-Id", TWITCH_CLIENT_ID);
 
 	QNetworkReply *reply = net->get(req);
-	connect(reply, &QNetworkReply::finished, this, [this, reply]() {
+	connect(reply, &QNetworkReply::finished, this, [this, reply, net]() {
+		net->deleteLater();
 		reply->deleteLater();
 
 		if (reply->error() != QNetworkReply::NoError) {
+			clearAuth();
 			emit authFailed("Saved Twitch login is no longer valid");
 			return;
 		}
@@ -248,6 +292,7 @@ void RsMusicTwitchAuth::reconnect()
 
 		const QJsonArray data = obj["data"].toArray();
 		if (data.isEmpty()) {
+			clearAuth();
 			emit authFailed("Saved Twitch login is no longer valid");
 			return;
 		}
@@ -264,3 +309,4 @@ void RsMusicTwitchAuth::reconnect()
 		emit authCompleted();
 	});
 }
+

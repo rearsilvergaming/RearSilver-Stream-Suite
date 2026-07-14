@@ -78,6 +78,29 @@ struct QueueItem {
 };
 static std::deque<QueueItem> g_requestQueue;
 
+RsMusicBackendEvents &rsMusicBackendEvents()
+{
+	static RsMusicBackendEvents events;
+	return events;
+}
+
+QVector<RsMusicQueueEntry> rsMusicQueueSnapshot()
+{
+	QVector<RsMusicQueueEntry> snapshot;
+	snapshot.reserve(static_cast<int>(g_requestQueue.size()));
+	for (const QueueItem &item : g_requestQueue) {
+		RsMusicQueueEntry entry;
+		entry.trackId = item.trackId;
+		entry.youtubeId = item.youtubeId;
+		entry.pendingQuery = item.pendingQuery;
+		entry.title = item.title;
+		entry.requesterDisplay = item.requesterDisplay;
+		entry.durationSeconds = item.durationSec;
+		snapshot.append(entry);
+	}
+	return snapshot;
+}
+
 static qint64 nowMs()
 {
 	return QDateTime::currentMSecsSinceEpoch();
@@ -298,6 +321,7 @@ static bool selectAndPlayNext(const QString &why)
 	while (!g_requestQueue.empty()) {
 		const QueueItem it = g_requestQueue.front();
 		g_requestQueue.pop_front();
+		emit rsMusicBackendEvents().queueChanged();
 
 		if (playSelected(it, "chat"))
 			return true;
@@ -613,6 +637,7 @@ RsMusicRequestResult rsMusicRequestSong(const QString &requesterId, const QStrin
 	}
 
 	g_requestQueue.push_back(it);
+	emit rsMusicBackendEvents().queueChanged();
 
 	out.accepted = true;
 	out.reason.clear();
@@ -629,7 +654,10 @@ RsMusicRequestResult rsMusicRequestSong(const QString &requesterId, const QStrin
 // -----------------------
 void rsMusicClearRequestsQueue()
 {
+	if (g_requestQueue.empty())
+		return;
 	g_requestQueue.clear();
+	emit rsMusicBackendEvents().queueChanged();
 	rsMusicPushStateFull();
 }
 
@@ -638,6 +666,7 @@ bool rsMusicRemoveRequestByTrackId(const QString &trackId)
 	for (auto it = g_requestQueue.begin(); it != g_requestQueue.end(); ++it) {
 		if (it->trackId == trackId) {
 			g_requestQueue.erase(it);
+			emit rsMusicBackendEvents().queueChanged();
 			rsMusicPushStateFull();
 			return true;
 		}

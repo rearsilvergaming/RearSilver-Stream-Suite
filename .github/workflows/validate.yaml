@@ -1,0 +1,55 @@
+name: Validate repository
+
+on:
+  workflow_call:
+
+jobs:
+  repository:
+    name: Repository structure
+    runs-on: windows-2022
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Validate required project files
+        shell: pwsh
+        run: |
+          $requiredFiles = @(
+            'CMakeLists.txt',
+            'CMakePresets.json',
+            'buildspec.json',
+            'README.md',
+            'LICENSE',
+            'src/plugin-main.cpp',
+            'src/rs_main_dock.cpp',
+            'src/rs_main_dock.hpp',
+            'data/locale/en-GB.ini'
+          )
+
+          $missingFiles = $requiredFiles | Where-Object { -not (Test-Path -LiteralPath $_ -PathType Leaf) }
+          if ($missingFiles) {
+            throw "Missing required project files: $($missingFiles -join ', ')"
+          }
+
+      - name: Validate project metadata
+        shell: pwsh
+        run: |
+          $buildSpec = Get-Content -LiteralPath buildspec.json -Raw | ConvertFrom-Json
+          if ($buildSpec.name -ne 'RearSilver-Stream-Suite') {
+            throw 'buildspec.json contains an unexpected project name.'
+          }
+          if (-not $buildSpec.version) {
+            throw 'buildspec.json must contain a version.'
+          }
+
+      - name: Check source for unresolved merge markers
+        shell: pwsh
+        run: |
+          $matches = Get-ChildItem src, data -Recurse -File |
+            Select-String -Pattern '^(<<<<<<<|>>>>>>>)'
+          if ($matches) {
+            $matches | ForEach-Object { Write-Error $_.ToString() }
+            throw 'Unresolved merge markers found.'
+          }
+
+

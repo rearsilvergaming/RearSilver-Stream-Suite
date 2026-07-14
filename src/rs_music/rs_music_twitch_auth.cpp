@@ -1,4 +1,3 @@
-
 #include "rs_music_twitch_auth.hpp"
 
 #include <QDesktopServices>
@@ -309,3 +308,4 @@ void RsMusicTwitchAuth::reconnect()
 		emit authCompleted();
 	});
 }
+

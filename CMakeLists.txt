@@ -1,13 +1,17 @@
-﻿cmake_minimum_required(VERSION 3.20)
+cmake_minimum_required(VERSION 3.20)
 project("RearSilver-Stream-Suite" LANGUAGES CXX)
 
-set(OBS_SOURCE_DIR "C:/Users/Ben/Desktop/Streaming/Streamer Tools/obs-studio")
-set(OBS_BUILD_DIR  "C:/Users/Ben/Desktop/Streaming/Streamer Tools/obs-studio/build_x64")
+set(OBS_SOURCE_DIR "" CACHE PATH "Path to the OBS Studio source tree")
+set(OBS_BUILD_DIR "" CACHE PATH "Path to the configured OBS Studio build tree")
 set(DEPS_DIR "${CMAKE_CURRENT_SOURCE_DIR}/.deps")
 
-# ----- Qt6 (SDK for BUILD only) -----
-# This must point to a Qt SDK install that contains Qt6Config.cmake
-set(Qt6_DIR "C:/Qt/6.8.3/msvc2022_64/lib/cmake/Qt6")
+if(NOT OBS_SOURCE_DIR OR NOT EXISTS "${OBS_SOURCE_DIR}/libobs/obs.h")
+    message(FATAL_ERROR "Set OBS_SOURCE_DIR to an OBS Studio source tree (for example: cmake -DOBS_SOURCE_DIR=C:/path/to/obs-studio).")
+endif()
+
+if(NOT OBS_BUILD_DIR OR NOT EXISTS "${OBS_BUILD_DIR}/config/obsconfig.h")
+    message(FATAL_ERROR "Set OBS_BUILD_DIR to the matching configured OBS build tree (for example: cmake -DOBS_BUILD_DIR=C:/path/to/obs-studio/build_x64).")
+endif()
 
 find_package(Qt6 REQUIRED COMPONENTS Core Gui Widgets Network)
 
@@ -82,6 +86,7 @@ target_include_directories(${PROJECT_NAME} PRIVATE
     "${OBS_SOURCE_DIR}/frontend/api"
     "${OBS_BUILD_DIR}/libobs"
     "${OBS_BUILD_DIR}/frontend/api"
+    "${OBS_BUILD_DIR}/config"
     "${DEPS_DIR}/include"
 )
 
@@ -110,4 +115,5 @@ set_target_properties(${PROJECT_NAME}
 if (MSVC)
     target_compile_options(${PROJECT_NAME} PRIVATE /utf-8)
 endif()
+
 

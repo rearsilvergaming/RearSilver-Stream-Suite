@@ -1,20 +1,20 @@
-# Exclude everything
-/*
+# Build output and downloaded dependencies
+/build/
+/build-*/
+/.deps/
+/.vs/
+/package/
+/RearSilver-Stream-Suite/
 
-# Except for default project files
-!/.github
-!/build-aux
-!/cmake
-!/data
-!/src
-!.clang-format
-!.gersemirc
-!.gitignore
-!buildspec.json
-!CMakeLists.txt
-!CMakePresets.json
-!LICENSE
-!README.md
+# Generated installers and debugging artefacts
+/*.exe
+/*.dll
+/*.lib
+/*.pdb
+
+# Local scratch files
+/Commands.txt
+/rs_music_ws/
 
 # Exclude lock files
 *.lock.json
@@ -24,3 +24,4 @@
 
 # Exclude CMake build number cache
 /cmake/.CMakeBuildNumber
+

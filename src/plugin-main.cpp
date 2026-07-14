@@ -1,4 +1,4 @@
-﻿/*
+/*
     RearSilver Stream Suite
 */
 
@@ -17,6 +17,8 @@
 #include "rs_main_dock.hpp"
 #include "rs_music/rs_music.hpp"
 #include "rs_music/rs_music_tls_probe.hpp"
+#include "enhancements/rs_auto_start.hpp"
+#include "enhancements/rs_instant_replay.hpp"
 
 // ---------------------------------------------
 // OBS module boilerplate
@@ -164,9 +166,15 @@ void obs_module_unload(void)
 {
 	LOG_INFO_MSG("plugin unload");
 
+	obs_frontend_remove_event_callback(frontend_event_callback, nullptr);
+	RsInstantReplay::shutdown();
+	RsAutoStart::shutdown();
+	rsMusicShutdown();
+
 	// Tell OBS to remove the dock
 	obs_frontend_remove_dock("RearSilverStreamSuiteDock");
 
 	// DO NOT delete g_dock — OBS owns it
 	g_dock = nullptr;
 }
+

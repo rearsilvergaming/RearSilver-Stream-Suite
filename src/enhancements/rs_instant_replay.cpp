@@ -1,4 +1,4 @@
-﻿#include "rs_instant_replay.hpp"
+#include "rs_instant_replay.hpp"
 #include "../rs_main_dock.hpp"
 
 #include <QFileInfo>
@@ -46,6 +46,7 @@ static qint64 s_replayBufferStartTime = 0;
 // Hotkey
 // ------------------------------------------------------------
 static obs_hotkey_id s_replayHotkey = OBS_INVALID_HOTKEY_ID;
+static bool s_frontendCallbacksRegistered = false;
 
 
 // ------------------------------------------------------------
@@ -707,8 +708,7 @@ static void replayHotkeyCallback(void *, obs_hotkey_id, obs_hotkey_t *, bool pre
 // ------------------------------------------------------------
 	void RsInstantReplay::registerFrontendCallbacks()
 {
-	static bool registered = false;
-	if (registered)
+	if (s_frontendCallbacksRegistered)
 		return;
 
 	obs_frontend_add_event_callback(onFrontendEvent, nullptr);
@@ -716,12 +716,25 @@ static void replayHotkeyCallback(void *, obs_hotkey_id, obs_hotkey_t *, bool pre
 	// Register hotkey
 	s_replayHotkey = obs_hotkey_register_frontend("rs_instant_replay_trigger", "RearSilver: Trigger Instant Replay",
 						      replayHotkeyCallback, nullptr);
-	registered = true;
+	s_frontendCallbacksRegistered = true;
 	if (loadReplayAutoStart()) {
 		QTimer::singleShot(500, []() {
 			if (!obs_frontend_replay_buffer_active())
 				obs_frontend_replay_buffer_start();
 		});
+	}
+}
+
+void RsInstantReplay::shutdown()
+{
+	if (s_frontendCallbacksRegistered) {
+		obs_frontend_remove_event_callback(onFrontendEvent, nullptr);
+		s_frontendCallbacksRegistered = false;
+	}
+
+	if (s_replayHotkey != OBS_INVALID_HOTKEY_ID) {
+		obs_hotkey_unregister(s_replayHotkey);
+		s_replayHotkey = OBS_INVALID_HOTKEY_ID;
 	}
 }
 
@@ -1092,3 +1105,4 @@ QWidget *RsInstantReplay::createPage(RsMainDock *dock, QWidget *parent)
 	(void)dock;
 	return scroll;
 }
+

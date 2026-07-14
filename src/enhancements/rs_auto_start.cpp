@@ -1,4 +1,4 @@
-﻿// ---------------------------------------------------------------
+// ---------------------------------------------------------------
 // src/enhancements/rs_auto_start.cpp
 // Auto-Start Manager
 // - Persistent program list + toggles (OBS config_t)
@@ -23,6 +23,7 @@
 #include <QTime>
 #include <QAbstractItemView>
 #include <QScrollArea>
+#include <QPointer>
 
 #include <vector>
 #include <unordered_map>
@@ -343,10 +344,10 @@ static void do_close_paths(const QStringList &paths, QPlainTextEdit *log)
 // OBS event callback (auto launch / auto close)
 // -----------------------------
 struct UiRefs {
-	QListWidget *list = nullptr;
-	QCheckBox *chkAutoLaunch = nullptr;
-	QCheckBox *chkAutoClose = nullptr;
-	QPlainTextEdit *log = nullptr;
+	QPointer<QListWidget> list;
+	QPointer<QCheckBox> chkAutoLaunch;
+	QPointer<QCheckBox> chkAutoClose;
+	QPointer<QPlainTextEdit> log;
 };
 
 static UiRefs g_ui;
@@ -392,12 +393,11 @@ if (event == OBS_FRONTEND_EVENT_EXIT) {
 
 void RsAutoStart::ensureObsEventHook()
 {
-	static bool hooked = false;
-	if (hooked)
+	if (g_event_hooked)
 		return;
 
 	obs_frontend_add_event_callback(on_obs_event, nullptr);
-	hooked = true;
+	g_event_hooked = true;
 
 	// -------------------------------------------------
 	// 🔁 SAFETY NET:
@@ -410,6 +410,16 @@ void RsAutoStart::ensureObsEventHook()
 			do_launch_paths(cfg_load_programs(), nullptr);
 		}
 	}
+}
+
+void RsAutoStart::shutdown()
+{
+	if (g_event_hooked) {
+		obs_frontend_remove_event_callback(on_obs_event, nullptr);
+		g_event_hooked = false;
+	}
+
+	g_ui = {};
 }
 
 // ---------------------------------------------------------------
@@ -600,3 +610,4 @@ QWidget *RsAutoStart::createPage(RsMainDock *, QWidget *parent)
 
 return scroll;
 }
+

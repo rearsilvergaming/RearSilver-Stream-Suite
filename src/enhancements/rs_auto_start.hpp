@@ -8,4 +8,6 @@ class RsAutoStart {
 public:
 	static QWidget *createPage(RsMainDock *dock, QWidget *parent);
 	static void ensureObsEventHook();
+	static void shutdown();
 };
+

@@ -29,6 +29,7 @@ public:
 
 	// Register OBS frontend callbacks (called once)
 	static void registerFrontendCallbacks();
+	static void shutdown();
 
 	// Trigger a replay save (Play button / hotkey)
 	static void triggerReplay();
@@ -38,3 +39,4 @@ public:
 	static void setReplayFolderOverride(const QString &path);
 	static void ensureReplayBgSource();
 };
+

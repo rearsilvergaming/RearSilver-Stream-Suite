@@ -1,4 +1,4 @@
-﻿#include "rs_main_dock.hpp"
+#include "rs_main_dock.hpp"
 
 #include <QWidget>
 #include <QVBoxLayout>
@@ -281,6 +281,11 @@ if (m_lblBotDot && m_botAuth && !m_botAuthResolved) {
 	updateEffectiveLayout();
 	showControls();
 
+}
+
+RsMainDock::~RsMainDock()
+{
+	obs_frontend_remove_event_callback(RsMainDock::onFrontendEvent, this);
 }
 
 /* -------------------------------------------------------
@@ -678,3 +683,4 @@ void RsMainDock::openNativeSettings()
 
 	blog(LOG_WARNING, "[RearSilver] Could not locate OBS Settings QAction.");
 }
+

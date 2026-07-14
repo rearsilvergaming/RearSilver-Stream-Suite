@@ -22,6 +22,7 @@
 #include "rs_music/rs_music_controller.hpp"
 #include "rs_music/rs_music_command_router.hpp"
 #include "rs_music/rs_music_twitch_irc_reader.hpp"
+#include "rs_music/rs_music_twitch_irc_sender.hpp"
 #include "rs_music/rs_music_twitch_auth.hpp"
 
 // Set Twitch status dot colour
@@ -117,6 +118,26 @@ RsMainDock::RsMainDock(QWidget *parent) : QWidget(parent)
 	// --------------------------------------------------
 	m_streamerAuth = new RsMusicTwitchAuth("music/twitch/streamer", this);
 	m_botAuth = new RsMusicTwitchAuth("music/twitch/bot", this);
+	m_musicCommandRouter = new RsMusicCommandRouter(m_musicController, this);
+	m_musicIrcReader = new RsMusicTwitchIrcReader(this);
+	m_musicIrcSender = new RsMusicTwitchIrcSender(this);
+
+	connect(m_musicIrcReader, &RsMusicTwitchIrcReader::chatMessageReceived, this,
+		[this](const RsMusicChatMessage &message) {
+			RsMusicChatContext context;
+			context.userId = message.userId;
+			context.displayName = message.displayName;
+			context.isMod = message.isMod;
+			context.isBroadcaster = message.isBroadcaster;
+			m_musicCommandRouter->ingestChatMessage(context, message.message);
+		});
+	connect(m_musicCommandRouter, &RsMusicCommandRouter::feedbackMessage, m_musicIrcSender,
+		&RsMusicTwitchIrcSender::sendMessage);
+	connect(m_streamerAuth, &RsMusicTwitchAuth::authCompleted, this, &RsMainDock::connectMusicChat);
+	connect(m_botAuth, &RsMusicTwitchAuth::authCompleted, this, &RsMainDock::connectMusicChat);
+	connect(m_streamerAuth, &RsMusicTwitchAuth::loggedOut, m_musicIrcReader, &RsMusicTwitchIrcReader::disconnect);
+	connect(m_streamerAuth, &RsMusicTwitchAuth::loggedOut, m_musicIrcSender, &RsMusicTwitchIrcSender::disconnect);
+	connect(m_botAuth, &RsMusicTwitchAuth::loggedOut, m_musicIrcSender, &RsMusicTwitchIrcSender::disconnect);
 
 	// Auto-resume if tokens already exist
 	if (m_streamerAuth->hasValidToken())
@@ -281,6 +302,23 @@ if (m_lblBotDot && m_botAuth && !m_botAuthResolved) {
 	updateEffectiveLayout();
 	showControls();
 
+}
+
+void RsMainDock::connectMusicChat()
+{
+	if (!m_streamerAuth || !m_streamerAuth->hasValidToken() || m_streamerAuth->userLogin().isEmpty())
+		return;
+
+	const QString channel = m_streamerAuth->userLogin();
+	m_musicIrcReader->connectToChat(channel, m_streamerAuth->accessToken(), channel);
+
+	// Prefer the dedicated bot identity, but keep feedback functional when only
+	// the streamer account is configured.
+	if (m_botAuth && m_botAuth->hasValidToken() && !m_botAuth->userLogin().isEmpty()) {
+		m_musicIrcSender->connectSender(m_botAuth->userLogin(), m_botAuth->accessToken(), channel);
+	} else {
+		m_musicIrcSender->connectSender(channel, m_streamerAuth->accessToken(), channel);
+	}
 }
 
 RsMainDock::~RsMainDock()
@@ -683,4 +721,3 @@ void RsMainDock::openNativeSettings()
 
 	blog(LOG_WARNING, "[RearSilver] Could not locate OBS Settings QAction.");
 }
-

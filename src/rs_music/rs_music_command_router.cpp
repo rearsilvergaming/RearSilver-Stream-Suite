@@ -73,12 +73,14 @@ void RsMusicCommandRouter::handleSongRequest(const RsMusicChatContext &ctx, cons
 		return;
 	}
 
-	// ---- STUB ----
-	// Queue / validation happens later.
-	// For now we only forward intent.
-	m_controller->actionSongRequest(ctx.userId, ctx.displayName, args);
+	const RsMusicRequestResult result =
+		m_controller->actionSongRequest(ctx.userId, ctx.displayName, args, isControlAllowed(ctx));
+	if (!result.accepted) {
+		emit feedbackMessage(QString("%1: %2").arg(ctx.displayName, result.reason));
+		return;
+	}
 
-	emit feedbackMessage(QString("🎵 %1 requested: %2").arg(ctx.displayName, args));
+	emit feedbackMessage(QString("🎵 %1 added a song to the queue").arg(ctx.displayName));
 }
 
 void RsMusicCommandRouter::handlePlay(const RsMusicChatContext &ctx)
@@ -112,8 +114,6 @@ void RsMusicCommandRouter::handleSkip(const RsMusicChatContext &ctx)
 		return;
 	}
 
-	// ---- STUB ----
-	// Skip does NOT change state yet (backend required)
 	m_controller->actionSkip("chat");
 
 	emit feedbackMessage("⏭️ Track skipped");

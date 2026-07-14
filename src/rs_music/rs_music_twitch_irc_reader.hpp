@@ -2,7 +2,7 @@
 
 #include <QObject>
 #include <QString>
-#include <QTcpSocket>
+#include <QSslSocket>
 #include <QByteArray>
 
 /*
@@ -40,14 +40,15 @@ private:
 	void handleLine(const QString &line);
 
 private:
-	QTcpSocket m_socket;
+	QSslSocket m_socket;
 	QByteArray m_rxBuffer;
 	QString m_channel;
 	QString m_oauthToken;
 	QString m_loginName;
 
 	void sendRaw(const QString &line);
-	void onSocketConnected();
+	void onSocketEncrypted();
 	void onSocketReadyRead();
 	void onSocketDisconnected();
 };
+

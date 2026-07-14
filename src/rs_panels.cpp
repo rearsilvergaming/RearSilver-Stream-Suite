@@ -277,7 +277,7 @@ void RsMainDock::createPanels()
 	// --------------------
 	// MUSIC skeleton pages (NEW)
 	// --------------------
-	m_pageMusicNowPlaying = new RsMusicNowPlaying(musicState, m_contentCard);
+	m_pageMusicNowPlaying = new RsMusicNowPlaying(musicState, m_musicController, m_contentCard);
 	m_pageMusicQueue = new RsMusicQueue(musicState, m_contentCard);
 	m_pageMusicRequests = new RsMusicRequests(musicState, m_contentCard);
 	m_pageMusicPlaylist = new RsMusicPlaylist(musicState, m_contentCard);

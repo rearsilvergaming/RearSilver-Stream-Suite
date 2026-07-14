@@ -309,5 +309,3 @@ void RsMusicTwitchAuth::reconnect()
 		emit authCompleted();
 	});
 }
-
-

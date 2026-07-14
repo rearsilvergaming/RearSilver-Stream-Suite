@@ -3,6 +3,7 @@
 #include <QWidget>
 
 class QLabel;
+class QListWidget;
 class RsMusicState;
 
 class RsMusicQueue : public QWidget {
@@ -13,5 +14,6 @@ private:
 	void updateFromState();
 
 	RsMusicState *m_state = nullptr; // non-owning
+	QListWidget *m_list = nullptr;
 	QLabel *m_status = nullptr;
 };

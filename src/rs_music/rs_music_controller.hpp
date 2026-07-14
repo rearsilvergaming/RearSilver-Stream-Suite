@@ -3,6 +3,8 @@
 #include <QObject>
 #include <QString>
 
+#include "rs_music.hpp"
+
 /*
  * RsMusicController
  *
@@ -31,11 +33,13 @@ public:
 	// ---- playback controls ----
 	void actionPlay();
 	void actionPause();
+	void actionStop();
 	void actionRestart();
 	void actionSkip(const QString &source); // "ui" / "chat"
 
 	// ---- song requests ----
-	void actionSongRequest(const QString &userId, const QString &displayName, const QString &query);
+	RsMusicRequestResult actionSongRequest(const QString &userId, const QString &displayName, const QString &query,
+					       bool isModOrBroadcaster = false);
 
 private:
 	RsMusicState *m_state = nullptr; // non-owning

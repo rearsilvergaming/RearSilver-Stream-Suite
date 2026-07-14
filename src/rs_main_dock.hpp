@@ -23,6 +23,7 @@ class QLabel;
 class RsMusicController;
 class RsMusicCommandRouter;
 class RsMusicTwitchIrcReader;
+class RsMusicTwitchIrcSender;
 class RsMusicTwitchAuth;
 
 
@@ -101,6 +102,7 @@ private:
 	// Info bar
 	void updateSceneSourceInfo();
 	void updateMusicStatusInfo();
+	void connectMusicChat();
 
 	// 🔒 Safety Lock helpers
 	void beginStopHold(QPushButton *btn, std::function<void()> action);
@@ -115,6 +117,7 @@ private:
 	RsMusicController *m_musicController = nullptr;
 	RsMusicCommandRouter *m_musicCommandRouter = nullptr;
 	RsMusicTwitchIrcReader *m_musicIrcReader = nullptr;
+	RsMusicTwitchIrcSender *m_musicIrcSender = nullptr;
 
 // Twitch auth (owned by dock)
 	RsMusicTwitchAuth *m_streamerAuth = nullptr;
@@ -245,4 +248,3 @@ private:
 	void updateControlStates();
 	static void onFrontendEvent(obs_frontend_event event, void *data);
 };
-

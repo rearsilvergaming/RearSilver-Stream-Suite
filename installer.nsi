@@ -1,7 +1,7 @@
 
 ; ----------------------------------------
 ; RearSilver Stream Suite Installer
-; Modern UI 2 â€“ CLEAN BASE
+; Modern UI 2 – CLEAN BASE
 ; ----------------------------------------
 
 Unicode True
@@ -26,7 +26,7 @@ Name "RearSilver Stream Suite"
 
 ; Left-side big image (Welcome + Finish)
 !define MUI_WELCOMEFINISHPAGE_BITMAP "welcome_banner.bmp"
-; Optional (uncomment if you donâ€™t want it stretched/cropped)
+; Optional (uncomment if you don’t want it stretched/cropped)
 ; !define MUI_WELCOMEFINISHPAGE_BITMAP_NOSTRETCH
 
 OutFile "RearSilver Stream Suite.exe"
@@ -128,4 +128,3 @@ SectionEnd
 Function LaunchOBS
   Exec '"$INSTDIR\bin\64bit\obs64.exe"'
 FunctionEnd
-

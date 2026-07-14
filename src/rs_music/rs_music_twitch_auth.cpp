@@ -16,9 +16,8 @@ extern "C" {
 #include <obs-module.h>
 }
 
-// ⚠️ YOU MUST SET THIS BEFORE RELEASE
-// Create ONE Twitch app for the plugin.
-// Users never see this.
+// Public client identifier for the RearSilver Stream Suite Twitch application.
+// OAuth client IDs are identifiers, not secrets; no client secret is embedded.
 static const char *TWITCH_CLIENT_ID = "6h5j0d7kfjaeyw6fejisawwqheeahd";
 
 // Twitch endpoints

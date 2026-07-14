@@ -1,0 +1,49 @@
+RearSilver Stream Suite
+Software Licence Agreement
+
+Copyright © 2025 RearSilver.
+All rights reserved.
+
+IMPORTANT: PLEASE READ THIS LICENCE CAREFULLY BEFORE USING THIS SOFTWARE.
+
+By installing, copying, or using RearSilver Stream Suite ("the Software"),
+you agree to be bound by the terms of this Licence Agreement.
+
+1. GRANT OF LICENCE
+RearSilver grants you a non-exclusive, non-transferable, revocable licence
+to install and use the Software for personal or commercial streaming use
+on systems you own or control.
+
+2. RESTRICTIONS
+You may NOT:
+- Redistribute, sell, rent, lease, sublicense, or share the Software
+- Reverse engineer, decompile, or disassemble the Software
+- Modify or create derivative works of the Software
+- Remove or alter any copyright or branding notices
+
+3. FREE AND PRO FEATURES
+Some features of the Software may be designated as "Free" or "Pro".
+Access to Pro features may require payment and may be restricted
+without a valid licence.
+
+4. OWNERSHIP
+The Software is licensed, not sold.
+RearSilver retains all right, title, and interest in and to the Software,
+including all intellectual property rights.
+
+5. TERMINATION
+This Licence is effective until terminated.
+It will terminate automatically if you breach any of its terms.
+Upon termination, you must cease all use of the Software.
+
+6. NO WARRANTY
+The Software is provided "AS IS", without warranty of any kind,
+express or implied, including but not limited to fitness for a
+particular purpose.
+
+7. LIMITATION OF LIABILITY
+In no event shall RearSilver be liable for any damages arising
+out of the use or inability to use the Software.
+
+8. GOVERNING LAW
+This Licence shall be governed by the laws of the United Kingdom.

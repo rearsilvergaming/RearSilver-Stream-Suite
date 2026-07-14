@@ -1,22 +1,32 @@
 #include "rs_music_twitch_irc_reader.hpp"
 
 #include <QStringList>
+#include <QSslError>
 
 extern "C" {
 #include <obs-module.h>
 }
 
 static const char *IRC_HOST = "irc.chat.twitch.tv";
-static const quint16 IRC_PORT = 6667; // Plain IRC (no TLS). TLS comes later once Qt TLS backend is stable.
+static const quint16 IRC_TLS_PORT = 6697;
 
 RsMusicTwitchIrcReader::RsMusicTwitchIrcReader(QObject *parent) : QObject(parent)
 {
-	connect(&m_socket, &QTcpSocket::connected, this, &RsMusicTwitchIrcReader::onSocketConnected);
-	connect(&m_socket, &QTcpSocket::readyRead, this, &RsMusicTwitchIrcReader::onSocketReadyRead);
-	connect(&m_socket, &QTcpSocket::disconnected, this, &RsMusicTwitchIrcReader::onSocketDisconnected);
+	connect(&m_socket, &QSslSocket::encrypted, this, &RsMusicTwitchIrcReader::onSocketEncrypted);
+	connect(&m_socket, &QSslSocket::readyRead, this, &RsMusicTwitchIrcReader::onSocketReadyRead);
+	connect(&m_socket, &QSslSocket::disconnected, this, &RsMusicTwitchIrcReader::onSocketDisconnected);
 
-	connect(&m_socket, &QTcpSocket::errorOccurred, this, [this](QAbstractSocket::SocketError) {
+	connect(&m_socket, &QSslSocket::errorOccurred, this, [this](QAbstractSocket::SocketError) {
 		blog(LOG_ERROR, "[RS Music] IRC socket error: %s", m_socket.errorString().toUtf8().constData());
+		emit connectionStateChanged(false);
+	});
+
+	connect(&m_socket, &QSslSocket::sslErrors, this, [this](const QList<QSslError> &errors) {
+		for (const QSslError &error : errors)
+			blog(LOG_ERROR, "[RS Music] IRC TLS error: %s", error.errorString().toUtf8().constData());
+
+		// OAuth credentials must never be sent if the server certificate cannot be verified.
+		m_socket.abort();
 		emit connectionStateChanged(false);
 	});
 }
@@ -24,16 +34,25 @@ RsMusicTwitchIrcReader::RsMusicTwitchIrcReader(QObject *parent) : QObject(parent
 void RsMusicTwitchIrcReader::connectToChat(const QString &channelName, const QString &oauthToken,
 					   const QString &loginName)
 {
-	m_channel = channelName.toLower();
-	m_oauthToken = oauthToken;
-	m_loginName = loginName;
+	m_channel = channelName.trimmed().toLower();
+	m_oauthToken = oauthToken.trimmed();
+	m_loginName = loginName.trimmed().toLower();
+
+	if (m_channel.startsWith('#'))
+		m_channel.remove(0, 1);
+
+	if (m_channel.isEmpty() || m_oauthToken.isEmpty() || m_loginName.isEmpty()) {
+		blog(LOG_ERROR, "[RS Music] IRC connection refused because channel, token, or login is missing");
+		emit connectionStateChanged(false);
+		return;
+	}
 
 	m_rxBuffer.clear();
 
 	if (m_socket.state() != QAbstractSocket::UnconnectedState)
 		m_socket.abort();
 
-	m_socket.connectToHost(IRC_HOST, IRC_PORT);
+	m_socket.connectToHostEncrypted(IRC_HOST, IRC_TLS_PORT);
 }
 
 void RsMusicTwitchIrcReader::disconnect()
@@ -41,7 +60,7 @@ void RsMusicTwitchIrcReader::disconnect()
 	m_socket.disconnectFromHost();
 }
 
-void RsMusicTwitchIrcReader::onSocketConnected()
+void RsMusicTwitchIrcReader::onSocketEncrypted()
 {
 	emit connectionStateChanged(true);
 
@@ -131,3 +150,4 @@ void RsMusicTwitchIrcReader::onSocketReadyRead()
 		handleLine(line);
 	}
 }
+

@@ -1,6 +1,7 @@
+
 ; ----------------------------------------
 ; RearSilver Stream Suite Installer
-; Modern UI 2 – CLEAN BASE
+; Modern UI 2 â€“ CLEAN BASE
 ; ----------------------------------------
 
 Unicode True
@@ -10,14 +11,14 @@ Unicode True
 ; Product Info
 ; ----------------------------------------
 Name "RearSilver Stream Suite"
-!define PRODUCT_VERSION "0.1.0"
-!define PRODUCT_PUBLISHER "RearSilver"
-!define PRODUCT_WEB_SITE "https://twitch.tv/rearsilver"
+!define PRODUCT_VERSION "1.0.0"
+!define PRODUCT_PUBLISHER "RearSilver Gaming"
+!define PRODUCT_WEB_SITE "https://github.com/rearsilvergaming/RearSilver-Stream-Suite"
 
 ; ----------------------------------------
 ; Output + Icons (ORDER MATTERS)
 ; ----------------------------------------
-!define MUI_ICON "rearsilver.ico"
+!define MUI_ICON "installer.ico"
 
 ; Top header (right-side header area)
 !define MUI_HEADERIMAGE
@@ -25,7 +26,7 @@ Name "RearSilver Stream Suite"
 
 ; Left-side big image (Welcome + Finish)
 !define MUI_WELCOMEFINISHPAGE_BITMAP "welcome_banner.bmp"
-; Optional (uncomment if you don’t want it stretched/cropped)
+; Optional (uncomment if you donâ€™t want it stretched/cropped)
 ; !define MUI_WELCOMEFINISHPAGE_BITMAP_NOSTRETCH
 
 OutFile "RearSilver Stream Suite.exe"
@@ -37,9 +38,9 @@ InstallDir "$PROGRAMFILES64\obs-studio"
 RequestExecutionLevel admin
 
 ; ----------------------------------------
-; Build output (ABSOLUTE PATH)
+; Project root (the installer script lives in this directory)
 ; ----------------------------------------
-!define SOURCE_DIR "C:\Users\Ben\Desktop\Streaming\Streamer Tools\obs-streamer-tools\obs-streamer-tools"
+!define SOURCE_DIR "${__FILEDIR__}"
 
 ; ----------------------------------------
 ; UI Behaviour
@@ -51,7 +52,7 @@ RequestExecutionLevel admin
 !define MUI_HEADER_TEXT "RearSilver Stream Suite"
 !define MUI_HEADER_SUBTEXT "Professional OBS Dock"
 
-BrandingText "RearSilver Stream Suite | https://twitch.tv/rearsilver"
+BrandingText "RearSilver Stream Suite | RearSilver Gaming"
 
 ; ----------------------------------------
 ; Pages (TEXT CONTENT)
@@ -113,8 +114,10 @@ Section "RearSilver Stream Suite"
 SetOutPath "$INSTDIR\obs-plugins\64bit"
 File "${SOURCE_DIR}\build_x64\RelWithDebInfo\RearSilver-Stream-Suite.dll"
 
-; Copy Qt WebSockets runtime (required dependency)
-File "${SOURCE_DIR}\installer\deps\Qt6WebSockets.dll"
+; Copy plugin localisation data
+CreateDirectory "$INSTDIR\data\obs-plugins\RearSilver-Stream-Suite\locale"
+SetOutPath "$INSTDIR\data\obs-plugins\RearSilver-Stream-Suite\locale"
+File "${SOURCE_DIR}\data\locale\en-GB.ini"
 
 
 SectionEnd
@@ -125,3 +128,4 @@ SectionEnd
 Function LaunchOBS
   Exec '"$INSTDIR\bin\64bit\obs64.exe"'
 FunctionEnd
+

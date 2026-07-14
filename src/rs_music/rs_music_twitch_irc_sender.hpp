@@ -2,6 +2,9 @@
 
 #include <QObject>
 #include <QString>
+#include <QSslSocket>
+#include <QByteArray>
+#include <QStringList>
 
 /*
  * RsMusicTwitchIrcSender
@@ -25,6 +28,25 @@ public:
 
 	void disconnect();
 
-	// Send a raw chat message
+	// Send a chat message. Messages are queued until Twitch confirms the connection.
 	void sendMessage(const QString &text);
+
+signals:
+	void connectionStateChanged(bool connected);
+
+private:
+	void onSocketEncrypted();
+	void onSocketReadyRead();
+	void onSocketDisconnected();
+	void sendRaw(const QString &line);
+	void flushPendingMessages();
+	QString sanitiseMessage(const QString &text) const;
+
+	QSslSocket m_socket;
+	QByteArray m_rxBuffer;
+	QString m_loginName;
+	QString m_oauthToken;
+	QString m_channelName;
+	QStringList m_pendingMessages;
+	bool m_joined = false;
 };

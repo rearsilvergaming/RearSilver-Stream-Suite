@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>RS Music Player</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+
+    <style>
+      html,
+      body {
+        width: 100%;
+        height: 100%;
+        margin: 0;
+        background: transparent;
+        overflow: hidden;
+      }
+
+      /* Player is intentionally invisible */
+      #player {
+        width: 1px;
+        height: 1px;
+      }
+    </style>
+
+    <!-- YouTube IFrame API -->
+    <script src="https://www.youtube.com/iframe_api"></script>
+  </head>
+
+  <body>
+    <div id="player"></div>
+
+    <script>
+      /*
+       * RS Music Player
+       * ----------------
+       * Responsibilities:
+       *  - Create ONE persistent YouTube player
+       *  - Expose simple control functions
+       *  - Emit playback events via console.log
+       *
+       * This file does NOT:
+       *  - Manage queues
+       *  - Talk to OBS
+       *  - Handle chat
+       *  - Make decisions
+       */
+
+      let player = null;
+      let playerReady = false;
+
+      // --------------------------------------------------
+      // YouTube API bootstrap
+      // --------------------------------------------------
+      function onYouTubeIframeAPIReady() {
+        player = new YT.Player("player", {
+          height: "1",
+          width: "1",
+          playerVars: {
+            autoplay: 0,
+            controls: 0,
+            disablekb: 1,
+            fs: 0,
+            modestbranding: 1,
+            rel: 0,
+          },
+          events: {
+            onReady: onPlayerReady,
+            onStateChange: onPlayerStateChange,
+            onError: onPlayerError,
+          },
+        });
+      }
+
+      function onPlayerReady() {
+        playerReady = true;
+        console.log("RS_MUSIC_READY");
+      }
+
+      // --------------------------------------------------
+      // Player state events → C++
+      // --------------------------------------------------
+      function onPlayerStateChange(event) {
+        switch (event.data) {
+          case YT.PlayerState.PLAYING:
+            console.log("RS_MUSIC_PLAYING");
+            break;
+
+          case YT.PlayerState.PAUSED:
+            console.log("RS_MUSIC_PAUSED");
+            break;
+
+          case YT.PlayerState.ENDED:
+            console.log("RS_MUSIC_ENDED");
+            break;
+        }
+      }
+
+      function onPlayerError(event) {
+        // event.data is a numeric YouTube error code
+        console.log("RS_MUSIC_ERROR:" + event.data);
+      }
+
+      // --------------------------------------------------
+      // Commands callable from C++
+      // --------------------------------------------------
+
+      // Load and immediately play a video
+      window.rsMusicLoad = function (videoId) {
+        if (!playerReady || !player) return;
+        player.loadVideoById(videoId);
+      };
+
+      // Pause playback
+      window.rsMusicPause = function () {
+        if (!playerReady || !player) return;
+        player.pauseVideo();
+      };
+
+      // Resume playback
+      window.rsMusicResume = function () {
+        if (!playerReady || !player) return;
+        player.playVideo();
+      };
+
+      // Stop playback (does not destroy the player)
+      window.rsMusicStop = function () {
+        if (!playerReady || !player) return;
+        player.stopVideo();
+      };
+
+      // Restart the current track from the beginning
+      window.rsMusicRestart = function () {
+        if (!playerReady || !player) return;
+        player.seekTo(0);
+        player.playVideo();
+      };
+    </script>
+  </body>
+</html>

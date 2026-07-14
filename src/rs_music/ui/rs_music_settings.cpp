@@ -1,0 +1,218 @@
+﻿#include "rs_music_settings.hpp"
+#include "rs_music/state/rs_music_state.hpp"
+
+#include "rs_music/rs_music_twitch_auth.hpp"
+
+#include <QPushButton>
+#include <QVBoxLayout>
+#include <QLabel>
+#include <QFont>
+#include <QLineEdit>
+#include <QFormLayout>
+#include <QFrame>
+#include <QPushButton>
+#include <QRadioButton>
+#include <QSettings>
+
+static bool loadSendFromBotSetting()
+{
+	QSettings s;
+	return s.value("music/twitch/send_from_bot", false).toBool();
+}
+
+static void saveSendFromBotSetting(bool sendFromBot)
+{
+	QSettings s;
+	s.setValue("music/twitch/send_from_bot", sendFromBot);
+}
+
+
+static QLabel *makeTitle(const QString &text)
+{
+	auto *lbl = new QLabel(text);
+	QFont f = lbl->font();
+	f.setBold(true);
+	f.setPointSize(f.pointSize() + 2);
+	lbl->setFont(f);
+	return lbl;
+}
+
+RsMusicSettings::RsMusicSettings(RsMusicState *state, RsMusicTwitchAuth *streamerAuth, RsMusicTwitchAuth *botAuth,
+				 QWidget *parent)
+	: QWidget(parent),
+	  m_state(state),
+	  m_streamerAuth(streamerAuth),
+	  m_botAuth(botAuth)
+{
+	auto *layout = new QVBoxLayout(this);
+	layout->setContentsMargins(8, 8, 8, 8);
+	layout->setSpacing(10);
+
+	layout->addWidget(makeTitle("Music — Twitch Chat"));
+
+	// --- Streamer / Reader account ---
+	auto *desc = new QLabel("Link your Twitch account to enable chat commands for music control.\n\n"
+				"This account is used to read chat messages and determine viewer permissions "
+				"(viewer, moderator, broadcaster).\n\n"
+				"When you click Login, Twitch will open in your browser so you can approve access. "
+				"This is a one-time setup — you will stay logged in between OBS sessions.");
+
+	desc->setWordWrap(true);
+	desc->setStyleSheet("opacity: 0.8;");
+	layout->addWidget(desc);
+
+	auto *form = new QFormLayout();
+
+	m_channelEdit = new QLineEdit();
+	m_channelEdit->setPlaceholderText("rearsilver");
+	form->addRow("Channel name:", m_channelEdit);
+
+	layout->addLayout(form);
+
+	m_streamerStatus = new QLabel("Status: Not logged in");
+	m_streamerStatus->setStyleSheet("opacity: 0.7;");
+	layout->addWidget(m_streamerStatus);
+
+	m_loginButton = new QPushButton("Login with Twitch");
+	layout->addWidget(m_loginButton);
+
+	m_reconnectButton = new QPushButton("Reconnect");
+	layout->addWidget(m_reconnectButton);
+
+	m_logoutButton = new QPushButton("Log out");
+	layout->addWidget(m_logoutButton);
+
+		// --- Bot / Sender account (optional) ---
+	layout->addWidget(makeTitle("Music — Twitch Bot (Optional)"));
+
+	auto *botDesc = new QLabel("Optionally connect a separate Twitch bot account.\n\n"
+				   "This account is only used to send chat responses and confirmations. "
+				   "It never reads chat and does not affect permissions.");
+
+		auto *botForm = new QFormLayout();
+
+	m_botChannelEdit = new QLineEdit();
+	m_botChannelEdit->setPlaceholderText("rearsilverbot");
+	botForm->addRow("Bot username:", m_botChannelEdit);
+
+	layout->addLayout(botForm);
+
+	botDesc->setWordWrap(true);
+	botDesc->setStyleSheet("opacity: 0.8;");
+	layout->addWidget(botDesc);
+
+	m_botStatus = new QLabel("Status: Not logged in");
+	m_botStatus->setStyleSheet("opacity: 0.7;");
+	layout->addWidget(m_botStatus);
+
+	m_botLoginButton = new QPushButton("Login bot account");
+	layout->addWidget(m_botLoginButton);
+
+	m_botReconnectButton = new QPushButton("Reconnect bot");
+	layout->addWidget(m_botReconnectButton);
+
+	m_botLogoutButton = new QPushButton("Log out bot");
+	layout->addWidget(m_botLogoutButton);
+
+	connect(m_botLoginButton, &QPushButton::clicked, m_botAuth, &RsMusicTwitchAuth::beginDeviceAuth);
+
+	connect(m_botLogoutButton, &QPushButton::clicked, m_botAuth, &RsMusicTwitchAuth::clearAuth);
+
+	connect(m_botReconnectButton, &QPushButton::clicked, m_botAuth, &RsMusicTwitchAuth::reconnect);
+
+	connect(m_botAuth, &RsMusicTwitchAuth::authCompleted, this, &RsMusicSettings::updateAuthUi);
+
+	connect(m_botAuth, &RsMusicTwitchAuth::loggedOut, this, &RsMusicSettings::updateAuthUi);
+
+		// --- Chat sender selection ---
+	m_senderLabel = new QLabel("Send chat confirmations from:");
+	m_senderLabel->setStyleSheet("margin-top: 12px; font-weight: bold;");
+	layout->addWidget(m_senderLabel);
+
+	m_senderStreamerRadio = new QRadioButton("Streamer account");
+	m_senderBotRadio = new QRadioButton("Bot account");
+
+	layout->addWidget(m_senderStreamerRadio);
+	layout->addWidget(m_senderBotRadio);
+
+	// Load saved sender preference
+	const bool sendFromBot = loadSendFromBotSetting();
+	m_senderBotRadio->setChecked(sendFromBot);
+	m_senderStreamerRadio->setChecked(!sendFromBot);
+
+	layout->addStretch(1);
+
+	connect(m_loginButton, &QPushButton::clicked, m_streamerAuth, &RsMusicTwitchAuth::beginDeviceAuth);
+	connect(m_logoutButton, &QPushButton::clicked, m_streamerAuth, &RsMusicTwitchAuth::clearAuth);
+
+	connect(m_reconnectButton, &QPushButton::clicked, m_streamerAuth, &RsMusicTwitchAuth::reconnect);
+
+	connect(m_streamerAuth, &RsMusicTwitchAuth::authCompleted, this, &RsMusicSettings::updateAuthUi);
+	connect(m_streamerAuth, &RsMusicTwitchAuth::loggedOut, this, &RsMusicSettings::updateAuthUi);
+
+	connect(m_streamerAuth, &RsMusicTwitchAuth::authFailed, this, [this](const QString &err) {
+		m_streamerStatus->setText("Status: Login failed");
+		Q_UNUSED(err);
+	});
+
+		// Persist sender selection changes
+	connect(m_senderStreamerRadio, &QRadioButton::toggled, this, [](bool checked) {
+		if (checked)
+			saveSendFromBotSetting(false);
+	});
+
+	connect(m_senderBotRadio, &QRadioButton::toggled, this, [](bool checked) {
+		if (checked)
+			saveSendFromBotSetting(true);
+	});
+
+	updateAuthUi();
+}
+
+void RsMusicSettings::updateAuthUi()
+{
+	// ---- Streamer ----
+	const bool streamerLoggedIn = m_streamerAuth && m_streamerAuth->hasValidToken();
+
+	if (m_streamerStatus) {
+		if (streamerLoggedIn) {
+			m_streamerStatus->setText(QString("Status: Logged in as %1").arg(m_streamerAuth->userLogin()));
+		} else {
+			m_streamerStatus->setText("Status: Not logged in");
+		}
+	}
+
+	if (m_loginButton)
+		m_loginButton->setVisible(!streamerLoggedIn);
+	if (m_reconnectButton)
+		m_reconnectButton->setVisible(streamerLoggedIn);
+	if (m_logoutButton)
+		m_logoutButton->setVisible(streamerLoggedIn);
+
+	// ---- Bot ----
+	const bool botLoggedIn = m_botAuth && m_botAuth->hasValidToken();
+
+	// ---- Sender toggle availability ----
+	if (m_senderBotRadio)
+		m_senderBotRadio->setEnabled(botLoggedIn);
+
+	// Auto-fallback if bot becomes unavailable
+	if (!botLoggedIn && m_senderStreamerRadio)
+		m_senderStreamerRadio->setChecked(true);
+
+
+	if (m_botStatus) {
+		if (botLoggedIn) {
+			m_botStatus->setText(QString("Status: Logged in as %1").arg(m_botAuth->userLogin()));
+		} else {
+			m_botStatus->setText("Status: Not logged in");
+		}
+	}
+
+	if (m_botLoginButton)
+		m_botLoginButton->setVisible(!botLoggedIn);
+	if (m_botReconnectButton)
+		m_botReconnectButton->setVisible(botLoggedIn);
+	if (m_botLogoutButton)
+		m_botLogoutButton->setVisible(botLoggedIn);
+}

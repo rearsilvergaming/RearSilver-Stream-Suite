@@ -1,0 +1,113 @@
+﻿cmake_minimum_required(VERSION 3.20)
+project("RearSilver-Stream-Suite" LANGUAGES CXX)
+
+set(OBS_SOURCE_DIR "C:/Users/Ben/Desktop/Streaming/Streamer Tools/obs-studio")
+set(OBS_BUILD_DIR  "C:/Users/Ben/Desktop/Streaming/Streamer Tools/obs-studio/build_x64")
+set(DEPS_DIR "${CMAKE_CURRENT_SOURCE_DIR}/.deps")
+
+# ----- Qt6 (SDK for BUILD only) -----
+# This must point to a Qt SDK install that contains Qt6Config.cmake
+set(Qt6_DIR "C:/Qt/6.8.3/msvc2022_64/lib/cmake/Qt6")
+
+find_package(Qt6 REQUIRED COMPONENTS Core Gui Widgets Network)
+
+# ----- Plugin target -----
+add_library(${PROJECT_NAME} MODULE
+    src/plugin-main.cpp
+    src/rs_main_dock.cpp
+    src/rs_main_dock.hpp
+    src/rs_scenes_sources.cpp
+    src/rs_scenes_sources.hpp
+    src/rs_helpers.cpp
+    src/rs_panels.cpp
+    src/rs_settings.cpp
+    src/rs_navigation.cpp
+    src/rs_menu.cpp
+    src/rs_theme.cpp
+    src/rs_controls.cpp
+    src/rs_layout.cpp
+    src/rs_stats.cpp
+    src/rs_stats.hpp
+
+    src/enhancements/rs_browser_refresh.cpp
+    src/enhancements/rs_browser_refresh.hpp
+    src/enhancements/rs_quick_text.cpp
+    src/enhancements/rs_quick_text.hpp
+    src/enhancements/rs_timer.cpp
+    src/enhancements/rs_timer.hpp
+    src/enhancements/rs_auto_start.cpp
+    src/enhancements/rs_auto_start.hpp
+    src/enhancements/rs_instant_replay.cpp
+    src/enhancements/rs_instant_replay.hpp
+
+    src/rs_music/rs_music.cpp
+    src/rs_music/rs_music.hpp
+    src/rs_music/rs_music_helpers.cpp
+    src/rs_music/rs_music_helpers.hpp
+    src/rs_music/rs_music_server.cpp
+    src/rs_music/rs_music_server.hpp
+    src/rs_music/rs_music_ws.cpp
+    src/rs_music/rs_music_ws.hpp
+    src/rs_music/ui/rs_music_now_playing.cpp
+    src/rs_music/ui/rs_music_now_playing.hpp
+    src/rs_music/ui/rs_music_queue.cpp
+    src/rs_music/ui/rs_music_queue.hpp
+    src/rs_music/ui/rs_music_requests.cpp
+    src/rs_music/ui/rs_music_requests.hpp
+    src/rs_music/ui/rs_music_playlist.cpp
+    src/rs_music/ui/rs_music_playlist.hpp
+    src/rs_music/ui/rs_music_settings.cpp
+    src/rs_music/ui/rs_music_settings.hpp
+    src/rs_music/state/rs_music_state.cpp
+    src/rs_music/state/rs_music_state.hpp
+
+    src/rs_music/rs_music_twitch_auth.cpp
+    src/rs_music/rs_music_twitch_auth.hpp
+    src/rs_music/rs_music_twitch_irc_sender.cpp
+    src/rs_music/rs_music_twitch_irc_sender.hpp
+    src/rs_music/rs_music_twitch_irc_reader.cpp
+    src/rs_music/rs_music_twitch_irc_reader.hpp
+    src/rs_music/rs_music_command_router.cpp
+    src/rs_music/rs_music_command_router.hpp
+    src/rs_music/rs_music_controller.cpp
+    src/rs_music/rs_music_controller.hpp
+
+    src/rs_music/rs_music_tls_probe.cpp
+    src/rs_music/rs_music_tls_probe.hpp
+    )
+
+target_include_directories(${PROJECT_NAME} PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/src"
+    "${OBS_SOURCE_DIR}/libobs"
+    "${OBS_SOURCE_DIR}/frontend/api"
+    "${OBS_BUILD_DIR}/libobs"
+    "${OBS_BUILD_DIR}/frontend/api"
+    "${DEPS_DIR}/include"
+)
+
+# ----- Link OBS from actual build (FIXED PATH) -----
+target_link_libraries(${PROJECT_NAME}
+    PRIVATE
+        "${OBS_BUILD_DIR}/libobs/RelWithDebInfo/obs.lib"
+        "${OBS_BUILD_DIR}/frontend/api/RelWithDebInfo/obs-frontend-api.lib"
+        Qt6::Core
+        Qt6::Gui
+        Qt6::Widgets
+        Qt6::Network
+)
+
+set_target_properties(${PROJECT_NAME}
+    PROPERTIES
+        OUTPUT_NAME "RearSilver-Stream-Suite"
+        CXX_STANDARD 17
+        CXX_STANDARD_REQUIRED YES
+        AUTOMOC ON
+        AUTOUIC ON
+        AUTORCC ON
+)
+
+# Force UTF-8 for MSVC (fixes C4828 warnings)
+if (MSVC)
+    target_compile_options(${PROJECT_NAME} PRIVATE /utf-8)
+endif()
+

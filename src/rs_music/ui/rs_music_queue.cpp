@@ -1,4 +1,4 @@
-#include "rs_music_queue.hpp"
+﻿#include "rs_music_queue.hpp"
 #include "rs_music/state/rs_music_state.hpp"
 
 #include <QVBoxLayout>

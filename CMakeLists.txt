@@ -103,6 +103,8 @@ add_library(${PROJECT_NAME} MODULE
     src/rs_music/rs_music_command_router.hpp
     src/rs_music/rs_music_controller.cpp
     src/rs_music/rs_music_controller.hpp
+    src/rs_music/rs_music_scheduler.cpp
+    src/rs_music/rs_music_scheduler.hpp
 
     src/rs_music/rs_music_tls_probe.cpp
     src/rs_music/rs_music_tls_probe.hpp

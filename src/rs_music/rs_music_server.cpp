@@ -5,6 +5,7 @@
 #include <QHostAddress>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QSettings>
 #include <QTcpServer>
 #include <QTcpSocket>
 #include <QUrl>
@@ -75,6 +76,23 @@ QByteArray RsMusicServer::stateJson() const
 	return QJsonDocument(root).toJson(QJsonDocument::Compact);
 }
 
+QByteArray RsMusicServer::configJson() const
+{
+	QSettings s("RearSilver", "RearSilver-Stream-Suite"); QJsonObject c;
+	auto value=[&](const char *key,const QVariant &fallback){return s.value(QString("music/overlay/main/")+key,fallback);};
+	c["showArtwork"]=value("showArtwork",true).toBool(); c["showTitle"]=value("showTitle",true).toBool();
+	c["showArtist"]=value("showArtist",true).toBool(); c["showAlbum"]=value("showAlbum",true).toBool();
+	c["showRequester"]=value("showRequester",false).toBool(); c["showProgress"]=value("showProgress",true).toBool();
+	c["showCustomText"]=value("showCustomText",false).toBool(); c["customText"]=value("customText","").toString();
+	c["timingMode"]=value("timingMode","elapsedTotal").toString(); c["artworkPosition"]=value("artworkPosition","left").toString();
+	c["backgroundTransparent"]=value("backgroundTransparent",false).toBool(); c["backgroundColour"]=value("backgroundColour","#0c0c12").toString();
+	c["backgroundOpacity"]=value("backgroundOpacity",82).toInt(); c["textColour"]=value("textColour","#ffffff").toString();
+	c["artworkBackground"]=value("artworkBackground",false).toBool();
+	c["accentColour"]=value("accentColour","#9147ff").toString(); c["fontFamily"]=value("fontFamily","Arial").toString();
+	c["titleSize"]=value("titleSize",34).toInt(); c["bodySize"]=value("bodySize",20).toInt();
+	return QJsonDocument(c).toJson(QJsonDocument::Compact);
+}
+
 void RsMusicServer::readRequest(QTcpSocket *socket)
 {
 	const QByteArray request = socket->readAll();
@@ -86,6 +104,8 @@ void RsMusicServer::readRequest(QTcpSocket *socket)
 		if (file.open(QIODevice::ReadOnly)) payload = response("text/html; charset=utf-8", file.readAll());
 	} else if (target == "/api/state") {
 		payload = response("application/json", stateJson());
+	} else if (target == "/api/config") {
+		payload = response("application/json", configJson());
 	} else if (target == "/artwork") {
 		QByteArray artwork;
 		if (m_state && m_state->hasCurrentTrack()) artwork = RsMusicMetadata::artworkBytes(m_state->currentTrack().artworkUri);

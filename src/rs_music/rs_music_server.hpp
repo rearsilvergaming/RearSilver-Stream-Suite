@@ -19,6 +19,7 @@ private:
 	void acceptConnections();
 	void readRequest(QTcpSocket *socket);
 	QByteArray stateJson() const;
+	QByteArray configJson() const;
 	QByteArray response(const QByteArray &contentType, const QByteArray &body, int status = 200) const;
 	QTcpServer *m_server = nullptr;
 	QPointer<RsMusicState> m_state;

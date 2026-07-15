@@ -1,6 +1,12 @@
 cmake_minimum_required(VERSION 3.20)
 project("RearSilver-Stream-Suite" LANGUAGES CXX)
 
+set(RS_DEFAULT_EDITION "pro" CACHE STRING "Default product edition: free or pro")
+set_property(CACHE RS_DEFAULT_EDITION PROPERTY STRINGS free pro)
+if(NOT RS_DEFAULT_EDITION STREQUAL "free" AND NOT RS_DEFAULT_EDITION STREQUAL "pro")
+    message(FATAL_ERROR "RS_DEFAULT_EDITION must be either 'free' or 'pro'.")
+endif()
+
 set(OBS_SOURCE_DIR "" CACHE PATH "Path to the OBS Studio source tree")
 set(OBS_BUILD_DIR "" CACHE PATH "Path to the configured OBS Studio build tree")
 set(DEPS_DIR "${CMAKE_CURRENT_SOURCE_DIR}/.deps")
@@ -32,6 +38,8 @@ add_library(${PROJECT_NAME} MODULE
     src/rs_layout.cpp
     src/rs_stats.cpp
     src/rs_stats.hpp
+    src/rs_entitlements.cpp
+    src/rs_entitlements.hpp
 
     src/enhancements/rs_browser_refresh.cpp
     src/enhancements/rs_browser_refresh.hpp
@@ -101,6 +109,12 @@ target_link_libraries(${PROJECT_NAME}
         Qt6::Widgets
         Qt6::Network
 )
+
+if(RS_DEFAULT_EDITION STREQUAL "free")
+    target_compile_definitions(${PROJECT_NAME} PRIVATE RS_DEFAULT_EDITION_FREE=1)
+else()
+    target_compile_definitions(${PROJECT_NAME} PRIVATE RS_DEFAULT_EDITION_PRO=1)
+endif()
 
 set_target_properties(${PROJECT_NAME}
     PROPERTIES

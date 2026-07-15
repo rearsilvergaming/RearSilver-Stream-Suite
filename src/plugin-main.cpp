@@ -15,6 +15,7 @@
 #include <QFileInfo>
 
 #include "rs_main_dock.hpp"
+#include "rs_entitlements.hpp"
 #include "rs_music/rs_music.hpp"
 #include "rs_music/rs_music_tls_probe.hpp"
 #include "enhancements/rs_auto_start.hpp"
@@ -140,6 +141,7 @@ static void rs_try_add_obs_qt_plugins_path()
 bool obs_module_load(void)
 {
 	LOG_INFO_MSG("plugin load started");
+	LOG_INFO_MSG("product edition: %s", RsEntitlements::editionKey().toUtf8().constData());
 
 		// Ensure QSettings uses a stable namespace for this plugin (consistent across OBS sessions)
 	QCoreApplication::setOrganizationName("RearSilver");

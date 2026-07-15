@@ -67,6 +67,9 @@ RsMusicRequests::RsMusicRequests(RsMusicState *state, QWidget *parent) : QWidget
 	layout->addWidget(divider);
 
 	m_status = new QLabel("Status: —");
+	m_status->setWordWrap(true);
+	m_status->setMinimumWidth(0);
+	m_status->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
 	m_status->setStyleSheet("opacity: 0.7; font-size: 11px;");
 	layout->addWidget(m_status);
 
@@ -80,6 +83,8 @@ RsMusicRequests::RsMusicRequests(RsMusicState *state, QWidget *parent) : QWidget
 	if (m_state && m_toggle) {
 		rsMusicSetRequestsEnabled(m_state->requestsEnabled());
 		connect(m_toggle, &QCheckBox::toggled, this, [this](bool checked) {
+			if (m_state->activeProvider() == RsMusicProvider::LocalFile)
+				return;
 			m_state->setRequestsEnabled(checked);
 			rsMusicSetRequestsEnabled(checked);
 		});
@@ -117,16 +122,28 @@ void RsMusicRequests::updateFromState()
 		return;
 
 	const bool enabled = m_state->requestsEnabled();
+	const bool localProvider = m_state->activeProvider() == RsMusicProvider::LocalFile;
 
-	m_status->setText(QString("Requests %1 · %2 queued maximum · %3 per user")
-				  .arg(enabled ? "enabled" : "disabled")
-				  .arg(m_maxQueue && m_maxQueue->value() > 0 ? QString::number(m_maxQueue->value())
+	if (localProvider) {
+		m_status->setText("Requests unavailable while Local files is the active provider");
+	} else {
+		m_status->setText(QString("Requests %1 · %2 queued maximum · %3 per user")
+					  .arg(enabled ? "enabled" : "disabled")
+					  .arg(m_maxQueue && m_maxQueue->value() > 0 ? QString::number(m_maxQueue->value())
 										 : QString("unlimited"))
-				  .arg(m_perUser && m_perUser->value() > 0 ? QString::number(m_perUser->value())
+					  .arg(m_perUser && m_perUser->value() > 0 ? QString::number(m_perUser->value())
 									       : QString("unlimited")));
+	}
 
 	if (m_toggle) {
 		QSignalBlocker blocker(m_toggle);
 		m_toggle->setChecked(enabled);
+		m_toggle->setEnabled(!localProvider);
 	}
+	if (m_perUser)
+		m_perUser->setEnabled(!localProvider);
+	if (m_maxQueue)
+		m_maxQueue->setEnabled(!localProvider);
+	if (m_maxMinutes)
+		m_maxMinutes->setEnabled(!localProvider);
 }

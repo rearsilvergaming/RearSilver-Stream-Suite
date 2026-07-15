@@ -33,6 +33,11 @@ RsMusicNowPlaying::RsMusicNowPlaying(RsMusicState *state, RsMusicController *con
 	m_lblTitle = new QLabel("Title: —");
 	m_lblArtist = new QLabel("Artist: —");
 	m_lblRequester = new QLabel("Requested by: —");
+	for (QLabel *label : {m_lblTitle, m_lblArtist, m_lblRequester}) {
+		label->setWordWrap(true);
+		label->setMinimumWidth(0);
+		label->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
+	}
 
 	layout->addWidget(m_lblTitle);
 	layout->addWidget(m_lblArtist);
@@ -45,6 +50,7 @@ RsMusicNowPlaying::RsMusicNowPlaying(RsMusicState *state, RsMusicController *con
 
 	// Buttons
 	m_btnPlay = new QPushButton("Play");
+	m_btnPrevious = new QPushButton("Previous");
 	m_btnPause = new QPushButton("Pause");
 	m_btnSkip = new QPushButton("Skip");
 	m_btnRestart = new QPushButton("Restart");
@@ -52,27 +58,29 @@ RsMusicNowPlaying::RsMusicNowPlaying(RsMusicState *state, RsMusicController *con
 
 	if (m_controller) {
 		connect(m_btnPlay, &QPushButton::clicked, m_controller, &RsMusicController::actionPlay);
+		connect(m_btnPrevious, &QPushButton::clicked, m_controller, &RsMusicController::actionPrevious);
 		connect(m_btnPause, &QPushButton::clicked, m_controller, &RsMusicController::actionPause);
 		connect(m_btnStop, &QPushButton::clicked, m_controller, &RsMusicController::actionStop);
 		connect(m_btnSkip, &QPushButton::clicked, this, [this]() { m_controller->actionSkip("ui"); });
 		connect(m_btnRestart, &QPushButton::clicked, m_controller, &RsMusicController::actionRestart);
 	} else {
-		for (QPushButton *button : {m_btnPlay, m_btnPause, m_btnSkip, m_btnRestart, m_btnStop})
+		for (QPushButton *button : {m_btnPrevious, m_btnPlay, m_btnPause, m_btnSkip, m_btnRestart, m_btnStop})
 			button->setEnabled(false);
 	}
 
 
 	// Ensure buttons expand nicely
-	for (QPushButton *btn : {m_btnPlay, m_btnPause, m_btnSkip, m_btnRestart, m_btnStop}) {
+	for (QPushButton *btn : {m_btnPrevious, m_btnPlay, m_btnPause, m_btnSkip, m_btnRestart, m_btnStop}) {
 		btn->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
 	}
 
 	// Grid placement (2 rows, balanced)
-	controlsGrid->addWidget(m_btnPlay, 0, 0);
-	controlsGrid->addWidget(m_btnPause, 0, 1);
-	controlsGrid->addWidget(m_btnSkip, 0, 2);
-	controlsGrid->addWidget(m_btnStop, 1, 0, 1, 2);  // wider action
-	controlsGrid->addWidget(m_btnRestart, 1, 2);
+	controlsGrid->addWidget(m_btnPrevious, 0, 0);
+	controlsGrid->addWidget(m_btnPlay, 0, 1);
+	controlsGrid->addWidget(m_btnPause, 0, 2);
+	controlsGrid->addWidget(m_btnRestart, 1, 0);
+	controlsGrid->addWidget(m_btnSkip, 1, 1);
+	controlsGrid->addWidget(m_btnStop, 1, 2);
 
 	// Add to main layout
 	layout->addLayout(controlsGrid);
@@ -110,6 +118,7 @@ void RsMusicNowPlaying::updateFromState()
 		const auto &track = m_state->currentTrack();
 
 		m_lblTitle->setText(QString("Title: %1").arg(track.title));
+		m_lblTitle->setToolTip(track.title);
 		m_lblArtist->setText(QString("Artist: %1").arg(track.artist));
 
 		if (track.isFromPlaylist) {

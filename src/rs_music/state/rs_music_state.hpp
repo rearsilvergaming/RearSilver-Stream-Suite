@@ -23,8 +23,11 @@ public:
 
 	// --- Current track ---
 	void setCurrentTrack(const RsMusicTrack &track);
+	void clearCurrentTrack();
 	bool hasCurrentTrack() const;
 	const RsMusicTrack &currentTrack() const;
+	void setActiveProvider(RsMusicProvider provider);
+	RsMusicProvider activeProvider() const;
 
 	// --- Queue ---
 	void setQueue(const QVector<RsMusicTrack> &queue);
@@ -52,6 +55,7 @@ private:
 
 	bool m_hasCurrentTrack = false;
 	RsMusicTrack m_currentTrack;
+	RsMusicProvider m_activeProvider = RsMusicProvider::Unknown;
 
 	QVector<RsMusicTrack> m_queue;
 

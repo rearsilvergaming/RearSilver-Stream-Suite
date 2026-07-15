@@ -2,6 +2,7 @@
 
 #include <QObject>
 #include <QString>
+#include <QStringList>
 
 #include "rs_music.hpp"
 
@@ -36,13 +37,25 @@ public:
 	void actionStop();
 	void actionRestart();
 	void actionSkip(const QString &source); // "ui" / "chat"
+	void actionPrevious();
+	bool actionPlayLocalFile(const QString &filePath);
+	void setLocalLibrary(const QStringList &files);
+	QStringList localLibrary() const;
+	void shuffleLocalLibrary();
 
 	// ---- song requests ----
 	RsMusicRequestResult actionSongRequest(const QString &userId, const QString &displayName, const QString &query,
 					       bool isModOrBroadcaster = false);
 
+signals:
+	void localLibraryChanged();
+
 private:
 	void syncQueueFromBackend();
+	bool currentTrackIsLocal() const;
+	bool playLocalIndex(int index);
+	void playNextLocalTrack();
 
 	RsMusicState *m_state = nullptr; // non-owning
+	QStringList m_localLibrary;
 };

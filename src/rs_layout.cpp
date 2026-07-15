@@ -50,6 +50,7 @@ void RsMainDock::resizeEvent(QResizeEvent *event)
 
 	if (m_layoutMode == LayoutMode::Auto)
 		updateEffectiveLayout();
+	updateMusicStatusInfo();
 }
 
 void RsMainDock::updateEffectiveLayout()

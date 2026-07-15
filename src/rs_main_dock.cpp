@@ -439,6 +439,8 @@ void RsMainDock::createUi()
 
 	m_lblMusicStatus = new QLabel("Music: —");
 	m_lblMusicStatus->setStyleSheet("font-size: 12px; opacity: 0.85;");
+	m_lblMusicStatus->setMinimumWidth(0);
+	m_lblMusicStatus->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
 
 	musicInfoLayout->addWidget(m_lblMusicStatus);
 
@@ -637,8 +639,13 @@ void RsMainDock::updateMusicStatusInfo()
 		return;
 
 	RsMusicState *state = m_musicState;
+	auto setStatusText = [this](const QString &text, const QString &toolTip = QString()) {
+		const int availableWidth = qMax(80, (m_musicInfoBar ? m_musicInfoBar->width() : width()) - 20);
+		m_lblMusicStatus->setText(m_lblMusicStatus->fontMetrics().elidedText(text, Qt::ElideRight, availableWidth));
+		m_lblMusicStatus->setToolTip(toolTip.isEmpty() ? text : toolTip);
+	};
 	if (!state) {
-		m_lblMusicStatus->setText("Music: —");
+		setStatusText("Music: —");
 		return;
 	}
 
@@ -659,7 +666,7 @@ void RsMainDock::updateMusicStatusInfo()
 
 	// If no current track, still show status (this is the key fix)
 	if (!state->hasCurrentTrack()) {
-		m_lblMusicStatus->setText(QString("Music: %1").arg(status));
+		setStatusText(QString("Music: %1").arg(status));
 		return;
 	}
 
@@ -673,8 +680,11 @@ void RsMainDock::updateMusicStatusInfo()
 		source = QString("Requested by %1").arg(track.requestedBy);
 	}
 
-	m_lblMusicStatus->setText(
-		QString("Music: %1 — %2 – %3 (%4)").arg(status).arg(track.artist).arg(track.title).arg(source));
+	const QString trackText = track.artist.trimmed().isEmpty()
+				  ? track.title
+				  : QString("%1 — %2").arg(track.artist, track.title);
+	setStatusText(QString("Music: %1 — %2").arg(status, trackText),
+		      QString("%1\n%2").arg(trackText, source));
 }
 
 

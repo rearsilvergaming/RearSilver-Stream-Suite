@@ -56,6 +56,8 @@ add_library(${PROJECT_NAME} MODULE
     src/rs_music/rs_music.hpp
     src/rs_music/rs_music_helpers.cpp
     src/rs_music/rs_music_helpers.hpp
+    src/rs_music/rs_music_local_player.cpp
+    src/rs_music/rs_music_local_player.hpp
     src/rs_music/rs_music_server.cpp
     src/rs_music/rs_music_server.hpp
     src/rs_music/rs_music_ws.cpp

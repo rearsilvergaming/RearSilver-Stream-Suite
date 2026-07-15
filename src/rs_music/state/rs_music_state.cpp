@@ -31,6 +31,15 @@ void RsMusicState::setCurrentTrack(const RsMusicTrack &track)
 	emit stateChanged();
 }
 
+void RsMusicState::clearCurrentTrack()
+{
+	if (!m_hasCurrentTrack)
+		return;
+	m_currentTrack = RsMusicTrack{};
+	m_hasCurrentTrack = false;
+	emit stateChanged();
+}
+
 bool RsMusicState::hasCurrentTrack() const
 {
 	return m_hasCurrentTrack;
@@ -39,6 +48,21 @@ bool RsMusicState::hasCurrentTrack() const
 const RsMusicTrack &RsMusicState::currentTrack() const
 {
 	return m_currentTrack;
+}
+
+void RsMusicState::setActiveProvider(RsMusicProvider provider)
+{
+	if (m_activeProvider == provider)
+		return;
+	m_activeProvider = provider;
+	QSettings("RearSilver", "RearSilver-Stream-Suite")
+		.setValue("music/activeProvider", rsMusicProviderKey(provider));
+	emit stateChanged();
+}
+
+RsMusicProvider RsMusicState::activeProvider() const
+{
+	return m_activeProvider;
 }
 
 // ---------------- Queue ----------------
@@ -94,6 +118,9 @@ void RsMusicState::loadSettings()
 {
 	QSettings s("RearSilver", "RearSilver-Stream-Suite");
 	m_requestsEnabled = s.value("music/requestsEnabled", true).toBool();
+	const QString provider = s.value("music/activeProvider").toString();
+	if (provider == "local")
+		m_activeProvider = RsMusicProvider::LocalFile;
 }
 
 void RsMusicState::saveSettings() const

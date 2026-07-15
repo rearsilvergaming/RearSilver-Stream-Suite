@@ -71,7 +71,7 @@ RsMusicSettings::RsMusicSettings(RsMusicState *state, RsMusicTwitchAuth *streame
 
 	layout->addWidget(makeProviderStatus("YouTube / YouTube Music", "Playback foundation ready; search setup pending", true));
 	layout->addWidget(makeProviderStatus("Spotify", "External-player connection not configured", false));
-	layout->addWidget(makeProviderStatus("Local files", "Music library not configured", false));
+	layout->addWidget(makeProviderStatus("Local files", "Available — manage your library in Playlist", true));
 	layout->addWidget(makeProviderStatus("Desktop media", "Player detection not configured", false));
 
 	layout->addWidget(makeTitle("Music — Twitch Chat"));

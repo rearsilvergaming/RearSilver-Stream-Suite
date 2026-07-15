@@ -54,6 +54,58 @@ QString rsMusicExtractYoutubeVideoId(const QString &input)
 	return QString();
 }
 
+QString rsMusicExtractSpotifyTrackId(const QString &input)
+{
+	const QString s = input.trimmed();
+	static const QRegularExpression webRe(
+		R"(https?:\/\/(?:open\.)?spotify\.com\/track\/([A-Za-z0-9]+))",
+		QRegularExpression::CaseInsensitiveOption);
+	static const QRegularExpression uriRe(R"(^spotify:track:([A-Za-z0-9]+)$)",
+					       QRegularExpression::CaseInsensitiveOption);
+
+	QRegularExpressionMatch match = webRe.match(s);
+	if (match.hasMatch())
+		return match.captured(1);
+
+	match = uriRe.match(s);
+	if (match.hasMatch())
+		return match.captured(1);
+
+	return QString();
+}
+
+RsMusicRequestTarget rsMusicParseRequestTarget(const QString &input)
+{
+	RsMusicRequestTarget target;
+	const QString trimmed = input.trimmed();
+
+	const QString youtubeId = rsMusicExtractYoutubeVideoId(trimmed);
+	if (!youtubeId.isEmpty()) {
+		target.provider = RsMusicProvider::YouTube;
+		target.providerTrackId = youtubeId;
+		target.providerUri = QString("https://www.youtube.com/watch?v=%1").arg(youtubeId);
+		target.directTrack = true;
+		return target;
+	}
+
+	const QString spotifyId = rsMusicExtractSpotifyTrackId(trimmed);
+	if (!spotifyId.isEmpty()) {
+		target.provider = RsMusicProvider::Spotify;
+		target.providerTrackId = spotifyId;
+		target.providerUri = QString("spotify:track:%1").arg(spotifyId);
+		target.directTrack = true;
+		return target;
+	}
+
+	if (rsMusicLooksLikeUrl(trimmed)) {
+		target.unsupportedUrl = true;
+		return target;
+	}
+
+	target.searchQuery = trimmed;
+	return target;
+}
+
 // ---------------------------------------------
 // Search query helpers
 // ---------------------------------------------

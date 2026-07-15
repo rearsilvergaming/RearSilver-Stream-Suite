@@ -675,21 +675,29 @@ RsMusicRequestResult rsMusicRequestSong(const QString &requesterId, const QStrin
 	it.requesterDisplay = requesterDisplay;
 	it.enqueuedTs = nowMs();
 
-	// URL -> extract video id
-	const QString extracted = rsMusicExtractYoutubeVideoId(trimmed);
-	if (!extracted.isEmpty()) {
-		it.provider = RsMusicProvider::YouTube;
-		it.providerTrackId = extracted;
-		it.providerUri = QString("https://www.youtube.com/watch?v=%1").arg(extracted);
-		it.youtubeId = extracted;
+	const RsMusicRequestTarget target = rsMusicParseRequestTarget(trimmed);
+	if (target.unsupportedUrl) {
+		out.reason = "That link is not a supported YouTube or Spotify track URL.";
+		return out;
+	}
+	if (target.provider == RsMusicProvider::Spotify) {
+		out.reason = "Spotify requests will be available after a Spotify account is connected.";
+		return out;
+	}
+
+	if (target.directTrack) {
+		it.provider = target.provider;
+		it.providerTrackId = target.providerTrackId;
+		it.providerUri = target.providerUri;
+		it.youtubeId = target.provider == RsMusicProvider::YouTube ? target.providerTrackId : QString();
 		it.pendingQuery.clear();
 		it.title = "";
 	} else {
 		// Provider selection and metadata resolution happen asynchronously.
 		it.provider = RsMusicProvider::Unknown;
 		it.youtubeId.clear();
-		it.pendingQuery = trimmed;
-		it.title = trimmed;
+		it.pendingQuery = target.searchQuery;
+		it.title = target.searchQuery;
 	}
 
 	g_requestQueue.push_back(it);

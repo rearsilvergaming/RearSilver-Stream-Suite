@@ -7,6 +7,7 @@ struct obs_source;
 typedef struct obs_source obs_source_t;
 struct calldata;
 typedef struct calldata calldata_t;
+class QTimer;
 
 class RsMusicLocalPlayer : public QObject {
 	Q_OBJECT
@@ -19,6 +20,7 @@ public:
 	void resume();
 	void stop();
 	void restart();
+	void seekTo(qint64 positionMs);
 	void shutdown();
 	QString currentFile() const;
 
@@ -27,9 +29,10 @@ signals:
 	void playbackEnded();
 	void playbackStopped();
 	void playbackError(const QString &message);
+	void playbackProgress(qint64 positionMs, qint64 durationMs);
 
 private:
-	RsMusicLocalPlayer() = default;
+	RsMusicLocalPlayer();
 	~RsMusicLocalPlayer() override;
 	RsMusicLocalPlayer(const RsMusicLocalPlayer &) = delete;
 	RsMusicLocalPlayer &operator=(const RsMusicLocalPlayer &) = delete;
@@ -43,4 +46,6 @@ private:
 	obs_source_t *m_source = nullptr;
 	QString m_currentFile;
 	bool m_forcedActive = false;
+	QTimer *m_progressTimer = nullptr;
+	qint64 m_pendingPausedSeekMs = -1;
 };

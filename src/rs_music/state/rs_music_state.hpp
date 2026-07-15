@@ -20,6 +20,8 @@ public:
 	// --- Playback ---
 	void setPlaybackStatus(PlaybackStatus status);
 	PlaybackStatus playbackStatus() const;
+	void setPlaybackProgress(qint64 positionMs, qint64 durationMs);
+	qint64 playbackPositionMs() const;
 
 	// --- Current track ---
 	void setCurrentTrack(const RsMusicTrack &track);
@@ -52,6 +54,7 @@ signals:
 
 private:
 	PlaybackStatus m_playbackStatus = PlaybackStatus::Stopped;
+	qint64 m_playbackPositionMs = 0;
 
 	bool m_hasCurrentTrack = false;
 	RsMusicTrack m_currentTrack;

@@ -28,7 +28,27 @@ void RsMusicState::setCurrentTrack(const RsMusicTrack &track)
 {
 	m_currentTrack = track;
 	m_hasCurrentTrack = true;
+	m_playbackPositionMs = 0;
 	emit stateChanged();
+}
+
+void RsMusicState::setPlaybackProgress(qint64 positionMs, qint64 durationMs)
+{
+	positionMs = qMax<qint64>(0, positionMs);
+	durationMs = qMax<qint64>(0, durationMs);
+	const int durationSeconds = static_cast<int>((durationMs + 999) / 1000);
+	if (m_playbackPositionMs == positionMs &&
+	    (!m_hasCurrentTrack || m_currentTrack.durationSeconds == durationSeconds))
+		return;
+	m_playbackPositionMs = positionMs;
+	if (m_hasCurrentTrack)
+		m_currentTrack.durationSeconds = durationSeconds;
+	emit stateChanged();
+}
+
+qint64 RsMusicState::playbackPositionMs() const
+{
+	return m_playbackPositionMs;
 }
 
 void RsMusicState::clearCurrentTrack()
@@ -37,6 +57,7 @@ void RsMusicState::clearCurrentTrack()
 		return;
 	m_currentTrack = RsMusicTrack{};
 	m_hasCurrentTrack = false;
+	m_playbackPositionMs = 0;
 	emit stateChanged();
 }
 

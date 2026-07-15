@@ -8,6 +8,8 @@
 #include <QFont>
 #include <QPushButton>
 #include <QFrame>
+#include <QSlider>
+#include <QSignalBlocker>
 
 static QLabel *makeTitle(const QString &text)
 {
@@ -17,6 +19,12 @@ static QLabel *makeTitle(const QString &text)
 	f.setPointSize(f.pointSize() + 2);
 	lbl->setFont(f);
 	return lbl;
+}
+
+static QString formatTime(int seconds)
+{
+	seconds = qMax(0, seconds);
+	return QString("%1:%2").arg(seconds / 60).arg(seconds % 60, 2, 10, QLatin1Char('0'));
 }
 
 RsMusicNowPlaying::RsMusicNowPlaying(RsMusicState *state, RsMusicController *controller, QWidget *parent)
@@ -42,6 +50,27 @@ RsMusicNowPlaying::RsMusicNowPlaying(RsMusicState *state, RsMusicController *con
 	layout->addWidget(m_lblTitle);
 	layout->addWidget(m_lblArtist);
 	layout->addWidget(m_lblRequester);
+
+	auto *progressRow = new QHBoxLayout();
+	m_progress = new QSlider(Qt::Horizontal);
+	m_progress->setRange(0, 0);
+	m_progress->setEnabled(false);
+	m_lblTime = new QLabel("0:00 / 0:00");
+	m_lblTime->setMinimumWidth(m_lblTime->fontMetrics().horizontalAdvance("00:00 / 00:00"));
+	progressRow->addWidget(m_progress, 1);
+	progressRow->addWidget(m_lblTime);
+	layout->addLayout(progressRow);
+	connect(m_progress, &QSlider::sliderPressed, this, [this]() { m_userSeeking = true; });
+	connect(m_progress, &QSlider::sliderMoved, this, [this](int positionMs) {
+		m_lblTime->setText(QString("%1 / %2")
+					   .arg(formatTime(positionMs / 1000),
+						formatTime(m_progress->maximum() / 1000)));
+	});
+	connect(m_progress, &QSlider::sliderReleased, this, [this]() {
+		if (m_controller)
+			m_controller->actionSeek(m_progress->value());
+		m_userSeeking = false;
+	});
 
 // Controls grid (dock-consistent layout)
 	auto *controlsGrid = new QGridLayout();
@@ -114,6 +143,11 @@ void RsMusicNowPlaying::updateFromState()
 		m_lblTitle->setText("Title: —");
 		m_lblArtist->setText("Artist: —");
 		m_lblRequester->setText("Requested by: —");
+		QSignalBlocker blocker(m_progress);
+		m_progress->setRange(0, 0);
+		m_progress->setValue(0);
+		m_progress->setEnabled(false);
+		m_lblTime->setText("0:00 / 0:00");
 	} else {
 		const auto &track = m_state->currentTrack();
 
@@ -126,6 +160,18 @@ void RsMusicNowPlaying::updateFromState()
 		} else {
 			m_lblRequester->setText(QString("Requested by: %1").arg(track.requestedBy));
 		}
+
+		const int duration = qMax(0, track.durationSeconds * 1000);
+		const int position = static_cast<int>(qBound<qint64>(0, m_state->playbackPositionMs(),
+									static_cast<qint64>(duration)));
+		QSignalBlocker blocker(m_progress);
+		m_progress->setRange(0, duration);
+		if (!m_userSeeking)
+			m_progress->setValue(position);
+		m_progress->setEnabled(track.provider == RsMusicProvider::LocalFile && duration > 0);
+		if (!m_userSeeking)
+			m_lblTime->setText(QString("%1 / %2")
+						   .arg(formatTime(position / 1000), formatTime(duration / 1000)));
 	}
 
 	// --- Playback status (ALWAYS shown) ---

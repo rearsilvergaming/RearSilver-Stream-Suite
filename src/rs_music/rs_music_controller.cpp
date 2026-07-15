@@ -30,6 +30,11 @@ RsMusicController::RsMusicController(RsMusicState *state, QObject *parent) : QOb
 		if (m_state && currentTrackIsLocal())
 			playNextLocalTrack();
 	});
+	connect(&RsMusicLocalPlayer::instance(), &RsMusicLocalPlayer::playbackProgress, this,
+		[this](qint64 positionMs, qint64 durationMs) {
+			if (m_state && currentTrackIsLocal())
+				m_state->setPlaybackProgress(positionMs, durationMs);
+		});
 	syncQueueFromBackend();
 }
 
@@ -155,6 +160,12 @@ void RsMusicController::actionPrevious()
 	QSettings("RearSilver", "RearSilver-Stream-Suite").setValue("music/local/library", m_localLibrary);
 	emit localLibraryChanged();
 	playLocalIndex(0);
+}
+
+void RsMusicController::actionSeek(qint64 positionMs)
+{
+	if (currentTrackIsLocal())
+		RsMusicLocalPlayer::instance().seekTo(positionMs);
 }
 
 void RsMusicController::setLocalLibrary(const QStringList &files)

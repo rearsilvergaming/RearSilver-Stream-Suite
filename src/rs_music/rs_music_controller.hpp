@@ -38,6 +38,7 @@ public:
 	void actionRestart();
 	void actionSkip(const QString &source); // "ui" / "chat"
 	void actionPrevious();
+	void actionSeek(qint64 positionMs);
 	bool actionPlayLocalFile(const QString &filePath);
 	void setLocalLibrary(const QStringList &files);
 	QStringList localLibrary() const;

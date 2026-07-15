@@ -3,6 +3,7 @@
 
 #include <QFileInfo>
 #include <QMetaObject>
+#include <QTimer>
 
 extern "C" {
 #include <obs.h>
@@ -15,6 +16,35 @@ RsMusicLocalPlayer &RsMusicLocalPlayer::instance()
 {
 	static RsMusicLocalPlayer player;
 	return player;
+}
+
+RsMusicLocalPlayer::RsMusicLocalPlayer()
+{
+	m_progressTimer = new QTimer(this);
+	m_progressTimer->setInterval(100);
+	connect(m_progressTimer, &QTimer::timeout, this, [this]() {
+		if (!m_source)
+			return;
+		const obs_media_state state = obs_source_media_get_state(m_source);
+		if (state == OBS_MEDIA_STATE_PLAYING || state == OBS_MEDIA_STATE_PAUSED ||
+		    state == OBS_MEDIA_STATE_BUFFERING) {
+			const qint64 durationMs = obs_source_media_get_duration(m_source);
+			if (m_pendingPausedSeekMs >= 0 && state == OBS_MEDIA_STATE_PAUSED) {
+				emit playbackProgress(m_pendingPausedSeekMs, durationMs);
+			} else {
+				const qint64 positionMs = obs_source_media_get_time(m_source);
+				if (m_pendingPausedSeekMs >= 0 && qAbs(positionMs - m_pendingPausedSeekMs) > 1500)
+					emit playbackProgress(m_pendingPausedSeekMs, durationMs);
+				else {
+					m_pendingPausedSeekMs = -1;
+					emit playbackProgress(positionMs, durationMs);
+				}
+			}
+		} else if (state == OBS_MEDIA_STATE_ERROR) {
+			emit playbackError("OBS reported an error while decoding the local music file.");
+			m_progressTimer->stop();
+		}
+	});
 }
 
 RsMusicLocalPlayer::~RsMusicLocalPlayer()
@@ -77,6 +107,7 @@ bool RsMusicLocalPlayer::playFile(const QString &filePath)
 	}
 
 	m_currentFile = file.absoluteFilePath();
+	m_pendingPausedSeekMs = -1;
 	obs_data_t *settings = obs_source_get_settings(m_source);
 	obs_data_set_bool(settings, "is_local_file", true);
 	obs_data_set_string(settings, "local_file", m_currentFile.toUtf8().constData());
@@ -87,6 +118,7 @@ bool RsMusicLocalPlayer::playFile(const QString &filePath)
 	obs_data_release(settings);
 
 	obs_source_media_restart(m_source);
+	m_progressTimer->start();
 	blog(LOG_INFO, "[RS Music] Playing local file: %s", m_currentFile.toUtf8().constData());
 	return true;
 }
@@ -99,27 +131,49 @@ void RsMusicLocalPlayer::pause()
 
 void RsMusicLocalPlayer::resume()
 {
-	if (m_source)
+	if (m_source) {
+		const qint64 pendingSeekMs = m_pendingPausedSeekMs;
 		obs_source_media_play_pause(m_source, false);
+		if (pendingSeekMs >= 0)
+			obs_source_media_set_time(m_source, pendingSeekMs);
+	}
 }
 
 void RsMusicLocalPlayer::stop()
 {
+	m_pendingPausedSeekMs = -1;
 	if (m_source)
 		obs_source_media_stop(m_source);
 }
 
 void RsMusicLocalPlayer::restart()
 {
+	m_pendingPausedSeekMs = -1;
 	if (m_source)
 		obs_source_media_restart(m_source);
+}
+
+void RsMusicLocalPlayer::seekTo(qint64 positionMs)
+{
+	if (!m_source)
+		return;
+	positionMs = qMax<qint64>(0, positionMs);
+	const bool paused = obs_source_media_get_state(m_source) == OBS_MEDIA_STATE_PAUSED;
+	obs_source_media_set_time(m_source, positionMs);
+	if (paused) {
+		m_pendingPausedSeekMs = positionMs;
+		emit playbackProgress(positionMs, obs_source_media_get_duration(m_source));
+	}
 }
 
 void RsMusicLocalPlayer::shutdown()
 {
 	stop();
+	if (m_progressTimer)
+		m_progressTimer->stop();
 	releaseSource();
 	m_currentFile.clear();
+	m_pendingPausedSeekMs = -1;
 }
 
 QString RsMusicLocalPlayer::currentFile() const

@@ -5,6 +5,7 @@
 class QLabel;
 class QPushButton;
 class QSlider;
+class QPixmap;
 
 class RsMusicState;
 class RsMusicController;
@@ -24,11 +25,14 @@ private:
 
 	QLabel *m_lblTitle = nullptr;
 	QLabel *m_lblArtist = nullptr;
+	QLabel *m_lblAlbum = nullptr;
 	QLabel *m_lblRequester = nullptr;
+	QLabel *m_lblArtwork = nullptr;
 	QLabel *m_lblStatus = nullptr;
 	QLabel *m_lblTime = nullptr;
 	QSlider *m_progress = nullptr;
 	bool m_userSeeking = false;
+	QString m_loadedArtworkUri;
 
 	QPushButton *m_btnPlay = nullptr;
 	QPushButton *m_btnPrevious = nullptr;

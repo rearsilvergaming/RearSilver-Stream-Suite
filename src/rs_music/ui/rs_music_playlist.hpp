@@ -18,6 +18,7 @@ private:
 	void addLocalFolder();
 	void playSelected();
 	void removeSelected();
+	void clearLibrary();
 	void loadLibrary();
 	void saveLibrary() const;
 
@@ -26,6 +27,7 @@ private:
 	QListWidget *m_localFiles = nullptr;
 	QPushButton *m_playSelected = nullptr;
 	QPushButton *m_removeSelected = nullptr;
+	QPushButton *m_clearLibrary = nullptr;
 	QPushButton *m_shuffleButton = nullptr;
 	QLabel *m_status = nullptr;
 };

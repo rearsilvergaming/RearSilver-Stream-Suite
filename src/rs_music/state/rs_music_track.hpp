@@ -71,6 +71,7 @@ struct RsMusicTrack {
 	QString providerUri;
 	QString title;
 	QString artist;
+	QString album;
 	QString artworkUri;
 	int durationSeconds = 0;
 	QString requestedById;

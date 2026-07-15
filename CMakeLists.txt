@@ -23,6 +23,7 @@ find_package(Qt6 REQUIRED COMPONENTS Core Gui Widgets Network)
 
 # ----- Plugin target -----
 add_library(${PROJECT_NAME} MODULE
+	resources.qrc
     src/plugin-main.cpp
     src/rs_main_dock.cpp
     src/rs_main_dock.hpp
@@ -58,6 +59,8 @@ add_library(${PROJECT_NAME} MODULE
     src/rs_music/rs_music_helpers.hpp
     src/rs_music/rs_music_local_player.cpp
     src/rs_music/rs_music_local_player.hpp
+	 src/rs_music/rs_music_metadata.cpp
+	 src/rs_music/rs_music_metadata.hpp
     src/rs_music/rs_music_server.cpp
     src/rs_music/rs_music_server.hpp
     src/rs_music/rs_music_ws.cpp

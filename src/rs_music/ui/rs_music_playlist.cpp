@@ -9,6 +9,7 @@
 #include <QGridLayout>
 #include <QLabel>
 #include <QListWidget>
+#include <QMessageBox>
 #include <QPushButton>
 #include <QSettings>
 #include <QVBoxLayout>
@@ -48,12 +49,14 @@ RsMusicPlaylist::RsMusicPlaylist(RsMusicState *state, RsMusicController *control
 	auto *addFolder = new QPushButton("Add folder");
 	m_playSelected = new QPushButton("Play selected");
 	m_removeSelected = new QPushButton("Remove");
+	m_clearLibrary = new QPushButton("Clear library");
 	m_shuffleButton = new QPushButton("Shuffle order");
 	buttons->addWidget(addFiles, 0, 0);
 	buttons->addWidget(addFolder, 0, 1);
 	buttons->addWidget(m_playSelected, 1, 0);
 	buttons->addWidget(m_removeSelected, 1, 1);
-	buttons->addWidget(m_shuffleButton, 2, 0, 1, 2);
+	buttons->addWidget(m_shuffleButton, 2, 0);
+	buttons->addWidget(m_clearLibrary, 2, 1);
 	layout->addLayout(buttons);
 
 	m_status = new QLabel("No local files added");
@@ -62,7 +65,7 @@ RsMusicPlaylist::RsMusicPlaylist(RsMusicState *state, RsMusicController *control
 	layout->addWidget(m_status);
 
 	m_localFiles = new QListWidget();
-	m_localFiles->setSelectionMode(QAbstractItemView::SingleSelection);
+	m_localFiles->setSelectionMode(QAbstractItemView::ExtendedSelection);
 	m_localFiles->setAlternatingRowColors(true);
 	m_localFiles->setMinimumHeight(120);
 	layout->addWidget(m_localFiles, 1);
@@ -71,6 +74,7 @@ RsMusicPlaylist::RsMusicPlaylist(RsMusicState *state, RsMusicController *control
 	connect(addFolder, &QPushButton::clicked, this, [this]() { addLocalFolder(); });
 	connect(m_playSelected, &QPushButton::clicked, this, [this]() { playSelected(); });
 	connect(m_removeSelected, &QPushButton::clicked, this, [this]() { removeSelected(); });
+	connect(m_clearLibrary, &QPushButton::clicked, this, [this]() { clearLibrary(); });
 	connect(m_localFiles, &QListWidget::itemDoubleClicked, this, [this](QListWidgetItem *) { playSelected(); });
 	connect(m_localFiles, &QListWidget::itemSelectionChanged, this, &RsMusicPlaylist::updateFromState);
 	connect(m_shuffleButton, &QPushButton::clicked, this, [this]() {
@@ -168,8 +172,33 @@ void RsMusicPlaylist::removeSelected()
 {
 	if (!m_localFiles)
 		return;
-	delete m_localFiles->takeItem(m_localFiles->currentRow());
-	saveLibrary();
+	const QList<QListWidgetItem *> selected = m_localFiles->selectedItems();
+	if (selected.isEmpty())
+		return;
+
+	QStringList remaining;
+	for (int index = 0; index < m_localFiles->count(); ++index) {
+		QListWidgetItem *item = m_localFiles->item(index);
+		if (!item->isSelected())
+			remaining.append(item->data(Qt::UserRole).toString());
+	}
+	if (m_controller)
+		m_controller->setLocalLibrary(remaining);
+	else
+		loadLibrary();
+	updateFromState();
+}
+
+void RsMusicPlaylist::clearLibrary()
+{
+	if (!m_localFiles || m_localFiles->count() == 0)
+		return;
+	if (QMessageBox::question(this, "Clear local music library",
+				  "Remove every track from the local library? This will not delete the files from your computer.")
+	    != QMessageBox::Yes)
+		return;
+	if (m_controller)
+		m_controller->setLocalLibrary({});
 	updateFromState();
 }
 
@@ -201,11 +230,13 @@ void RsMusicPlaylist::saveLibrary() const
 
 void RsMusicPlaylist::updateFromState()
 {
-	const bool hasSelection = m_localFiles && m_localFiles->currentItem();
+	const bool hasSelection = m_localFiles && !m_localFiles->selectedItems().isEmpty();
 	if (m_playSelected)
 		m_playSelected->setEnabled(hasSelection && m_controller);
 	if (m_removeSelected)
 		m_removeSelected->setEnabled(hasSelection);
+	if (m_clearLibrary)
+		m_clearLibrary->setEnabled(m_localFiles && m_localFiles->count() > 0);
 
 	if (!m_status || !m_localFiles)
 		return;

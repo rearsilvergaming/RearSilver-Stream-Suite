@@ -1,0 +1,5 @@
+<RCC>
+  <qresource prefix="/rs/music">
+    <file alias="music-fallback-vinyl.png">data/assets/music/music-fallback-vinyl.png</file>
+  </qresource>
+</RCC>

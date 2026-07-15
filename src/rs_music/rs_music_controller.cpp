@@ -1,6 +1,7 @@
 #include "rs_music_controller.hpp"
 #include "state/rs_music_state.hpp"
 #include "rs_music_local_player.hpp"
+#include "rs_music_metadata.hpp"
 
 #include <QDateTime>
 #include <QFileInfo>
@@ -233,6 +234,7 @@ bool RsMusicController::playLocalIndex(int index)
 	track.providerTrackId = file.absoluteFilePath();
 	track.providerUri = file.absoluteFilePath();
 	track.title = file.completeBaseName();
+	RsMusicMetadata::enrichLocalTrack(track, file.absoluteFilePath());
 	track.isFromPlaylist = true;
 	m_state->setActiveProvider(RsMusicProvider::LocalFile);
 	m_state->setPlaylistLabel("Local files");

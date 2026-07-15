@@ -1,6 +1,7 @@
 ﻿#include "rs_music_now_playing.hpp"
 #include "rs_music/state/rs_music_state.hpp"
 #include "rs_music/rs_music_controller.hpp"
+#include "rs_music/rs_music_metadata.hpp"
 
 #include <QVBoxLayout>
 #include <QHBoxLayout>
@@ -10,6 +11,7 @@
 #include <QFrame>
 #include <QSlider>
 #include <QSignalBlocker>
+#include <QPixmap>
 
 static QLabel *makeTitle(const QString &text)
 {
@@ -37,11 +39,17 @@ RsMusicNowPlaying::RsMusicNowPlaying(RsMusicState *state, RsMusicController *con
 	layout->setSpacing(10);
 
 	layout->addWidget(makeTitle("Music — Now Playing"));
+	m_lblArtwork = new QLabel();
+	m_lblArtwork->setFixedSize(160, 160);
+	m_lblArtwork->setAlignment(Qt::AlignCenter);
+	m_lblArtwork->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
+	layout->addWidget(m_lblArtwork, 0, Qt::AlignHCenter);
 
 	m_lblTitle = new QLabel("Title: —");
 	m_lblArtist = new QLabel("Artist: —");
+	m_lblAlbum = new QLabel("Album: —");
 	m_lblRequester = new QLabel("Requested by: —");
-	for (QLabel *label : {m_lblTitle, m_lblArtist, m_lblRequester}) {
+	for (QLabel *label : {m_lblTitle, m_lblArtist, m_lblAlbum, m_lblRequester}) {
 		label->setWordWrap(true);
 		label->setMinimumWidth(0);
 		label->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
@@ -49,6 +57,7 @@ RsMusicNowPlaying::RsMusicNowPlaying(RsMusicState *state, RsMusicController *con
 
 	layout->addWidget(m_lblTitle);
 	layout->addWidget(m_lblArtist);
+	layout->addWidget(m_lblAlbum);
 	layout->addWidget(m_lblRequester);
 
 	auto *progressRow = new QHBoxLayout();
@@ -142,7 +151,10 @@ void RsMusicNowPlaying::updateFromState()
 	if (!m_state->hasCurrentTrack()) {
 		m_lblTitle->setText("Title: —");
 		m_lblArtist->setText("Artist: —");
+		m_lblAlbum->setText("Album: —");
 		m_lblRequester->setText("Requested by: —");
+		m_lblArtwork->clear();
+		m_loadedArtworkUri.clear();
 		QSignalBlocker blocker(m_progress);
 		m_progress->setRange(0, 0);
 		m_progress->setValue(0);
@@ -154,6 +166,14 @@ void RsMusicNowPlaying::updateFromState()
 		m_lblTitle->setText(QString("Title: %1").arg(track.title));
 		m_lblTitle->setToolTip(track.title);
 		m_lblArtist->setText(QString("Artist: %1").arg(track.artist));
+		m_lblAlbum->setText(QString("Album: %1").arg(track.album.isEmpty() ? "—" : track.album));
+		if (m_loadedArtworkUri != track.artworkUri) {
+			QPixmap artwork;
+			artwork.loadFromData(RsMusicMetadata::artworkBytes(track.artworkUri));
+			m_lblArtwork->setPixmap(artwork.scaled(m_lblArtwork->size(), Qt::KeepAspectRatio,
+								 Qt::SmoothTransformation));
+			m_loadedArtworkUri = track.artworkUri;
+		}
 
 		if (track.isFromPlaylist) {
 			m_lblRequester->setText(QString("Requested by: %1").arg(m_state->playlistLabel()));

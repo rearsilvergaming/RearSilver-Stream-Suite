@@ -90,7 +90,6 @@ RsMainDock::RsMainDock(QWidget *parent) : QWidget(parent)
 	setObjectName("RearSilverStreamSuiteDock");
 
 	RsAutoStart::ensureObsEventHook(); // ✅ EARLY registration
-	rsMusicEnsureSystem();
 
 	m_central = new QWidget(this);
 
@@ -148,14 +147,6 @@ RsMainDock::RsMainDock(QWidget *parent) : QWidget(parent)
 
 	// Build UI AFTER auth exists
 	createUi();
-
-
-	// Auto-resume if tokens already exist
-	if (m_streamerAuth->hasValidToken())
-		m_streamerAuth->reconnect();
-
-	if (m_botAuth->hasValidToken())
-		m_botAuth->reconnect();
 
 	// --------------------------------------------------
 	// Streamer auth → GLOBAL STATUS BAR (CONNECTED)
@@ -581,9 +572,6 @@ m_splitter->addWidget(m_topContainer);
 
 	// Set initial splitter position: handle sits directly under the menu block
 	m_splitter->setSizes({navMin, 1});
-
-		// Ensure RS Music system scene & sources exist (safe on every launch)
-	rsMusicEnsureSystem();
 
 	if (m_musicState) {
 		connect(m_musicState, &RsMusicState::stateChanged, this, &RsMainDock::updateMusicStatusInfo);

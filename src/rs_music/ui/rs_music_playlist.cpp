@@ -12,7 +12,9 @@
 #include <QMessageBox>
 #include <QPushButton>
 #include <QSettings>
+#include <QCollator>
 #include <QVBoxLayout>
+#include <algorithm>
 
 static QLabel *makeTitle(const QString &text)
 {
@@ -137,8 +139,16 @@ void RsMusicPlaylist::addLocalFolder()
 	settings.setValue("music/local/lastFolder", folder);
 	const QStringList filters = {"*.mp3", "*.flac", "*.wav", "*.ogg", "*.m4a", "*.aac", "*.opus", "*.wma"};
 	QDirIterator files(folder, filters, QDir::Files | QDir::Readable, QDirIterator::Subdirectories);
+	QStringList discoveredFiles;
 	while (files.hasNext()) {
-		const QString path = QFileInfo(files.next()).absoluteFilePath();
+		discoveredFiles.append(QFileInfo(files.next()).absoluteFilePath());
+	}
+	QCollator collator;
+	collator.setNumericMode(true);
+	collator.setCaseSensitivity(Qt::CaseInsensitive);
+	std::sort(discoveredFiles.begin(), discoveredFiles.end(),
+		  [&collator](const QString &left, const QString &right) { return collator.compare(left, right) < 0; });
+	for (const QString &path : discoveredFiles) {
 		bool duplicate = false;
 		for (int index = 0; index < m_localFiles->count(); ++index) {
 			if (m_localFiles->item(index)->data(Qt::UserRole).toString().compare(path, Qt::CaseInsensitive) == 0) {

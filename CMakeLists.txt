@@ -21,6 +21,16 @@ endif()
 
 find_package(Qt6 REQUIRED COMPONENTS Core Gui Widgets Network)
 
+if(WIN32)
+	add_executable(RearSilver-Music-Player WIN32 src/music_player/main.cpp)
+	target_include_directories(RearSilver-Music-Player PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/third_party/miniaudio")
+	target_link_libraries(RearSilver-Music-Player PRIVATE gdiplus)
+	set_target_properties(RearSilver-Music-Player PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED YES)
+	if(MSVC)
+		target_compile_options(RearSilver-Music-Player PRIVATE /utf-8)
+	endif()
+endif()
+
 # ----- Plugin target -----
 add_library(${PROJECT_NAME} MODULE
 	resources.qrc
@@ -130,6 +140,15 @@ set_target_properties(${PROJECT_NAME}
         AUTOUIC ON
         AUTORCC ON
 )
+
+if(WIN32)
+	add_dependencies(${PROJECT_NAME} RearSilver-Music-Player)
+	add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
+		COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+			"$<TARGET_FILE:RearSilver-Music-Player>" "$<TARGET_FILE_DIR:${PROJECT_NAME}>"
+		COMMENT "Package RearSilver Music Player companion"
+		VERBATIM)
+endif()
 
 # Force UTF-8 for MSVC (fixes C4828 warnings)
 if (MSVC)

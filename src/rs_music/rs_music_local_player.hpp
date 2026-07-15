@@ -3,19 +3,16 @@
 #include <QObject>
 #include <QString>
 
-struct obs_source;
-typedef struct obs_source obs_source_t;
-struct calldata;
-typedef struct calldata calldata_t;
-class QTimer;
+class QLocalSocket;
+class QProcess;
+struct RsMusicTrack;
 
 class RsMusicLocalPlayer : public QObject {
 	Q_OBJECT
 
 public:
 	static RsMusicLocalPlayer &instance();
-
-	bool playFile(const QString &filePath);
+	bool playFile(const RsMusicTrack &track);
 	void pause();
 	void resume();
 	void stop();
@@ -36,16 +33,17 @@ private:
 	~RsMusicLocalPlayer() override;
 	RsMusicLocalPlayer(const RsMusicLocalPlayer &) = delete;
 	RsMusicLocalPlayer &operator=(const RsMusicLocalPlayer &) = delete;
+	bool ensureCompanion();
+	QString companionPath() const;
+	void sendCommand(const QString &command, const QString &argument = {});
+	void readMessages();
+	void connectPendingPlayback();
 
-	bool ensureSource();
-	void releaseSource();
-	static void onMediaStarted(void *data, calldata_t *);
-	static void onMediaEnded(void *data, calldata_t *);
-	static void onMediaStopped(void *data, calldata_t *);
-
-	obs_source_t *m_source = nullptr;
+	QProcess *m_process = nullptr;
+	QLocalSocket *m_socket = nullptr;
 	QString m_currentFile;
-	bool m_forcedActive = false;
-	QTimer *m_progressTimer = nullptr;
-	qint64 m_pendingPausedSeekMs = -1;
+	QString m_pendingMetadata;
+	QString m_pendingFile;
+	int m_pendingConnectionAttempts = 0;
+	bool m_shuttingDown = false;
 };

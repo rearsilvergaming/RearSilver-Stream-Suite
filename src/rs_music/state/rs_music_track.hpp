@@ -52,7 +52,7 @@ inline RsMusicProviderCapabilities rsMusicProviderCapabilities(RsMusicProvider p
 		capabilities = {true, true, true, true, true, true, true, true, true, true};
 		break;
 	case RsMusicProvider::LocalFile:
-		capabilities = {true, true, true, true, true, true, true, true, false, false};
+		capabilities = {true, true, true, true, true, true, true, true, true, false};
 		break;
 	case RsMusicProvider::SystemMedia:
 		capabilities = {false, false, true, true, true, true, false, true, true, false};

@@ -188,7 +188,11 @@ void RsMusicNowPlaying::updateFromState()
 		m_progress->setRange(0, duration);
 		if (!m_userSeeking)
 			m_progress->setValue(position);
-		m_progress->setEnabled(track.provider == RsMusicProvider::LocalFile && duration > 0);
+		const bool canSeek = rsMusicProviderCapabilities(track.provider).canSeek;
+		m_progress->setEnabled(duration > 0);
+		m_progress->setAttribute(Qt::WA_TransparentForMouseEvents, !canSeek);
+		m_progress->setFocusPolicy(canSeek ? Qt::StrongFocus : Qt::NoFocus);
+		m_progress->setToolTip(canSeek ? "Drag to seek" : "Playback progress (seeking unavailable for this provider)");
 		if (!m_userSeeking)
 			m_lblTime->setText(QString("%1 / %2")
 						   .arg(formatTime(position / 1000), formatTime(duration / 1000)));

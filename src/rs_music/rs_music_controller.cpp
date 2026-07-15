@@ -220,9 +220,6 @@ bool RsMusicController::playLocalIndex(int index)
 
 	if (!currentTrackIsLocal() && m_state->hasCurrentTrack())
 		rsMusicStop();
-	if (!RsMusicLocalPlayer::instance().playFile(file.absoluteFilePath()))
-		return false;
-
 	if (index > 0) {
 		m_localLibrary.prepend(m_localLibrary.takeAt(index));
 		QSettings("RearSilver", "RearSilver-Stream-Suite").setValue("music/local/library", m_localLibrary);
@@ -236,6 +233,8 @@ bool RsMusicController::playLocalIndex(int index)
 	track.title = file.completeBaseName();
 	RsMusicMetadata::enrichLocalTrack(track, file.absoluteFilePath());
 	track.isFromPlaylist = true;
+	if (!RsMusicLocalPlayer::instance().playFile(track))
+		return false;
 	m_state->setActiveProvider(RsMusicProvider::LocalFile);
 	m_state->setPlaylistLabel("Local files");
 	m_state->setCurrentTrack(track);

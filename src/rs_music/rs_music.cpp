@@ -44,8 +44,13 @@ static int g_fallbackIndex = 0;
 // Playback state
 // -----------------------
 static QString g_currentTrackId;
+static RsMusicProvider g_currentProvider = RsMusicProvider::Unknown;
+static QString g_currentProviderTrackId;
+static QString g_currentProviderUri;
 static QString g_currentYoutubeId;
 static QString g_currentTitle;
+static QString g_currentArtist;
+static QString g_currentArtworkUri;
 static QString g_currentRequesterId;
 static QString g_currentRequesterDisplay;
 static QString g_currentSource; // "chat" | "fallback"
@@ -68,9 +73,14 @@ static std::deque<HistoryItem> g_history;
 // Request queue item
 struct QueueItem {
 	QString trackId;
+	RsMusicProvider provider = RsMusicProvider::Unknown;
+	QString providerTrackId;
+	QString providerUri;
 	QString youtubeId;    // if known
 	QString pendingQuery; // if youtubeId not resolved yet
 	QString title;        // optional
+	QString artist;
+	QString artworkUri;
 	QString requesterId;
 	QString requesterDisplay;
 	int durationSec = 0; // optional
@@ -91,9 +101,14 @@ QVector<RsMusicQueueEntry> rsMusicQueueSnapshot()
 	for (const QueueItem &item : g_requestQueue) {
 		RsMusicQueueEntry entry;
 		entry.trackId = item.trackId;
+		entry.provider = item.provider;
+		entry.providerTrackId = item.providerTrackId;
+		entry.providerUri = item.providerUri;
 		entry.youtubeId = item.youtubeId;
 		entry.pendingQuery = item.pendingQuery;
 		entry.title = item.title;
+		entry.artist = item.artist;
+		entry.artworkUri = item.artworkUri;
 		entry.requesterDisplay = item.requesterDisplay;
 		entry.durationSeconds = item.durationSec;
 		snapshot.append(entry);
@@ -140,8 +155,13 @@ static QJsonObject buildStateFullPayload()
 
 	playback["status"] = status;
 	playback["trackId"] = g_currentTrackId;
+	playback["provider"] = rsMusicProviderKey(g_currentProvider);
+	playback["providerTrackId"] = g_currentProviderTrackId;
+	playback["providerUri"] = g_currentProviderUri;
 	playback["youtubeId"] = g_currentYoutubeId;
 	playback["title"] = g_currentTitle;
+	playback["artist"] = g_currentArtist;
+	playback["artworkUri"] = g_currentArtworkUri;
 	playback["requester"] = g_currentRequesterDisplay;
 	playback["requesterId"] = g_currentRequesterId;
 	playback["source"] = g_currentSource;
@@ -154,9 +174,14 @@ static QJsonObject buildStateFullPayload()
 	for (const auto &it : g_requestQueue) {
 		QJsonObject q;
 		q["trackId"] = it.trackId;
+		q["provider"] = rsMusicProviderKey(it.provider);
+		q["providerTrackId"] = it.providerTrackId;
+		q["providerUri"] = it.providerUri;
 		q["youtubeId"] = it.youtubeId;
 		q["pendingQuery"] = it.pendingQuery;
 		q["title"] = it.title;
+		q["artist"] = it.artist;
+		q["artworkUri"] = it.artworkUri;
 		q["requester"] = it.requesterDisplay;
 		q["requesterId"] = it.requesterId;
 		q["durationSec"] = it.durationSec;
@@ -266,8 +291,13 @@ obs_source_t *ensureMusicPlaybackBrowserSource()
 static void clearCurrent()
 {
 	g_currentTrackId.clear();
+	g_currentProvider = RsMusicProvider::Unknown;
+	g_currentProviderTrackId.clear();
+	g_currentProviderUri.clear();
 	g_currentYoutubeId.clear();
 	g_currentTitle.clear();
+	g_currentArtist.clear();
+	g_currentArtworkUri.clear();
 	g_currentRequesterId.clear();
 	g_currentRequesterDisplay.clear();
 	g_currentSource.clear();
@@ -299,8 +329,13 @@ static bool playSelected(const QueueItem &it, const QString &source)
 	}
 
 	g_currentTrackId = it.trackId;
+	g_currentProvider = it.provider;
+	g_currentProviderTrackId = it.providerTrackId;
+	g_currentProviderUri = it.providerUri;
 	g_currentYoutubeId = it.youtubeId;
 	g_currentTitle = it.title;
+	g_currentArtist = it.artist;
+	g_currentArtworkUri = it.artworkUri;
 	g_currentRequesterId = it.requesterId;
 	g_currentRequesterDisplay = it.requesterDisplay;
 	g_currentSource = source;
@@ -338,7 +373,10 @@ static bool selectAndPlayNext(const QString &why)
 
 		QueueItem it;
 		it.trackId = makeTrackId();
+		it.provider = RsMusicProvider::YouTube;
+		it.providerTrackId = g_fallbackVideoIds[g_fallbackIndex];
 		it.youtubeId = g_fallbackVideoIds[g_fallbackIndex];
+		it.providerUri = QString("https://www.youtube.com/watch?v=%1").arg(it.youtubeId);
 		it.pendingQuery = "";
 		it.title = ""; // Phase 6B will resolve titles
 		it.requesterId = "";
@@ -626,11 +664,15 @@ RsMusicRequestResult rsMusicRequestSong(const QString &requesterId, const QStrin
 	// URL -> extract video id
 	const QString extracted = rsMusicExtractYoutubeVideoId(trimmed);
 	if (!extracted.isEmpty()) {
+		it.provider = RsMusicProvider::YouTube;
+		it.providerTrackId = extracted;
+		it.providerUri = QString("https://www.youtube.com/watch?v=%1").arg(extracted);
 		it.youtubeId = extracted;
 		it.pendingQuery.clear();
 		it.title = "";
 	} else {
-		// Free text query (Phase 6B resolves to YouTube ID + metadata)
+		// Provider selection and metadata resolution happen asynchronously.
+		it.provider = RsMusicProvider::Unknown;
 		it.youtubeId.clear();
 		it.pendingQuery = trimmed;
 		it.title = trimmed;
@@ -685,7 +727,10 @@ void rsMusicPlayVideo(const QString &youtubeVideoId)
 
 	QueueItem it;
 	it.trackId = makeTrackId();
+	it.provider = RsMusicProvider::YouTube;
+	it.providerTrackId = vid;
 	it.youtubeId = vid;
+	it.providerUri = QString("https://www.youtube.com/watch?v=%1").arg(vid);
 	it.pendingQuery.clear();
 	it.title = "";
 	it.requesterId = "";

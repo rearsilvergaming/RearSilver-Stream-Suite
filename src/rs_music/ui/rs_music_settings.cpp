@@ -7,8 +7,6 @@
 #include <QVBoxLayout>
 #include <QLabel>
 #include <QFont>
-#include <QLineEdit>
-#include <QFormLayout>
 #include <QFrame>
 #include <QPushButton>
 #include <QRadioButton>
@@ -16,13 +14,13 @@
 
 static bool loadSendFromBotSetting()
 {
-	QSettings s;
+	QSettings s("RearSilver", "RearSilver-Stream-Suite");
 	return s.value("music/twitch/send_from_bot", false).toBool();
 }
 
 static void saveSendFromBotSetting(bool sendFromBot)
 {
-	QSettings s;
+	QSettings s("RearSilver", "RearSilver-Stream-Suite");
 	s.setValue("music/twitch/send_from_bot", sendFromBot);
 }
 
@@ -61,14 +59,6 @@ RsMusicSettings::RsMusicSettings(RsMusicState *state, RsMusicTwitchAuth *streame
 	desc->setStyleSheet("opacity: 0.8;");
 	layout->addWidget(desc);
 
-	auto *form = new QFormLayout();
-
-	m_channelEdit = new QLineEdit();
-	m_channelEdit->setPlaceholderText("rearsilver");
-	form->addRow("Channel name:", m_channelEdit);
-
-	layout->addLayout(form);
-
 	m_streamerStatus = new QLabel("Status: Not logged in");
 	m_streamerStatus->setStyleSheet("opacity: 0.7;");
 	layout->addWidget(m_streamerStatus);
@@ -88,14 +78,6 @@ RsMusicSettings::RsMusicSettings(RsMusicState *state, RsMusicTwitchAuth *streame
 	auto *botDesc = new QLabel("Optionally connect a separate Twitch bot account.\n\n"
 				   "This account is only used to send chat responses and confirmations. "
 				   "It never reads chat and does not affect permissions.");
-
-		auto *botForm = new QFormLayout();
-
-	m_botChannelEdit = new QLineEdit();
-	m_botChannelEdit->setPlaceholderText("rearsilverbot");
-	botForm->addRow("Bot username:", m_botChannelEdit);
-
-	layout->addLayout(botForm);
 
 	botDesc->setWordWrap(true);
 	botDesc->setStyleSheet("opacity: 0.8;");
@@ -131,6 +113,8 @@ RsMusicSettings::RsMusicSettings(RsMusicState *state, RsMusicTwitchAuth *streame
 
 	m_senderStreamerRadio = new QRadioButton("Streamer account");
 	m_senderBotRadio = new QRadioButton("Bot account");
+	m_senderStreamerRadio->setToolTip("Send confirmations using the connected streamer identity.");
+	m_senderBotRadio->setToolTip("Send confirmations using the connected bot identity.");
 
 	layout->addWidget(m_senderStreamerRadio);
 	layout->addWidget(m_senderBotRadio);
@@ -156,14 +140,18 @@ RsMusicSettings::RsMusicSettings(RsMusicState *state, RsMusicTwitchAuth *streame
 	});
 
 		// Persist sender selection changes
-	connect(m_senderStreamerRadio, &QRadioButton::toggled, this, [](bool checked) {
-		if (checked)
+	connect(m_senderStreamerRadio, &QRadioButton::toggled, this, [this](bool checked) {
+		if (checked) {
 			saveSendFromBotSetting(false);
+			emit senderPreferenceChanged();
+		}
 	});
 
-	connect(m_senderBotRadio, &QRadioButton::toggled, this, [](bool checked) {
-		if (checked)
+	connect(m_senderBotRadio, &QRadioButton::toggled, this, [this](bool checked) {
+		if (checked) {
 			saveSendFromBotSetting(true);
+			emit senderPreferenceChanged();
+		}
 	});
 
 	updateAuthUi();

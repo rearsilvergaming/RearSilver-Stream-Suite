@@ -64,6 +64,7 @@ add_library(${PROJECT_NAME} MODULE
     src/rs_music/ui/rs_music_settings.hpp
     src/rs_music/state/rs_music_state.cpp
     src/rs_music/state/rs_music_state.hpp
+    src/rs_music/state/rs_music_track.hpp
 
     src/rs_music/rs_music_twitch_auth.cpp
     src/rs_music/rs_music_twitch_auth.hpp

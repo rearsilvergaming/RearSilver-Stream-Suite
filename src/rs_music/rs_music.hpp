@@ -5,6 +5,7 @@
 #include <QJsonObject>
 #include <QObject>
 #include <QVector>
+#include "state/rs_music_track.hpp"
 
 // Forward declarations (OBS)
 struct obs_source;
@@ -69,9 +70,14 @@ struct RsMusicRequestResult {
 
 struct RsMusicQueueEntry {
 	QString trackId;
-	QString youtubeId;
+	RsMusicProvider provider = RsMusicProvider::Unknown;
+	QString providerTrackId;
+	QString providerUri;
+	QString youtubeId; // legacy hosted-player compatibility
 	QString pendingQuery;
 	QString title;
+	QString artist;
+	QString artworkUri;
 	QString requesterDisplay;
 	int durationSeconds = 0;
 };

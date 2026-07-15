@@ -14,6 +14,7 @@
 #include <QAction>
 #include <QApplication>
 #include <QScrollArea>
+#include <QSettings>
 
 #include <obs-frontend-api.h>
 #include "enhancements/rs_auto_start.hpp"
@@ -303,9 +304,10 @@ void RsMainDock::connectMusicChat()
 	const QString channel = m_streamerAuth->userLogin();
 	m_musicIrcReader->connectToChat(channel, m_streamerAuth->accessToken(), channel);
 
-	// Prefer the dedicated bot identity, but keep feedback functional when only
-	// the streamer account is configured.
-	if (m_botAuth && m_botAuth->hasValidToken() && !m_botAuth->userLogin().isEmpty()) {
+	QSettings settings("RearSilver", "RearSilver-Stream-Suite");
+	const bool sendFromBot = settings.value("music/twitch/send_from_bot", false).toBool();
+
+	if (sendFromBot && m_botAuth && m_botAuth->hasValidToken() && !m_botAuth->userLogin().isEmpty()) {
 		m_musicIrcSender->connectSender(m_botAuth->userLogin(), m_botAuth->accessToken(), channel);
 	} else {
 		m_musicIrcSender->connectSender(channel, m_streamerAuth->accessToken(), channel);

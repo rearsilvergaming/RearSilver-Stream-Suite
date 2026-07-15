@@ -281,7 +281,9 @@ void RsMainDock::createPanels()
 	m_pageMusicQueue = new RsMusicQueue(musicState, m_contentCard);
 	m_pageMusicRequests = new RsMusicRequests(musicState, m_contentCard);
 	m_pageMusicPlaylist = new RsMusicPlaylist(musicState, m_contentCard);
-	m_pageMusicSettings = new RsMusicSettings(musicState, m_streamerAuth, m_botAuth, m_contentCard);
+	auto *musicSettings = new RsMusicSettings(musicState, m_streamerAuth, m_botAuth, m_contentCard);
+	m_pageMusicSettings = musicSettings;
+	connect(musicSettings, &RsMusicSettings::senderPreferenceChanged, this, &RsMainDock::connectMusicChat);
 
 	// Stack registration (order determines page index)
 	m_stack->addWidget(m_pageControls);       // 0

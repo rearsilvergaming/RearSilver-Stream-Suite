@@ -7,7 +7,6 @@ class QLabel;
 class RsMusicState;
 
 class RsMusicTwitchAuth;
-class QLineEdit;
 class QPushButton;
 
 class RsMusicSettings : public QWidget {
@@ -17,6 +16,9 @@ public:
 	explicit RsMusicSettings(RsMusicState *state, RsMusicTwitchAuth *streamerAuth, RsMusicTwitchAuth *botAuth,
 				 QWidget *parent = nullptr);
 
+signals:
+	void senderPreferenceChanged();
+
 private slots:
 	void updateAuthUi();
 
@@ -24,7 +26,6 @@ private:
 	RsMusicState *m_state = nullptr;
 
 	// ---- Streamer account UI ----
-	QLineEdit *m_channelEdit = nullptr;
 	QLabel *m_streamerStatus = nullptr;
 
 	QPushButton *m_loginButton = nullptr;
@@ -34,7 +35,6 @@ private:
 	RsMusicTwitchAuth *m_streamerAuth = nullptr;
 
 	// ---- Bot account UI ----
-	QLineEdit *m_botChannelEdit = nullptr;
 	QLabel *m_botStatus = nullptr;
 
 	QPushButton *m_botLoginButton = nullptr;

@@ -3,19 +3,7 @@
 #include <QObject>
 #include <QString>
 #include <QVector>
-
-/*
- * A single track entry used by:
- * - current track
- * - queue entries
- */
-struct RsMusicTrack {
-	QString title;
-	QString artist;
-	int durationSeconds = 0; // REQUIRED (locked)
-	QString requestedBy;     // empty if playlist
-	bool isFromPlaylist = false;
-};
+#include "rs_music_track.hpp"
 
 /*
  * Authoritative music state for the entire dock.
@@ -51,7 +39,7 @@ public:
 	QString playlistLabel() const;
 
 	// --- Persistence ---
-		void loadSettings();
+	void loadSettings();
 	void saveSettings() const;
 
 

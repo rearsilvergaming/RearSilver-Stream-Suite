@@ -22,11 +22,17 @@ void RsMusicController::syncQueueFromBackend()
 	tracks.reserve(entries.size());
 	for (const RsMusicQueueEntry &entry : entries) {
 		RsMusicTrack track;
+		track.trackId = entry.trackId;
+		track.provider = entry.provider;
+		track.providerTrackId = entry.providerTrackId;
+		track.providerUri = entry.providerUri;
 		track.title = entry.title.trimmed();
 		if (track.title.isEmpty())
 			track.title = entry.pendingQuery.trimmed();
 		if (track.title.isEmpty() && !entry.youtubeId.isEmpty())
 			track.title = QString("YouTube video %1").arg(entry.youtubeId);
+		track.artist = entry.artist;
+		track.artworkUri = entry.artworkUri;
 		track.durationSeconds = entry.durationSeconds;
 		track.requestedBy = entry.requesterDisplay;
 		track.isFromPlaylist = false;

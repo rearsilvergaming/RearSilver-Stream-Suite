@@ -26,6 +26,7 @@
 #include <QPointer>
 
 #include <vector>
+#include <algorithm>
 #include <unordered_map>
 #include <unordered_set>
 
@@ -420,6 +421,30 @@ void RsAutoStart::shutdown()
 	}
 
 	g_ui = {};
+}
+
+bool RsAutoStart::containsProgram(const QString &path)
+{
+	for (const QString &program : cfg_load_programs()) if (program.compare(path, Qt::CaseInsensitive) == 0) return true;
+	return false;
+}
+
+void RsAutoStart::addProgram(const QString &path)
+{
+	QStringList programs=cfg_load_programs();
+	if (!containsProgram(path)) {
+		programs.append(path); cfg_save_programs(programs);
+		if (g_ui.list) make_program_item(g_ui.list, path, true);
+	}
+}
+
+void RsAutoStart::removeProgram(const QString &path)
+{
+	QStringList programs=cfg_load_programs();
+	programs.erase(std::remove_if(programs.begin(),programs.end(),[&](const QString &p){return p.compare(path,Qt::CaseInsensitive)==0;}),programs.end());
+	cfg_save_programs(programs);
+	if (g_ui.list) for (int i=g_ui.list->count()-1;i>=0;--i)
+		if (g_ui.list->item(i)->text().compare(path,Qt::CaseInsensitive)==0) delete g_ui.list->takeItem(i);
 }
 
 // ---------------------------------------------------------------

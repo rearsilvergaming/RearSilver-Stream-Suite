@@ -155,9 +155,12 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int)
 {
 	GdiplusStartupInput gdiplusInput; ULONG_PTR gdiplusToken = 0; GdiplusStartup(&gdiplusToken, &gdiplusInput, nullptr);
 	Player player; g_player = &player; if (!player.initialise()) return 2;
-	WNDCLASSW wc{}; wc.lpfnWndProc = windowProc; wc.hInstance = instance; wc.hCursor = LoadCursor(nullptr, IDC_ARROW); wc.lpszClassName = L"RearSilverMusicPlayerWindow"; RegisterClassW(&wc);
-	HWND window = CreateWindowExW(0, wc.lpszClassName, L"RearSilver Music Player", WS_OVERLAPPEDWINDOW & ~WS_MAXIMIZEBOX,
+	HICON appIcon = static_cast<HICON>(LoadImageW(instance, MAKEINTRESOURCEW(101), IMAGE_ICON, 0, 0, LR_DEFAULTSIZE));
+	WNDCLASSW wc{}; wc.lpfnWndProc = windowProc; wc.hInstance = instance; wc.hCursor = LoadCursor(nullptr, IDC_ARROW); wc.hIcon = appIcon; wc.lpszClassName = L"RearSilverMusicPlayerWindow"; RegisterClassW(&wc);
+	HWND window = CreateWindowExW(0, wc.lpszClassName, L"RearSilver Stream Suite | Media Player", WS_OVERLAPPEDWINDOW & ~WS_MAXIMIZEBOX,
 		CW_USEDEFAULT, CW_USEDEFAULT, 500, 620, nullptr, nullptr, instance, nullptr);
+	SendMessageW(window, WM_SETICON, ICON_BIG, reinterpret_cast<LPARAM>(appIcon));
+	SendMessageW(window, WM_SETICON, ICON_SMALL, reinterpret_cast<LPARAM>(appIcon));
 	ShowWindow(window, SW_SHOW); UpdateWindow(window);
 	HANDLE pipe = CreateNamedPipeW(L"\\\\.\\pipe\\RearSilverStreamSuiteMusicPlayer", PIPE_ACCESS_DUPLEX,
 		PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_NOWAIT, 1, 65536, 65536, 0, nullptr);

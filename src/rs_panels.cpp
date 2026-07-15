@@ -32,6 +32,7 @@
 #include "rs_music/ui/rs_music_requests.hpp"
 #include "rs_music/ui/rs_music_playlist.hpp"
 #include "rs_music/ui/rs_music_settings.hpp"
+#include "rs_music/ui/rs_music_setup.hpp"
 
 
 // OBS
@@ -283,6 +284,7 @@ void RsMainDock::createPanels()
 	m_pageMusicPlaylist = new RsMusicPlaylist(musicState, m_musicController, m_contentCard);
 	auto *musicSettings = new RsMusicSettings(musicState, m_streamerAuth, m_botAuth, m_contentCard);
 	m_pageMusicSettings = musicSettings;
+	m_pageMusicSetup = new RsMusicSetup(m_contentCard);
 	connect(musicSettings, &RsMusicSettings::senderPreferenceChanged, this, &RsMainDock::connectMusicChat);
 
 	// Stack registration (order determines page index)
@@ -302,6 +304,7 @@ void RsMainDock::createPanels()
 	m_stack->addWidget(m_pageMusicRequests);   // 11
 	m_stack->addWidget(m_pageMusicPlaylist);   // 12
 	m_stack->addWidget(m_pageMusicSettings);   // 13
+	m_stack->addWidget(m_pageMusicSetup);      // 14
 
 	applyTheme();
 }

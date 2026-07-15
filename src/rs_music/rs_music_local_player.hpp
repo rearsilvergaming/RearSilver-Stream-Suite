@@ -20,6 +20,7 @@ public:
 	void seekTo(qint64 positionMs);
 	void shutdown();
 	QString currentFile() const;
+	QString executablePath() const { return companionPath(); }
 
 signals:
 	void playbackStarted();

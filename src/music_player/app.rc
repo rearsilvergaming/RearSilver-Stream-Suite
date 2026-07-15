@@ -1,0 +1,28 @@
+#include <windows.h>
+
+// Canonical replaceable Windows icon: assets/branding/rearsilver-stream-suite.ico
+101 ICON "../../assets/branding/rearsilver-stream-suite.ico"
+
+VS_VERSION_INFO VERSIONINFO
+ FILEVERSION 0,1,0,0
+ PRODUCTVERSION 0,1,0,0
+ FILEFLAGSMASK 0x3fL
+ FILEOS 0x40004L
+ FILETYPE 0x1L
+BEGIN
+ BLOCK "StringFileInfo"
+ BEGIN
+  BLOCK "080904b0"
+  BEGIN
+   VALUE "FileDescription", "RearSilver Stream Suite Media Player\0"
+   VALUE "InternalName", "RearSilver-Music-Player\0"
+   VALUE "OriginalFilename", "RearSilver-Music-Player.exe\0"
+   VALUE "ProductName", "RearSilver Stream Suite\0"
+   VALUE "ProductVersion", "0.1.0\0"
+  END
+ END
+ BLOCK "VarFileInfo"
+ BEGIN
+  VALUE "Translation", 0x0809, 1200
+ END
+END

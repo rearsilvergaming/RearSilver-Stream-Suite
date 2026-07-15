@@ -57,6 +57,7 @@ private slots:
 	void showMusicRequests();
 	void showMusicPlaylist();
 	void showMusicSettings();
+	void showMusicSetup();
 
 	// Layout & tabs
 	void onLayoutModeChanged(int index);
@@ -213,6 +214,7 @@ private:
 	QToolButton *m_btnMusicRequests = nullptr;
 	QToolButton *m_btnMusicPlaylist = nullptr;
 	QToolButton *m_btnMusicSettings = nullptr;
+	QToolButton *m_btnMusicSetup = nullptr;
 
 	// Pages
 	QWidget *m_pageControls = nullptr;
@@ -231,6 +233,7 @@ private:
 	QWidget *m_pageMusicRequests = nullptr;
 	QWidget *m_pageMusicPlaylist = nullptr;
 	QWidget *m_pageMusicSettings = nullptr;
+	QWidget *m_pageMusicSetup = nullptr;
 
 
 	// Control buttons

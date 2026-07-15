@@ -221,6 +221,11 @@ void RsMusicLocalPlayer::shutdown()
 	if (m_shuttingDown)
 		return;
 	m_shuttingDown = true;
+	if (m_socket && m_socket->state() != QLocalSocket::ConnectedState) {
+		m_socket->abort();
+		m_socket->connectToServer("RearSilverStreamSuiteMusicPlayer");
+		m_socket->waitForConnected(500);
+	}
 	if (m_socket && m_socket->state() == QLocalSocket::ConnectedState) {
 		m_socket->write("SHUTDOWN\n");
 		m_socket->flush();

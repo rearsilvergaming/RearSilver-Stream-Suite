@@ -22,7 +22,7 @@ endif()
 find_package(Qt6 REQUIRED COMPONENTS Core Gui Widgets Network)
 
 if(WIN32)
-	add_executable(RearSilver-Music-Player WIN32 src/music_player/main.cpp)
+	add_executable(RearSilver-Music-Player WIN32 src/music_player/main.cpp src/music_player/app.rc)
 	target_include_directories(RearSilver-Music-Player PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/third_party/miniaudio")
 	target_link_libraries(RearSilver-Music-Player PRIVATE gdiplus)
 	set_target_properties(RearSilver-Music-Player PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED YES)
@@ -85,6 +85,8 @@ add_library(${PROJECT_NAME} MODULE
     src/rs_music/ui/rs_music_playlist.hpp
     src/rs_music/ui/rs_music_settings.cpp
     src/rs_music/ui/rs_music_settings.hpp
+	 src/rs_music/ui/rs_music_setup.cpp
+	 src/rs_music/ui/rs_music_setup.hpp
     src/rs_music/state/rs_music_state.cpp
     src/rs_music/state/rs_music_state.hpp
     src/rs_music/state/rs_music_track.hpp

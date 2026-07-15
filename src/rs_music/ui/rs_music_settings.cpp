@@ -2,13 +2,13 @@
 #include "rs_music/state/rs_music_state.hpp"
 
 #include "rs_music/rs_music_twitch_auth.hpp"
+#include "rs_entitlements.hpp"
 
 #include <QPushButton>
 #include <QVBoxLayout>
 #include <QLabel>
 #include <QFont>
 #include <QFrame>
-#include <QPushButton>
 #include <QRadioButton>
 #include <QSettings>
 
@@ -35,6 +35,15 @@ static QLabel *makeTitle(const QString &text)
 	return lbl;
 }
 
+static QLabel *makeProviderStatus(const QString &provider, const QString &status, bool ready)
+{
+	auto *label = new QLabel(QString("%1  —  %2").arg(provider, status));
+	label->setWordWrap(true);
+	label->setStyleSheet(ready ? "padding: 6px 8px; border-left: 3px solid #35b76f;"
+				   : "padding: 6px 8px; border-left: 3px solid #727a86; opacity: 0.78;");
+	return label;
+}
+
 RsMusicSettings::RsMusicSettings(RsMusicState *state, RsMusicTwitchAuth *streamerAuth, RsMusicTwitchAuth *botAuth,
 				 QWidget *parent)
 	: QWidget(parent),
@@ -45,6 +54,25 @@ RsMusicSettings::RsMusicSettings(RsMusicState *state, RsMusicTwitchAuth *streame
 	auto *layout = new QVBoxLayout(this);
 	layout->setContentsMargins(8, 8, 8, 8);
 	layout->setSpacing(10);
+
+	layout->addWidget(makeTitle("Music — Providers"));
+
+	auto *edition = new QLabel(QString("Suite edition: %1")
+				   .arg(RsEntitlements::edition() == RsProductEdition::Pro ? "Pro" : "Free"));
+	edition->setStyleSheet("font-weight: bold;");
+	layout->addWidget(edition);
+
+	auto *providerDesc = new QLabel(
+		"Music uses one shared queue and overlay format while each provider supplies the controls it supports. "
+		"Connections will become available here as their integrations are completed.");
+	providerDesc->setWordWrap(true);
+	providerDesc->setStyleSheet("opacity: 0.8;");
+	layout->addWidget(providerDesc);
+
+	layout->addWidget(makeProviderStatus("YouTube / YouTube Music", "Playback foundation ready; search setup pending", true));
+	layout->addWidget(makeProviderStatus("Spotify", "External-player connection not configured", false));
+	layout->addWidget(makeProviderStatus("Local files", "Music library not configured", false));
+	layout->addWidget(makeProviderStatus("Desktop media", "Player detection not configured", false));
 
 	layout->addWidget(makeTitle("Music — Twitch Chat"));
 
@@ -72,7 +100,7 @@ RsMusicSettings::RsMusicSettings(RsMusicState *state, RsMusicTwitchAuth *streame
 	m_logoutButton = new QPushButton("Log out");
 	layout->addWidget(m_logoutButton);
 
-		// --- Bot / Sender account (optional) ---
+	// --- Bot / Sender account (optional) ---
 	layout->addWidget(makeTitle("Music — Twitch Bot (Optional)"));
 
 	auto *botDesc = new QLabel("Optionally connect a separate Twitch bot account.\n\n"
@@ -106,7 +134,7 @@ RsMusicSettings::RsMusicSettings(RsMusicState *state, RsMusicTwitchAuth *streame
 
 	connect(m_botAuth, &RsMusicTwitchAuth::loggedOut, this, &RsMusicSettings::updateAuthUi);
 
-		// --- Chat sender selection ---
+	// --- Chat sender selection ---
 	m_senderLabel = new QLabel("Send chat confirmations from:");
 	m_senderLabel->setStyleSheet("margin-top: 12px; font-weight: bold;");
 	layout->addWidget(m_senderLabel);
@@ -139,7 +167,7 @@ RsMusicSettings::RsMusicSettings(RsMusicState *state, RsMusicTwitchAuth *streame
 		Q_UNUSED(err);
 	});
 
-		// Persist sender selection changes
+	// Persist sender selection changes
 	connect(m_senderStreamerRadio, &QRadioButton::toggled, this, [this](bool checked) {
 		if (checked) {
 			saveSendFromBotSetting(false);

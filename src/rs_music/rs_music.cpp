@@ -170,6 +170,20 @@ static QJsonObject buildStateFullPayload()
 	playback["volume"] = g_volume;
 	playback["startedAtTs"] = (double)nowMs();
 
+	const RsMusicProviderCapabilities providerCapabilities = rsMusicProviderCapabilities(g_currentProvider);
+	QJsonObject capabilities;
+	capabilities["canSearch"] = providerCapabilities.canSearch;
+	capabilities["canQueue"] = providerCapabilities.canQueue;
+	capabilities["canPlayPause"] = providerCapabilities.canPlayPause;
+	capabilities["canSkip"] = providerCapabilities.canSkip;
+	capabilities["canPrevious"] = providerCapabilities.canPrevious;
+	capabilities["canSeek"] = providerCapabilities.canSeek;
+	capabilities["canSetVolume"] = providerCapabilities.canSetVolume;
+	capabilities["providesMetadata"] = providerCapabilities.providesMetadata;
+	capabilities["usesExternalAudio"] = providerCapabilities.usesExternalAudio;
+	capabilities["requiresAuthentication"] = providerCapabilities.requiresAuthentication;
+	playback["providerCapabilities"] = capabilities;
+
 	QJsonArray queue;
 	for (const auto &it : g_requestQueue) {
 		QJsonObject q;

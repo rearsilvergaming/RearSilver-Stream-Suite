@@ -87,6 +87,8 @@ add_library(${PROJECT_NAME} MODULE
     src/rs_music/ui/rs_music_settings.hpp
 	 src/rs_music/ui/rs_music_setup.cpp
 	 src/rs_music/ui/rs_music_setup.hpp
+	 src/rs_music/ui/rs_music_overlay.cpp
+	 src/rs_music/ui/rs_music_overlay.hpp
     src/rs_music/state/rs_music_state.cpp
     src/rs_music/state/rs_music_state.hpp
     src/rs_music/state/rs_music_track.hpp

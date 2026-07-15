@@ -28,6 +28,7 @@ void RsMainDock::setActiveButton(QToolButton *button)
 		m_btnMusicPlaylist,
 		m_btnMusicSettings,
 		m_btnMusicSetup,
+		m_btnMusicOverlay,
 	};
 
 	for (QToolButton *btn : buttons) {
@@ -174,6 +175,12 @@ void RsMainDock::showMusicSetup()
 {
 	if (m_stack && m_pageMusicSetup) { m_stack->setCurrentWidget(m_pageMusicSetup); m_lastMusicPage=m_stack->currentIndex(); }
 	setActiveButton(m_btnMusicSetup);
+}
+
+void RsMainDock::showMusicOverlay()
+{
+	if (m_stack && m_pageMusicOverlay) { m_stack->setCurrentWidget(m_pageMusicOverlay); m_lastMusicPage=m_stack->currentIndex(); }
+	setActiveButton(m_btnMusicOverlay);
 }
 
 void RsMainDock::onLayoutModeChanged(int index)

@@ -131,6 +131,7 @@ void RsMainDock::createSidebarMenus()
 	m_btnMusicPlaylist = makeButton("Playlist", "Fallback playlist settings", "folder-music", "🎧");
 	m_btnMusicSettings = makeButton("Settings", "Music system configuration", "preferences-system", "⚙");
 	m_btnMusicSetup = makeButton("Setup", "Audio capture and player setup", "configure", "🔧");
+	m_btnMusicOverlay = makeButton("Overlay", "On-stream music overlay designer", "applications-graphics", "🖼");
 
 	// Keep the same 2-column grid discipline as other menus
 	m_musicMenuLayout->addWidget(m_btnMusicNowPlaying, 0, 0);
@@ -141,12 +142,14 @@ void RsMainDock::createSidebarMenus()
 
 	m_musicMenuLayout->addWidget(m_btnMusicSettings, 2, 0);
 	m_musicMenuLayout->addWidget(m_btnMusicSetup, 2, 1);
+	m_musicMenuLayout->addWidget(m_btnMusicOverlay, 3, 0);
 
 	m_musicMenuLayout->setColumnStretch(0, 1);
 	m_musicMenuLayout->setColumnStretch(1, 1);
 	m_musicMenuLayout->setRowStretch(0, 0);
 	m_musicMenuLayout->setRowStretch(1, 0);
 	m_musicMenuLayout->setRowStretch(2, 0);
+	m_musicMenuLayout->setRowStretch(3, 0);
 
 	m_musicMenu->setMinimumWidth(300);
 
@@ -169,4 +172,5 @@ void RsMainDock::createSidebarMenus()
 	connect(m_btnMusicPlaylist, &QToolButton::clicked, this, &RsMainDock::showMusicPlaylist);
 	connect(m_btnMusicSettings, &QToolButton::clicked, this, &RsMainDock::showMusicSettings);
 	connect(m_btnMusicSetup, &QToolButton::clicked, this, &RsMainDock::showMusicSetup);
+	connect(m_btnMusicOverlay, &QToolButton::clicked, this, &RsMainDock::showMusicOverlay);
 }

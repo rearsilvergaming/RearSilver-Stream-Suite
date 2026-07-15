@@ -2,6 +2,7 @@
 #include "rs_music_ws.hpp"
 #include "rs_music_helpers.hpp"
 #include "rs_music_local_player.hpp"
+#include "rs_music_server.hpp"
 
 #include <QDateTime>
 #include <QJsonArray>
@@ -531,6 +532,7 @@ void rsMusicEnsureSystem()
 
 void rsMusicShutdown()
 {
+	RsMusicServer::instance().stop();
 	RsMusicLocalPlayer::instance().shutdown();
 	RsMusicWsClient::instance().disconnectNow();
 }

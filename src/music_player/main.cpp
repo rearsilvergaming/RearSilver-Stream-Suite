@@ -3,6 +3,9 @@
 #include <windows.h>
 #include <objidl.h>
 #include <gdiplus.h>
+#include <wrl.h>
+
+#include "WebView2.h"
 
 #define MINIAUDIO_IMPLEMENTATION
 #include "miniaudio.h"
@@ -11,8 +14,11 @@
 #include <cstdint>
 #include <memory>
 #include <string>
+#include <vector>
 
 using namespace Gdiplus;
+using Microsoft::WRL::Callback;
+using Microsoft::WRL::ComPtr;
 
 static std::wstring utf8ToWide(const std::string &value)
 {
@@ -22,6 +28,145 @@ static std::wstring utf8ToWide(const std::string &value)
 	MultiByteToWideChar(CP_UTF8, 0, value.data(), int(value.size()), result.data(), count);
 	return result;
 }
+
+static std::string wideToUtf8(const std::wstring &value)
+{
+	if (value.empty()) return {};
+	const int count = WideCharToMultiByte(CP_UTF8, 0, value.data(), int(value.size()), nullptr, 0, nullptr, nullptr);
+	std::string result(size_t(count), '\0');
+	WideCharToMultiByte(CP_UTF8, 0, value.data(), int(value.size()), result.data(), count, nullptr, nullptr);
+	return result;
+}
+
+class YouTubePlayer {
+public:
+	void initialise(HWND parent)
+	{
+		m_parent = parent;
+		wchar_t executable[MAX_PATH]{};
+		GetModuleFileNameW(nullptr, executable, MAX_PATH);
+		std::wstring folder(executable);
+		const size_t separator = folder.find_last_of(L"\\/");
+		if (separator != std::wstring::npos) folder.resize(separator);
+
+		CreateCoreWebView2EnvironmentWithOptions(
+			nullptr, nullptr, nullptr,
+			Callback<ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler>(
+				[this, folder](HRESULT result, ICoreWebView2Environment *environment) -> HRESULT {
+					if (FAILED(result) || !environment) {
+						m_events.emplace_back("ERROR\tMicrosoft WebView2 Runtime is unavailable. Repair the Suite installation.\n");
+						return result;
+					}
+					return environment->CreateCoreWebView2Controller(
+						m_parent,
+						Callback<ICoreWebView2CreateCoreWebView2ControllerCompletedHandler>(
+							[this, folder](HRESULT controllerResult, ICoreWebView2Controller *controller) -> HRESULT {
+								if (FAILED(controllerResult) || !controller) return controllerResult;
+								m_controller = controller;
+								m_controller->get_CoreWebView2(&m_webView);
+								ComPtr<ICoreWebView2_3> webView3;
+								if (SUCCEEDED(m_webView.As(&webView3))) {
+									webView3->SetVirtualHostNameToFolderMapping(
+										L"rearsilver.local", folder.c_str(),
+										COREWEBVIEW2_HOST_RESOURCE_ACCESS_KIND_ALLOW);
+								}
+								EventRegistrationToken token{};
+								m_webView->add_WebMessageReceived(
+									Callback<ICoreWebView2WebMessageReceivedEventHandler>(
+										[this](ICoreWebView2 *, ICoreWebView2WebMessageReceivedEventArgs *args) -> HRESULT {
+											wchar_t *raw = nullptr;
+											if (SUCCEEDED(args->get_WebMessageAsJson(&raw)) && raw) {
+												const std::wstring message(raw);
+												CoTaskMemFree(raw);
+												if (message.find(L"\"type\":\"ready\"") != std::wstring::npos) {
+													m_ready = true;
+													loadPending();
+												} else if (message.find(L"\"state\":\"ended\"") != std::wstring::npos) {
+													m_events.emplace_back("EVENT\tyoutube-ended\t" + wideToUtf8(m_currentVideoId) + "\n");
+												} else if (message.find(L"\"type\":\"error\"") != std::wstring::npos) {
+													m_events.emplace_back("ERROR\tYouTube could not play this video.\n");
+												}
+											}
+											return S_OK;
+										}).Get(),
+									&token);
+								resize();
+								m_controller->put_IsVisible(FALSE);
+								m_webView->Navigate(L"https://rearsilver.local/youtube-player.html");
+								return S_OK;
+							}).Get());
+				}).Get());
+	}
+
+	void resize()
+	{
+		if (!m_controller || !m_parent) return;
+		RECT client{};
+		GetClientRect(m_parent, &client);
+		const int availableWidth = std::max(200L, client.right - 32);
+		const int videoHeight = std::max(200, std::min(270, availableWidth * 9 / 16));
+		RECT bounds{16, 16, 16 + availableWidth, 16 + videoHeight};
+		m_controller->put_Bounds(bounds);
+	}
+
+	void load(const std::string &videoId)
+	{
+		std::wstring safe;
+		for (wchar_t character : utf8ToWide(videoId)) {
+			if ((character >= L'a' && character <= L'z') || (character >= L'A' && character <= L'Z') ||
+			    (character >= L'0' && character <= L'9') || character == L'_' || character == L'-')
+				safe.push_back(character);
+		}
+		if (safe.empty()) return;
+		m_pendingVideoId = safe;
+		m_currentVideoId = safe;
+		m_active = true;
+		if (m_controller) m_controller->put_IsVisible(TRUE);
+		loadPending();
+	}
+
+	void hide()
+	{
+		m_active = false;
+		if (m_controller) m_controller->put_IsVisible(FALSE);
+	}
+
+	void command(const std::string &action, const std::string &argument = {})
+	{
+		if (!m_webView || !m_active) return;
+		std::wstring script;
+		if (action == "PLAY") script = L"window.rsMusic.play()";
+		else if (action == "PAUSE") script = L"window.rsMusic.pause()";
+		else if (action == "STOP") script = L"window.rsMusic.stop()";
+		else if (action == "RESTART") script = L"window.rsMusic.restart()";
+		else if (action == "SEEK") {
+			const double seconds = std::max<int64_t>(0, _strtoi64(argument.c_str(), nullptr, 10)) / 1000.0;
+			script = L"window.rsMusic.seek(" + std::to_wstring(seconds) + L")";
+		}
+		if (!script.empty()) m_webView->ExecuteScript(script.c_str(), nullptr);
+	}
+
+	bool active() const { return m_active; }
+	std::vector<std::string> takeEvents() { std::vector<std::string> result; result.swap(m_events); return result; }
+
+private:
+	void loadPending()
+	{
+		if (!m_ready || !m_webView || m_pendingVideoId.empty()) return;
+		const std::wstring script = L"window.rsMusic.load(\"" + m_pendingVideoId + L"\")";
+		m_webView->ExecuteScript(script.c_str(), nullptr);
+		m_pendingVideoId.clear();
+	}
+
+	HWND m_parent = nullptr;
+	ComPtr<ICoreWebView2Controller> m_controller;
+	ComPtr<ICoreWebView2> m_webView;
+	bool m_ready = false;
+	bool m_active = false;
+	std::wstring m_pendingVideoId;
+	std::wstring m_currentVideoId;
+	std::vector<std::string> m_events;
+};
 
 class Player {
 public:
@@ -100,6 +245,7 @@ private:
 };
 
 static Player *g_player = nullptr;
+static YouTubePlayer *g_youtubePlayer = nullptr;
 
 static std::wstring clockText(float seconds)
 {
@@ -110,6 +256,10 @@ static std::wstring clockText(float seconds)
 static LRESULT CALLBACK windowProc(HWND window, UINT message, WPARAM wParam, LPARAM lParam)
 {
 	if (message == WM_CLOSE) { ShowWindow(window, SW_MINIMIZE); return 0; }
+	if (message == WM_SIZE) {
+		if (g_youtubePlayer) g_youtubePlayer->resize();
+		return 0;
+	}
 	if (message == WM_ERASEBKGND) return 1;
 	if (message == WM_PAINT) {
 		PAINTSTRUCT paint{}; HDC dc = BeginPaint(window, &paint); RECT client{}; GetClientRect(window, &client);
@@ -153,6 +303,7 @@ static void send(HANDLE pipe, const std::string &message) { if (pipe != INVALID_
 
 int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int)
 {
+	CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
 	GdiplusStartupInput gdiplusInput; ULONG_PTR gdiplusToken = 0; GdiplusStartup(&gdiplusToken, &gdiplusInput, nullptr);
 	Player player; g_player = &player; if (!player.initialise()) return 2;
 	HICON appIcon = static_cast<HICON>(LoadImageW(instance, MAKEINTRESOURCEW(101), IMAGE_ICON, 0, 0, LR_DEFAULTSIZE));
@@ -162,6 +313,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int)
 	SendMessageW(window, WM_SETICON, ICON_BIG, reinterpret_cast<LPARAM>(appIcon));
 	SendMessageW(window, WM_SETICON, ICON_SMALL, reinterpret_cast<LPARAM>(appIcon));
 	ShowWindow(window, SW_SHOW); UpdateWindow(window);
+	YouTubePlayer youtubePlayer; g_youtubePlayer = &youtubePlayer; youtubePlayer.initialise(window);
 	HANDLE pipe = CreateNamedPipeW(L"\\\\.\\pipe\\RearSilverStreamSuiteMusicPlayer", PIPE_ACCESS_DUPLEX,
 		PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_NOWAIT, 1, 65536, 65536, 0, nullptr);
 	if (pipe == INVALID_HANDLE_VALUE) return 3;
@@ -179,10 +331,29 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int)
 					if (line.rfind("META\t", 0) == 0) {
 						player.setMetadata(line.substr(5));
 						InvalidateRect(window, nullptr, FALSE);
-					} else send(pipe, player.command(line));
+					} else {
+						const size_t tab = line.find('\t');
+						const std::string action = line.substr(0, tab);
+						const std::string argument = tab == std::string::npos ? std::string{} : line.substr(tab + 1);
+						if (action == "YOUTUBE") {
+							player.command("STOP");
+							youtubePlayer.load(argument);
+						} else if (action == "LOAD") {
+							youtubePlayer.command("STOP");
+							youtubePlayer.hide();
+							send(pipe, player.command(line));
+						} else if (youtubePlayer.active()) {
+							youtubePlayer.command(action, argument);
+						} else {
+							send(pipe, player.command(line));
+						}
+					}
 				}
 			} else if (GetLastError() == ERROR_BROKEN_PIPE) { DisconnectNamedPipe(pipe); connected = false; input.clear(); }
 			if (connected && player.takeEnded()) send(pipe, "EVENT\tended\t" + player.path() + "\n");
+			if (connected) {
+				for (const std::string &event : youtubePlayer.takeEvents()) send(pipe, event);
+			}
 			if (connected && GetTickCount64() - lastStatus >= 100) {
 				send(pipe, player.status()); lastStatus = GetTickCount64();
 				RECT client{}; GetClientRect(window, &client);
@@ -192,5 +363,6 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int)
 		}
 		Sleep(10);
 	}
-	CloseHandle(pipe); DestroyWindow(window); g_player = nullptr; GdiplusShutdown(gdiplusToken); return 0;
+	CloseHandle(pipe); g_youtubePlayer = nullptr; DestroyWindow(window); g_player = nullptr;
+	GdiplusShutdown(gdiplusToken); CoUninitialize(); return 0;
 }

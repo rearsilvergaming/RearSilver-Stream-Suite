@@ -23,12 +23,26 @@ find_package(Qt6 REQUIRED COMPONENTS Core Gui Widgets Network)
 
 if(WIN32)
 	add_executable(RearSilver-Music-Player WIN32 src/music_player/main.cpp src/music_player/app.rc)
-	target_include_directories(RearSilver-Music-Player PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/third_party/miniaudio")
-	target_link_libraries(RearSilver-Music-Player PRIVATE gdiplus)
+	target_include_directories(RearSilver-Music-Player PRIVATE
+		"${CMAKE_CURRENT_SOURCE_DIR}/third_party/miniaudio"
+		"${CMAKE_CURRENT_SOURCE_DIR}/third_party/webview2/include")
+	target_link_libraries(RearSilver-Music-Player PRIVATE
+		gdiplus
+		ole32
+		"${CMAKE_CURRENT_SOURCE_DIR}/third_party/webview2/lib/x64/WebView2Loader.dll.lib")
 	set_target_properties(RearSilver-Music-Player PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED YES)
 	if(MSVC)
 		target_compile_options(RearSilver-Music-Player PRIVATE /utf-8)
 	endif()
+	add_custom_command(TARGET RearSilver-Music-Player POST_BUILD
+		COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+			"${CMAKE_CURRENT_SOURCE_DIR}/third_party/webview2/bin/x64/WebView2Loader.dll"
+			"$<TARGET_FILE_DIR:RearSilver-Music-Player>"
+		COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+			"${CMAKE_CURRENT_SOURCE_DIR}/src/rs_music/rs_music_player.html"
+			"$<TARGET_FILE_DIR:RearSilver-Music-Player>/youtube-player.html"
+		COMMENT "Package WebView2 loader and YouTube player surface"
+		VERBATIM)
 endif()
 
 # ----- Plugin target -----

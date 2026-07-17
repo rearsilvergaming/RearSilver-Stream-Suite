@@ -37,6 +37,18 @@ RsMusicLocalPlayer::RsMusicLocalPlayer()
 		if (!m_shuttingDown)
 			emit playbackError("The bundled local music player could not be started.");
 	});
+	QTimer::singleShot(0, this, &RsMusicLocalPlayer::connectToHub);
+}
+
+void RsMusicLocalPlayer::connectToHub()
+{
+	if (m_shuttingDown || m_socket->state() == QLocalSocket::ConnectedState) return;
+	if (ensureCompanion()) {
+		blog(LOG_INFO, "[RS Music] Player-owned hub connection is active.");
+		m_hubConnectionAttempts = 0; return;
+	}
+	if (++m_hubConnectionAttempts < 40)
+		QTimer::singleShot(250, this, &RsMusicLocalPlayer::connectToHub);
 }
 
 RsMusicLocalPlayer::~RsMusicLocalPlayer()
@@ -155,14 +167,44 @@ bool RsMusicLocalPlayer::playFile(const RsMusicTrack &track)
 			return false;
 		m_pendingMetadata = metadata;
 		m_pendingFile = m_currentFile;
+		m_pendingPlaybackCommand = "LOAD\t" + m_currentFile;
 		m_pendingConnectionAttempts = 0;
 		QTimer::singleShot(100, this, &RsMusicLocalPlayer::connectPendingPlayback);
 		return true;
 	}
 	m_pendingMetadata.clear();
 	m_pendingFile.clear();
+	m_pendingPlaybackCommand.clear();
 	sendCommand("META", metadata);
 	sendCommand("LOAD", m_currentFile);
+	return true;
+}
+
+bool RsMusicLocalPlayer::playYouTubeVideo(const RsMusicTrack &track)
+{
+	const QString videoId = track.providerTrackId.trimmed();
+	if (videoId.isEmpty()) {
+		emit playbackError("This YouTube link does not contain a playable video ID.");
+		return false;
+	}
+	m_currentFile = "youtube:" + videoId;
+	const QString metadata = QString("%1\t%2\t%3\t").arg(protocolField(track.title), protocolField(track.artist),
+		protocolField(track.album));
+	if (!ensureCompanion()) {
+		if (m_process->state() == QProcess::NotRunning)
+			return false;
+		m_pendingMetadata = metadata;
+		m_pendingFile = m_currentFile;
+		m_pendingPlaybackCommand = "YOUTUBE\t" + videoId;
+		m_pendingConnectionAttempts = 0;
+		QTimer::singleShot(100, this, &RsMusicLocalPlayer::connectPendingPlayback);
+		return true;
+	}
+	m_pendingMetadata.clear();
+	m_pendingFile.clear();
+	m_pendingPlaybackCommand.clear();
+	sendCommand("META", metadata);
+	sendCommand("YOUTUBE", videoId);
 	return true;
 }
 
@@ -185,11 +227,12 @@ void RsMusicLocalPlayer::connectPendingPlayback()
 			return;
 		}
 	}
-	QByteArray commands = "META\t" + m_pendingMetadata.toUtf8() + "\nLOAD\t" + m_pendingFile.toUtf8() + "\n";
+	QByteArray commands = "META\t" + m_pendingMetadata.toUtf8() + "\n" + m_pendingPlaybackCommand.toUtf8() + "\n";
 	m_socket->write(commands);
 	m_socket->flush();
 	m_pendingMetadata.clear();
 	m_pendingFile.clear();
+	m_pendingPlaybackCommand.clear();
 	blog(LOG_INFO, "[RS Music] Delivered the pending first track after companion startup.");
 }
 
@@ -199,17 +242,33 @@ void RsMusicLocalPlayer::stop() { sendCommand("STOP"); emit playbackStopped(); }
 void RsMusicLocalPlayer::restart() { sendCommand("RESTART"); }
 void RsMusicLocalPlayer::seekTo(qint64 positionMs) { sendCommand("SEEK", QString::number(qMax<qint64>(0, positionMs))); }
 
+void RsMusicLocalPlayer::importYouTubePlaylist(const QString &url) { sendCommand("HUB_IMPORT", protocolField(url)); }
+void RsMusicLocalPlayer::requestYouTubeTrack(const QString &requester, const QString &query)
+{
+	sendCommand("HUB_REQUEST", protocolField(requester) + "\t" + protocolField(query));
+}
+void RsMusicLocalPlayer::skip() { sendCommand("SKIP"); }
+void RsMusicLocalPlayer::previous() { sendCommand("PREVIOUS"); }
+void RsMusicLocalPlayer::shuffleFallback() { sendCommand("HUB_SHUFFLE"); }
+
 void RsMusicLocalPlayer::readMessages()
 {
 	while (m_socket->canReadLine()) {
 		const QString line = QString::fromUtf8(m_socket->readLine()).trimmed();
 		const QStringList parts = line.split('\t');
-		if (parts.value(0) == "STATUS") {
+		if (parts.value(0) == "HUB_STATE") {
+			emit hubStateReceived(parts.mid(1).join('\t').toUtf8());
+		} else if (parts.value(0) == "STATUS") {
 			emit playbackProgress(parts.value(2).toLongLong(), parts.value(3).toLongLong());
 			if (parts.value(1) == "playing") emit playbackStarted();
 		} else if (parts.value(0) == "EVENT" && parts.value(1) == "ended") {
 			if (parts.mid(2).join('\t').compare(m_currentFile, Qt::CaseInsensitive) == 0)
 				emit playbackEnded();
+		} else if (parts.value(0) == "EVENT" && parts.value(1) == "youtube-ended") {
+			if (("youtube:" + parts.value(2)).compare(m_currentFile, Qt::CaseInsensitive) == 0)
+				emit playbackEnded();
+		} else if (parts.value(0) == "EVENT" && parts.value(1) == "youtube-metadata") {
+			emit playbackMetadata(parts.value(2), parts.value(3), parts.value(4).toLongLong());
 		} else if (parts.value(0) == "ERROR") {
 			emit playbackError(parts.mid(1).join('\t'));
 		}

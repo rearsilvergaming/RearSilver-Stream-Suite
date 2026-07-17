@@ -284,7 +284,7 @@ void RsMainDock::createPanels()
 	m_pageMusicQueue = new RsMusicQueue(musicState, m_contentCard);
 	m_pageMusicRequests = new RsMusicRequests(musicState, m_contentCard);
 	m_pageMusicPlaylist = new RsMusicPlaylist(musicState, m_musicController, m_contentCard);
-	auto *musicSettings = new RsMusicSettings(musicState, m_streamerAuth, m_botAuth, m_contentCard);
+	auto *musicSettings = new RsMusicSettings(musicState, m_musicController, m_streamerAuth, m_botAuth, m_contentCard);
 	m_pageMusicSettings = musicSettings;
 	m_pageMusicSetup = new RsMusicSetup(m_contentCard);
 	RsMusicServer::instance().start(musicState);

@@ -1,5 +1,6 @@
 ﻿#include "rs_music_settings.hpp"
 #include "rs_music/state/rs_music_state.hpp"
+#include "rs_music/rs_music_controller.hpp"
 
 #include "rs_music/rs_music_twitch_auth.hpp"
 #include "rs_entitlements.hpp"
@@ -11,6 +12,7 @@
 #include <QFrame>
 #include <QRadioButton>
 #include <QSettings>
+#include <QLineEdit>
 
 static bool loadSendFromBotSetting()
 {
@@ -44,10 +46,11 @@ static QLabel *makeProviderStatus(const QString &provider, const QString &status
 	return label;
 }
 
-RsMusicSettings::RsMusicSettings(RsMusicState *state, RsMusicTwitchAuth *streamerAuth, RsMusicTwitchAuth *botAuth,
+RsMusicSettings::RsMusicSettings(RsMusicState *state, RsMusicController *controller, RsMusicTwitchAuth *streamerAuth, RsMusicTwitchAuth *botAuth,
 				 QWidget *parent)
 	: QWidget(parent),
 	  m_state(state),
+	  m_controller(controller),
 	  m_streamerAuth(streamerAuth),
 	  m_botAuth(botAuth)
 {
@@ -73,6 +76,34 @@ RsMusicSettings::RsMusicSettings(RsMusicState *state, RsMusicTwitchAuth *streame
 	layout->addWidget(makeProviderStatus("Spotify", "External-player connection not configured", false));
 	layout->addWidget(makeProviderStatus("Local files", "Available — manage your library in Playlist", true));
 	layout->addWidget(makeProviderStatus("Desktop media", "Player detection not configured", false));
+
+	layout->addWidget(makeTitle("Music — YouTube Test"));
+	auto *youtubeHint = new QLabel(
+		"Paste a YouTube or YouTube Music video link to test playback in the Suite companion player. "
+		"Playlist importing and search requests are added after this playback test is stable.");
+	youtubeHint->setWordWrap(true);
+	youtubeHint->setStyleSheet("opacity: 0.8;");
+	layout->addWidget(youtubeHint);
+	auto *youtubeUrl = new QLineEdit();
+	youtubeUrl->setPlaceholderText("https://www.youtube.com/watch?v=...");
+	youtubeUrl->setText(QSettings("RearSilver", "RearSilver-Stream-Suite").value("music/youtube/testUrl").toString());
+	youtubeUrl->setMinimumWidth(0);
+	layout->addWidget(youtubeUrl);
+	auto *youtubePlay = new QPushButton("Play video in Suite media player");
+	layout->addWidget(youtubePlay);
+	auto *youtubeStatus = new QLabel();
+	youtubeStatus->setWordWrap(true);
+	youtubeStatus->setStyleSheet("opacity: 0.75; font-size: 11px;");
+	layout->addWidget(youtubeStatus);
+	connect(youtubePlay, &QPushButton::clicked, this, [this, youtubeUrl, youtubeStatus]() {
+		const QString url = youtubeUrl->text().trimmed();
+		QSettings("RearSilver", "RearSilver-Stream-Suite").setValue("music/youtube/testUrl", url);
+		if (!m_controller || !m_controller->actionPlayYouTubeVideo(url)) {
+			youtubeStatus->setText("Enter a direct YouTube or YouTube Music video link.");
+			return;
+		}
+		youtubeStatus->setText("Video sent to the Suite media player. The normal Now Playing controls now control it.");
+	});
 
 	layout->addWidget(makeTitle("Music — Twitch Chat"));
 

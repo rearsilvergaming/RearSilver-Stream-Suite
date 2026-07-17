@@ -1,12 +1,18 @@
 #include "rs_music_controller.hpp"
 #include "state/rs_music_state.hpp"
 #include "rs_music_local_player.hpp"
+#include "rs_music_helpers.hpp"
 #include "rs_music_metadata.hpp"
+#include "rs_music_youtube_resolver.hpp"
 
 #include <QDateTime>
 #include <QFileInfo>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QRandomGenerator>
 #include <QSettings>
+#include <QTimer>
 
 extern "C" {
 #include <obs-module.h>
@@ -14,6 +20,7 @@ extern "C" {
 
 RsMusicController::RsMusicController(RsMusicState *state, QObject *parent) : QObject(parent), m_state(state)
 {
+	m_youtubeResolver = new RsMusicYouTubeResolver(this);
 	QSettings settings("RearSilver", "RearSilver-Stream-Suite");
 	m_localLibrary = settings.value("music/local/library").toStringList();
 	if (m_state && !m_localLibrary.isEmpty()) {
@@ -24,19 +31,88 @@ RsMusicController::RsMusicController(RsMusicState *state, QObject *parent) : QOb
 	connect(&rsMusicBackendEvents(), &RsMusicBackendEvents::queueChanged, this,
 		&RsMusicController::syncQueueFromBackend);
 	connect(&RsMusicLocalPlayer::instance(), &RsMusicLocalPlayer::playbackStarted, this, [this]() {
-		if (m_state && currentTrackIsLocal())
+		if (m_state && currentTrackUsesCompanion()) {
 			m_state->setPlaybackStatus(RsMusicState::PlaybackStatus::Playing);
+			if (m_state->currentTrack().provider == RsMusicProvider::YouTube && !m_youtubeCaptureRefreshed) {
+				m_youtubeCaptureRefreshed = true;
+				QTimer::singleShot(750, this, &RsMusicController::refreshYouTubeCaptureSource);
+			}
+		}
 	});
 	connect(&RsMusicLocalPlayer::instance(), &RsMusicLocalPlayer::playbackEnded, this, [this]() {
 		if (m_state && currentTrackIsLocal())
 			playNextLocalTrack();
+		else if (m_state && currentTrackUsesCompanion() &&
+			 m_state->currentTrack().provider != RsMusicProvider::YouTube) {
+			m_state->setPlaybackStatus(RsMusicState::PlaybackStatus::Stopped);
+			m_state->clearCurrentTrack();
+		}
 	});
 	connect(&RsMusicLocalPlayer::instance(), &RsMusicLocalPlayer::playbackProgress, this,
 		[this](qint64 positionMs, qint64 durationMs) {
-			if (m_state && currentTrackIsLocal())
+			if (m_state && currentTrackUsesCompanion())
 				m_state->setPlaybackProgress(positionMs, durationMs);
 		});
+	connect(&RsMusicLocalPlayer::instance(), &RsMusicLocalPlayer::playbackMetadata, this,
+		[this](const QString &title, const QString &artist, qint64 durationMs) {
+			if (!m_state || !m_state->hasCurrentTrack() ||
+			    m_state->currentTrack().provider != RsMusicProvider::YouTube)
+				return;
+			RsMusicTrack track = m_state->currentTrack();
+			track.title = title.trimmed().isEmpty() ? track.title : title.trimmed();
+			track.artist = artist.trimmed();
+			track.durationSeconds = static_cast<int>((qMax<qint64>(0, durationMs) + 999) / 1000);
+			m_state->setCurrentTrack(track);
+		});
+	connect(&RsMusicLocalPlayer::instance(), &RsMusicLocalPlayer::hubStateReceived, this,
+		[this](const QByteArray &payload) {
+			if (!m_state) return;
+			const QJsonObject root = QJsonDocument::fromJson(payload).object();
+			auto trackFromJson = [](const QJsonObject &value) {
+				RsMusicTrack track;
+				track.trackId = value.value("id").toString();
+				track.provider = RsMusicProvider::YouTube;
+				track.providerTrackId = value.value("providerId").toString();
+				track.providerUri = QString("https://www.youtube.com/watch?v=%1").arg(track.providerTrackId);
+				track.title = value.value("title").toString();
+				track.artist = value.value("artist").toString();
+				track.artworkUri = value.value("artworkUrl").toString();
+				track.requestedBy = value.value("requestedBy").toString();
+				track.durationSeconds = value.value("durationSeconds").toInt();
+				track.isFromPlaylist = !value.value("request").toBool();
+				return track;
+			};
+			const QJsonValue currentValue = root.value("current");
+			if (currentValue.isObject()) {
+				RsMusicTrack track = trackFromJson(currentValue.toObject());
+				const bool changed = !m_state->hasCurrentTrack() || m_state->currentTrack().trackId != track.trackId;
+				if (!changed && m_state->currentTrack().artworkUri.startsWith("file:", Qt::CaseInsensitive))
+					track.artworkUri = m_state->currentTrack().artworkUri;
+				m_state->setCurrentTrack(track);
+				if (changed) hydrateCurrentYouTubeArtwork(track);
+			}
+			else m_state->clearCurrentTrack();
+			QVector<RsMusicTrack> queue;
+			for (const QJsonValue &value : root.value("queue").toArray())
+				if (value.isObject()) queue.append(trackFromJson(value.toObject()));
+			m_state->setQueue(queue);
+			m_state->setActiveProvider(RsMusicProvider::YouTube);
+			m_state->setPlaylistLabel(root.value("fallbackLabel").toString("YouTube fallback"));
+			m_state->setPlaybackProgress(root.value("positionMs").toVariant().toLongLong(),
+				root.value("durationMs").toVariant().toLongLong());
+			const QString status = root.value("status").toString();
+			m_state->setPlaybackStatus(status == "playing" ? RsMusicState::PlaybackStatus::Playing :
+				(status == "paused" ? RsMusicState::PlaybackStatus::Paused : RsMusicState::PlaybackStatus::Stopped));
+		});
 	syncQueueFromBackend();
+}
+
+bool RsMusicController::currentTrackUsesCompanion() const
+{
+	if (!m_state || !m_state->hasCurrentTrack())
+		return false;
+	const RsMusicProvider provider = m_state->currentTrack().provider;
+	return provider == RsMusicProvider::LocalFile || provider == RsMusicProvider::YouTube;
 }
 
 bool RsMusicController::currentTrackIsLocal() const
@@ -50,28 +126,7 @@ void RsMusicController::syncQueueFromBackend()
 	if (!m_state)
 		return;
 
-	QVector<RsMusicTrack> tracks;
-	const QVector<RsMusicQueueEntry> entries = rsMusicQueueSnapshot();
-	tracks.reserve(entries.size());
-	for (const RsMusicQueueEntry &entry : entries) {
-		RsMusicTrack track;
-		track.trackId = entry.trackId;
-		track.provider = entry.provider;
-		track.providerTrackId = entry.providerTrackId;
-		track.providerUri = entry.providerUri;
-		track.title = entry.title.trimmed();
-		if (track.title.isEmpty())
-			track.title = entry.pendingQuery.trimmed();
-		if (track.title.isEmpty() && !entry.youtubeId.isEmpty())
-			track.title = QString("YouTube video %1").arg(entry.youtubeId);
-		track.artist = entry.artist;
-		track.artworkUri = entry.artworkUri;
-		track.durationSeconds = entry.durationSeconds;
-		track.requestedBy = entry.requesterDisplay;
-		track.isFromPlaylist = false;
-		tracks.append(track);
-	}
-
+	const QVector<RsMusicTrack> tracks = rsMusicPlaybackQueueSnapshot();
 	m_state->setQueue(tracks);
 }
 
@@ -85,8 +140,11 @@ void RsMusicController::actionPlay()
 		playLocalIndex(0);
 		return;
 	}
+	if (!m_state->hasCurrentTrack() && m_state->activeProvider() == RsMusicProvider::YouTube) {
+		RsMusicLocalPlayer::instance().resume(); return;
+	}
 
-	if (currentTrackIsLocal())
+	if (currentTrackUsesCompanion())
 		RsMusicLocalPlayer::instance().resume();
 	else
 		rsMusicResume();
@@ -98,7 +156,7 @@ void RsMusicController::actionPause()
 	if (!m_state)
 		return;
 
-	if (currentTrackIsLocal())
+	if (currentTrackUsesCompanion())
 		RsMusicLocalPlayer::instance().pause();
 	else
 		rsMusicPause();
@@ -110,7 +168,7 @@ void RsMusicController::actionStop()
 	if (!m_state)
 		return;
 
-	if (currentTrackIsLocal()) {
+	if (currentTrackUsesCompanion()) {
 		RsMusicLocalPlayer::instance().stop();
 		m_state->clearCurrentTrack();
 	} else {
@@ -124,7 +182,7 @@ void RsMusicController::actionRestart()
 	if (!m_state)
 		return;
 
-	if (currentTrackIsLocal())
+	if (currentTrackUsesCompanion())
 		RsMusicLocalPlayer::instance().restart();
 	else
 		rsMusicRestart();
@@ -135,6 +193,10 @@ void RsMusicController::actionSkip(const QString &source)
 {
 	if (currentTrackIsLocal()) {
 		playNextLocalTrack();
+		return;
+	}
+	if (currentTrackUsesCompanion()) {
+		RsMusicLocalPlayer::instance().skip();
 		return;
 	}
 	rsMusicSkip(source);
@@ -152,10 +214,117 @@ bool RsMusicController::actionPlayLocalFile(const QString &filePath)
 	return playLocalIndex(index);
 }
 
+bool RsMusicController::actionPlayYouTubeVideo(const QString &url)
+{
+	if (!m_state)
+		return false;
+	const QString videoId = rsMusicExtractYoutubeVideoId(url);
+	if (videoId.isEmpty())
+		return false;
+	RsMusicTrack track;
+	track.trackId = QString("youtube_%1").arg(videoId);
+	track.provider = RsMusicProvider::YouTube;
+	track.providerTrackId = videoId;
+	track.providerUri = QString("https://www.youtube.com/watch?v=%1").arg(videoId);
+	track.title = QString("YouTube video %1").arg(videoId);
+	m_youtubeCaptureRefreshed = false;
+	if (!RsMusicLocalPlayer::instance().playYouTubeVideo(track))
+		return false;
+	m_state->setActiveProvider(RsMusicProvider::YouTube);
+	m_state->setPlaylistLabel("YouTube");
+	m_state->setCurrentTrack(track);
+	m_state->setPlaybackStatus(RsMusicState::PlaybackStatus::Playing);
+	m_state->setRequestsEnabled(true);
+	rsMusicSetRequestsEnabled(true);
+	return true;
+}
+
+void RsMusicController::actionImportYouTubePlaylist(const QString &url)
+{
+	if (url.trimmed().isEmpty()) {
+		emit youtubePlaylistError("Enter a YouTube or YouTube Music playlist URL.");
+		return;
+	}
+	RsMusicLocalPlayer::instance().importYouTubePlaylist(url.trimmed());
+	QSettings("RearSilver", "RearSilver-Stream-Suite").setValue("music/youtube/fallbackPlaylistUrl", url.trimmed());
+	emit youtubePlaylistImported(0, "Import sent to Suite Media Player");
+}
+
+bool RsMusicController::playScheduledTrack(const RsMusicTrack &track)
+{
+	if (!m_state || track.provider != RsMusicProvider::YouTube || track.providerTrackId.trimmed().isEmpty())
+		return false;
+	if (!RsMusicLocalPlayer::instance().playYouTubeVideo(track))
+		return false;
+	m_youtubeCaptureRefreshed = false;
+	rsMusicRecordScheduledTrackStarted(track);
+	m_state->setActiveProvider(RsMusicProvider::YouTube);
+	m_state->setPlaylistLabel(track.isFromPlaylist ? "YouTube fallback" : "YouTube requests");
+	m_state->setCurrentTrack(track);
+	m_state->setPlaybackStatus(RsMusicState::PlaybackStatus::Playing);
+	m_state->setRequestsEnabled(true);
+	hydrateCurrentYouTubeArtwork(track);
+	return true;
+}
+
+void RsMusicController::hydrateCurrentYouTubeArtwork(const RsMusicTrack &track)
+{
+	if (!m_youtubeResolver || !m_state || track.provider != RsMusicProvider::YouTube)
+		return;
+	const QString trackId = track.trackId;
+	m_youtubeResolver->cacheArtwork(track, [this, trackId](const QString &localUri) {
+		if (localUri.isEmpty() || !m_state || !m_state->hasCurrentTrack() ||
+		    m_state->currentTrack().trackId != trackId)
+			return;
+		RsMusicTrack current = m_state->currentTrack();
+		current.artworkUri = localUri;
+		m_state->setCurrentTrack(current);
+	});
+}
+
+bool RsMusicController::playNextScheduledTrack()
+{
+	RsMusicTrack track;
+	while (rsMusicTakeNextScheduledTrack(track)) {
+		if (playScheduledTrack(track))
+			return true;
+	}
+	return false;
+}
+
+void RsMusicController::refreshYouTubeCaptureSource()
+{
+	obs_source_t *source = obs_get_source_by_name("Music Capture");
+	if (!source || QString::fromUtf8(obs_source_get_id(source)) != "wasapi_process_output_capture") {
+		if (source)
+			obs_source_release(source);
+		return;
+	}
+	obs_data_t *settings = obs_source_get_settings(source);
+	const long long originalPriority = obs_data_get_int(settings, "priority");
+	obs_data_set_int(settings, "priority", originalPriority == 0 ? 1 : 0);
+	obs_source_update(source, settings);
+	obs_data_release(settings);
+	obs_source_release(source);
+
+	QTimer::singleShot(200, this, [originalPriority]() {
+		obs_source_t *capture = obs_get_source_by_name("Music Capture");
+		if (!capture)
+			return;
+		obs_data_t *captureSettings = obs_source_get_settings(capture);
+		obs_data_set_int(captureSettings, "priority", originalPriority);
+		obs_source_update(capture, captureSettings);
+		obs_data_release(captureSettings);
+		obs_source_release(capture);
+	});
+}
+
 void RsMusicController::actionPrevious()
 {
-	if (!currentTrackIsLocal() || m_localLibrary.isEmpty())
-		return;
+	if (m_state && m_state->hasCurrentTrack() && m_state->currentTrack().provider == RsMusicProvider::YouTube) {
+		RsMusicLocalPlayer::instance().previous(); return;
+	}
+	if (!currentTrackIsLocal() || m_localLibrary.isEmpty()) return;
 	if (m_localLibrary.size() > 1)
 		m_localLibrary.prepend(m_localLibrary.takeLast());
 	QSettings("RearSilver", "RearSilver-Stream-Suite").setValue("music/local/library", m_localLibrary);
@@ -165,7 +334,7 @@ void RsMusicController::actionPrevious()
 
 void RsMusicController::actionSeek(qint64 positionMs)
 {
-	if (currentTrackIsLocal())
+	if (currentTrackUsesCompanion())
 		RsMusicLocalPlayer::instance().seekTo(positionMs);
 }
 
@@ -270,5 +439,8 @@ void RsMusicController::playNextLocalTrack()
 RsMusicRequestResult RsMusicController::actionSongRequest(const QString &userId, const QString &displayName,
 						   const QString &query, bool isModOrBroadcaster)
 {
-	return rsMusicRequestSong(userId, displayName, query, isModOrBroadcaster);
+	const RsMusicRequestResult result = rsMusicRequestSong(userId, displayName, query, isModOrBroadcaster);
+	if (result.accepted)
+		RsMusicLocalPlayer::instance().requestYouTubeTrack(displayName, query.trimmed());
+	return result;
 }

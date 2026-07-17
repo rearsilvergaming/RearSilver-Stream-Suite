@@ -1,0 +1,6 @@
+name = "rearsilver-youtube-resolver"
+main = "src/index.js"
+compatibility_date = "2026-07-17"
+
+[vars]
+ALLOWED_ORIGIN = "*"

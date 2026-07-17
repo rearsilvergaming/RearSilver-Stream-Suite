@@ -5,6 +5,7 @@
 
 class QLabel;
 class RsMusicState;
+class RsMusicController;
 
 class RsMusicTwitchAuth;
 class QPushButton;
@@ -13,7 +14,7 @@ class RsMusicSettings : public QWidget {
 	Q_OBJECT
 
 public:
-	explicit RsMusicSettings(RsMusicState *state, RsMusicTwitchAuth *streamerAuth, RsMusicTwitchAuth *botAuth,
+	explicit RsMusicSettings(RsMusicState *state, RsMusicController *controller, RsMusicTwitchAuth *streamerAuth, RsMusicTwitchAuth *botAuth,
 				 QWidget *parent = nullptr);
 
 signals:
@@ -24,6 +25,7 @@ private slots:
 
 private:
 	RsMusicState *m_state = nullptr;
+	RsMusicController *m_controller = nullptr;
 
 	// ---- Streamer account UI ----
 	QLabel *m_streamerStatus = nullptr;

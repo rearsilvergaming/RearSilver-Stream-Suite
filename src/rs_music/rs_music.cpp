@@ -100,6 +100,20 @@ QVector<RsMusicQueueEntry> rsMusicQueueSnapshot()
 	return snapshot;
 }
 
+QVector<RsMusicTrack> rsMusicPlaybackQueueSnapshot()
+{
+	QVector<RsMusicTrack> playbackOrder = g_scheduler.requests();
+	const QVector<RsMusicTrack> &fallback = g_scheduler.defaultPlaylist();
+	if (fallback.isEmpty())
+		return playbackOrder;
+
+	const int cursor = qBound(0, g_scheduler.defaultCursor(), fallback.size() - 1);
+	playbackOrder.reserve(playbackOrder.size() + fallback.size());
+	for (int offset = 0; offset < fallback.size(); ++offset)
+		playbackOrder.append(fallback.at((cursor + offset) % fallback.size()));
+	return playbackOrder;
+}
+
 static qint64 nowMs()
 {
 	return QDateTime::currentMSecsSinceEpoch();
@@ -568,7 +582,7 @@ void rsMusicSetFallbackVideoIds(const QStringList &youtubeIds)
 		tracks.append(track);
 	}
 	g_scheduler.setDefaultPlaylist(tracks);
-
+	emit rsMusicBackendEvents().queueChanged();
 	rsMusicPushStateFull();
 }
 QStringList rsMusicFallbackVideoIds()
@@ -579,10 +593,27 @@ QStringList rsMusicFallbackVideoIds()
 	return ids;
 }
 
+void rsMusicSetFallbackTracks(const QVector<RsMusicTrack> &resolvedTracks)
+{
+	QVector<RsMusicTrack> tracks;
+	tracks.reserve(resolvedTracks.size());
+	for (RsMusicTrack track : resolvedTracks) {
+		if (track.provider != RsMusicProvider::YouTube || track.providerTrackId.trimmed().isEmpty())
+			continue;
+		track.isFromPlaylist = true;
+		if (track.trackId.isEmpty())
+			track.trackId = QString("youtube_%1").arg(track.providerTrackId);
+		tracks.append(track);
+	}
+	g_scheduler.setDefaultPlaylist(tracks);
+	emit rsMusicBackendEvents().queueChanged();
+	rsMusicPushStateFull();
+}
+
 void rsMusicSetFallbackIndex(int index)
 {
 	g_scheduler.setDefaultCursor(index);
-
+	emit rsMusicBackendEvents().queueChanged();
 	rsMusicPushStateFull();
 }
 int rsMusicFallbackIndex()
@@ -695,6 +726,29 @@ bool rsMusicRemoveRequestByTrackId(const QString &trackId)
 	emit rsMusicBackendEvents().queueChanged();
 	rsMusicPushStateFull();
 	return true;
+}
+
+bool rsMusicResolveRequest(const QString &trackId, const RsMusicTrack &resolved)
+{
+	if (!g_scheduler.resolveRequest(trackId, resolved))
+		return false;
+	emit rsMusicBackendEvents().queueChanged();
+	rsMusicPushStateFull();
+	return true;
+}
+
+bool rsMusicTakeNextScheduledTrack(RsMusicTrack &track)
+{
+	if (!g_scheduler.takeNext(track))
+		return false;
+	emit rsMusicBackendEvents().queueChanged();
+	rsMusicPushStateFull();
+	return true;
+}
+
+void rsMusicRecordScheduledTrackStarted(const RsMusicTrack &track)
+{
+	g_scheduler.recordStarted(track);
 }
 
 // -----------------------

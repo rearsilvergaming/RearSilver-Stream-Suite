@@ -9,6 +9,7 @@
 #include <QGridLayout>
 #include <QLabel>
 #include <QListWidget>
+#include <QLineEdit>
 #include <QMessageBox>
 #include <QPushButton>
 #include <QSettings>
@@ -34,6 +35,46 @@ RsMusicPlaylist::RsMusicPlaylist(RsMusicState *state, RsMusicController *control
 	auto *layout = new QVBoxLayout(this);
 	layout->setContentsMargins(8, 8, 8, 8);
 	layout->setSpacing(10);
+
+	layout->addWidget(makeTitle("YouTube fallback playlist"));
+	auto *youtubeHint = new QLabel(
+		"Import the public YouTube or YouTube Music playlist that plays whenever the request queue is empty.");
+	youtubeHint->setWordWrap(true);
+	youtubeHint->setStyleSheet("opacity: 0.78;");
+	layout->addWidget(youtubeHint);
+	auto *youtubeUrl = new QLineEdit();
+	youtubeUrl->setPlaceholderText("https://music.youtube.com/playlist?list=...");
+	youtubeUrl->setText(QSettings("RearSilver", "RearSilver-Stream-Suite")
+		.value("music/youtube/fallbackPlaylistUrl").toString());
+	layout->addWidget(youtubeUrl);
+	auto *importYoutube = new QPushButton("Import fallback playlist");
+	layout->addWidget(importYoutube);
+	auto *youtubeStatus = new QLabel("Requests will play first; this playlist resumes when the queue is empty.");
+	youtubeStatus->setWordWrap(true);
+	youtubeStatus->setStyleSheet("opacity: 0.72; font-size: 11px;");
+	layout->addWidget(youtubeStatus);
+	connect(importYoutube, &QPushButton::clicked, this, [this, youtubeUrl, youtubeStatus, importYoutube]() {
+		if (!m_controller || youtubeUrl->text().trimmed().isEmpty()) {
+			youtubeStatus->setText("Enter a public YouTube or YouTube Music playlist URL.");
+			return;
+		}
+		importYoutube->setEnabled(false);
+		youtubeStatus->setText("Importing playlist…");
+		m_controller->actionImportYouTubePlaylist(youtubeUrl->text().trimmed());
+	});
+	if (m_controller) {
+		connect(m_controller, &RsMusicController::youtubePlaylistImported, this,
+			[youtubeStatus, importYoutube](int count, const QString &label) {
+				importYoutube->setEnabled(true);
+				youtubeStatus->setText(QString("Imported %1 track(s)%2. Requests will take priority.")
+					.arg(count).arg(label.trimmed().isEmpty() ? QString() : QString(" from %1").arg(label)));
+			});
+		connect(m_controller, &RsMusicController::youtubePlaylistError, this,
+			[youtubeStatus, importYoutube](const QString &message) {
+				importYoutube->setEnabled(true);
+				youtubeStatus->setText(QString("Could not import playlist: %1").arg(message));
+			});
+	}
 
 	layout->addWidget(makeTitle("Music — Local Library"));
 

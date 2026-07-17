@@ -20,6 +20,7 @@ public:
 	void setDefaultCursor(int index);
 
 	void enqueueRequest(const RsMusicTrack &track);
+	bool resolveRequest(const QString &trackId, const RsMusicTrack &resolved);
 	bool removeRequest(const QString &trackId);
 	void clearRequests();
 	const QVector<RsMusicTrack> &requests() const;

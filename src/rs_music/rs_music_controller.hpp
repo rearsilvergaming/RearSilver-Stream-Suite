@@ -24,6 +24,7 @@
  */
 
 class RsMusicState;
+class RsMusicYouTubeResolver;
 
 class RsMusicController : public QObject {
 	Q_OBJECT
@@ -40,6 +41,8 @@ public:
 	void actionPrevious();
 	void actionSeek(qint64 positionMs);
 	bool actionPlayLocalFile(const QString &filePath);
+	bool actionPlayYouTubeVideo(const QString &url);
+	void actionImportYouTubePlaylist(const QString &url);
 	void setLocalLibrary(const QStringList &files);
 	QStringList localLibrary() const;
 	void shuffleLocalLibrary();
@@ -50,13 +53,23 @@ public:
 
 signals:
 	void localLibraryChanged();
+	void youtubePlaylistImported(int trackCount, const QString &label);
+	void youtubePlaylistError(const QString &message);
+	void youtubeRequestResolutionFailed(const QString &trackId, const QString &message);
 
 private:
 	void syncQueueFromBackend();
 	bool currentTrackIsLocal() const;
+	bool currentTrackUsesCompanion() const;
 	bool playLocalIndex(int index);
 	void playNextLocalTrack();
+	bool playNextScheduledTrack();
+	bool playScheduledTrack(const RsMusicTrack &track);
+	void hydrateCurrentYouTubeArtwork(const RsMusicTrack &track);
+	void refreshYouTubeCaptureSource();
 
 	RsMusicState *m_state = nullptr; // non-owning
+	RsMusicYouTubeResolver *m_youtubeResolver = nullptr;
 	QStringList m_localLibrary;
+	bool m_youtubeCaptureRefreshed = false;
 };

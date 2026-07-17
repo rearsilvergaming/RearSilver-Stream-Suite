@@ -24,11 +24,26 @@
       let ready = false;
       let pendingVideoId = "";
 
-      function notify(type, detail = {}) {
-        if (window.chrome?.webview) {
-          window.chrome.webview.postMessage({ type, ...detail });
-        }
+      function clean(value) {
+        return String(value ?? "").replace(/[\t\r\n]+/g, " ").trim();
       }
+
+      function notify(type, ...fields) {
+		if (window.chrome?.webview) {
+		  window.chrome.webview.postMessage([type, ...fields.map(clean)].join("\t"));
+		}
+      }
+
+      function stateName(value) {
+		return ({
+		  [-1]: "stopped",
+		  [YT.PlayerState.ENDED]: "stopped",
+		  [YT.PlayerState.PLAYING]: "playing",
+		  [YT.PlayerState.PAUSED]: "paused",
+		  [YT.PlayerState.BUFFERING]: "playing",
+		  [YT.PlayerState.CUED]: "stopped",
+		})[value] || "stopped";
+	  }
 
       function onYouTubeIframeAPIReady() {
         player = new YT.Player("player", {
@@ -44,21 +59,17 @@
           events: {
             onReady: () => {
               ready = true;
-              notify("ready");
+		  notify("ready");
               if (pendingVideoId) loadVideo(pendingVideoId);
             },
             onStateChange: (event) => {
-              const states = {
-                [-1]: "unstarted",
-                [YT.PlayerState.ENDED]: "ended",
-                [YT.PlayerState.PLAYING]: "playing",
-                [YT.PlayerState.PAUSED]: "paused",
-                [YT.PlayerState.BUFFERING]: "buffering",
-                [YT.PlayerState.CUED]: "cued",
-              };
-              notify("state", { state: states[event.data] || "unknown" });
-            },
-            onError: (event) => notify("error", { code: event.data }),
+		  if (event.data === YT.PlayerState.ENDED) notify("state", "ended");
+		  if (event.data === YT.PlayerState.PLAYING) {
+			const data = player.getVideoData();
+			notify("metadata", data.title, data.author, Math.round(player.getDuration() * 1000));
+		  }
+		},
+		onError: (event) => notify("error", event.data),
           },
         });
       }
@@ -89,6 +100,16 @@
           videoId: ready ? player.getVideoData().video_id || "" : "",
         }),
       };
+
+	  setInterval(() => {
+		if (!ready || !player) return;
+		notify(
+		  "status",
+		  stateName(player.getPlayerState()),
+		  Math.round(player.getCurrentTime() * 1000),
+		  Math.round(player.getDuration() * 1000),
+		);
+	  }, 250);
     </script>
   </body>
 </html>

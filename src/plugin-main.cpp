@@ -18,6 +18,7 @@
 #include "rs_entitlements.hpp"
 #include "rs_music/rs_music.hpp"
 #include "rs_music/rs_music_tls_probe.hpp"
+#include "rs_music/rs_music_pcm_source.hpp"
 #include "enhancements/rs_auto_start.hpp"
 #include "enhancements/rs_instant_replay.hpp"
 
@@ -67,11 +68,13 @@ static void frontend_event_callback(enum obs_frontend_event event, void *)
 {
 	switch (event) {
 	case OBS_FRONTEND_EVENT_FINISHED_LOADING:
+		rsMusicPcmRemoveLegacyTestSource();
 		create_rs_dock();
 		break;
 
 	case OBS_FRONTEND_EVENT_EXIT:
 		LOG_INFO_MSG("OBS exiting — shutting down RS Music");
+		rsMusicPcmStopOutput();
 		rsMusicShutdown();
 		break;
 
@@ -156,6 +159,7 @@ bool obs_module_load(void)
 	rs_log_qt_library_paths();
 
 	rs_music_tls_probe();
+	rsMusicPcmRegisterSource();
 
 	obs_frontend_add_event_callback(frontend_event_callback, nullptr);
 
@@ -171,7 +175,9 @@ void obs_module_unload(void)
 	obs_frontend_remove_event_callback(frontend_event_callback, nullptr);
 	RsInstantReplay::shutdown();
 	RsAutoStart::shutdown();
+	rsMusicPcmStopOutput();
 	rsMusicShutdown();
+	rsMusicPcmShutdownSource();
 
 	// Tell OBS to remove the dock
 	obs_frontend_remove_dock("RearSilverStreamSuiteDock");

@@ -1,6 +1,8 @@
 cmake_minimum_required(VERSION 3.20)
 project("RearSilver-Stream-Suite" LANGUAGES CXX)
 
+option(RS_BUILD_CEF_AUDIO_POC "Build the isolated CEF YouTube PCM capture experiment" OFF)
+
 set(RS_DEFAULT_EDITION "pro" CACHE STRING "Default product edition: free or pro")
 set_property(CACHE RS_DEFAULT_EDITION PROPERTY STRINGS free pro)
 if(NOT RS_DEFAULT_EDITION STREQUAL "free" AND NOT RS_DEFAULT_EDITION STREQUAL "pro")
@@ -22,15 +24,39 @@ endif()
 find_package(Qt6 REQUIRED COMPONENTS Core Gui Widgets Network)
 
 if(WIN32)
-	add_executable(RearSilver-Music-Player WIN32 src/music_player/main.cpp src/music_player/app.rc)
+	set(RS_CEF_POC_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/third_party/cef_poc")
+	set(RS_CEF_SDK_ROOT "${RS_CEF_POC_ROOT}/sdk/CEF")
+	set(RS_CEF_RUNTIME_ROOT "${RS_CEF_POC_ROOT}/runtime")
+	set(RS_CEF_FULL_ROOT "${RS_CEF_POC_ROOT}/wrapper_source")
+	file(GLOB_RECURSE RS_CEF_WRAPPER_SOURCES CONFIGURE_DEPENDS "${RS_CEF_FULL_ROOT}/libcef_dll/*.cc")
+	add_library(rs_cef_dll_wrapper_mt STATIC ${RS_CEF_WRAPPER_SOURCES})
+	target_include_directories(rs_cef_dll_wrapper_mt PRIVATE "${RS_CEF_FULL_ROOT}" "${RS_CEF_SDK_ROOT}/include")
+	target_compile_definitions(rs_cef_dll_wrapper_mt PRIVATE WRAPPING_CEF_SHARED NOMINMAX WIN32_LEAN_AND_MEAN)
+	set_target_properties(rs_cef_dll_wrapper_mt PROPERTIES
+		CXX_STANDARD 17 CXX_STANDARD_REQUIRED YES
+		MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+	add_executable(RearSilver-Music-Player WIN32 src/music_player/main.cpp src/music_player/music_hub.cpp
+		src/music_player/youtube_resolver.cpp src/music_player/app.rc)
 	target_include_directories(RearSilver-Music-Player PRIVATE
 		"${CMAKE_CURRENT_SOURCE_DIR}/third_party/miniaudio"
-		"${CMAKE_CURRENT_SOURCE_DIR}/third_party/webview2/include")
+		"${CMAKE_CURRENT_SOURCE_DIR}/third_party/webview2/include"
+		"${RS_CEF_SDK_ROOT}/include")
 	target_link_libraries(RearSilver-Music-Player PRIVATE
 		gdiplus
 		ole32
-		"${CMAKE_CURRENT_SOURCE_DIR}/third_party/webview2/lib/x64/WebView2Loader.dll.lib")
-	set_target_properties(RearSilver-Music-Player PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED YES)
+		"${CMAKE_CURRENT_SOURCE_DIR}/third_party/webview2/lib/x64/WebView2Loader.dll.lib"
+		"${RS_CEF_SDK_ROOT}/x64/release/libcef.lib"
+		rs_cef_dll_wrapper_mt
+		"${RS_CEF_SDK_ROOT}/x64/release/cef_sandbox.lib"
+		comctl32.lib gdi32.lib rpcrt4.lib shlwapi.lib ws2_32.lib
+		Advapi32.lib dbghelp.lib Delayimp.lib ntdll.lib OleAut32.lib PowrProf.lib
+		Propsys.lib psapi.lib SetupAPI.lib Shell32.lib Shcore.lib Userenv.lib
+		version.lib wbemuuid.lib WindowsApp.lib winhttp.lib winmm.lib)
+	target_compile_definitions(RearSilver-Music-Player PRIVATE CEF_USE_SANDBOX PSAPI_VERSION=1)
+	set_target_properties(RearSilver-Music-Player PROPERTIES
+		CXX_STANDARD 17
+		CXX_STANDARD_REQUIRED YES
+		MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 	if(MSVC)
 		target_compile_options(RearSilver-Music-Player PRIVATE /utf-8)
 	endif()
@@ -41,7 +67,57 @@ if(WIN32)
 		COMMAND "${CMAKE_COMMAND}" -E copy_if_different
 			"${CMAKE_CURRENT_SOURCE_DIR}/src/rs_music/rs_music_player.html"
 			"$<TARGET_FILE_DIR:RearSilver-Music-Player>/youtube-player.html"
-		COMMENT "Package WebView2 loader and YouTube player surface"
+		COMMAND "${CMAKE_COMMAND}" -E copy_directory
+			"${RS_CEF_RUNTIME_ROOT}/runtimes/win-x64/native"
+			"$<TARGET_FILE_DIR:RearSilver-Music-Player>"
+		COMMAND "${CMAKE_COMMAND}" -E make_directory
+			"$<TARGET_FILE_DIR:RearSilver-Music-Player>/locales"
+		COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+			"${RS_CEF_RUNTIME_ROOT}/CEF/win-x64/locales/en-GB.pak"
+			"$<TARGET_FILE_DIR:RearSilver-Music-Player>/locales/en-GB.pak"
+		COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+			"${RS_CEF_RUNTIME_ROOT}/CEF/win-x64/locales/en-US.pak"
+			"$<TARGET_FILE_DIR:RearSilver-Music-Player>/locales/en-US.pak"
+		COMMENT "Package CEF runtime and media-player surfaces"
+		VERBATIM)
+endif()
+
+if(WIN32 AND RS_BUILD_CEF_AUDIO_POC)
+	if(NOT EXISTS "${RS_CEF_SDK_ROOT}/include/include/cef_audio_handler.h")
+		message(FATAL_ERROR "CEF proof-of-concept SDK is missing under third_party/cef_poc")
+	endif()
+
+	add_executable(RearSilver-CefAudioPoc WIN32 experiments/cef_audio_poc/main.cpp)
+	target_include_directories(RearSilver-CefAudioPoc PRIVATE
+		"${RS_CEF_SDK_ROOT}/include"
+		"${CMAKE_CURRENT_SOURCE_DIR}/third_party/miniaudio"
+		"${CMAKE_CURRENT_SOURCE_DIR}/src")
+	target_link_libraries(RearSilver-CefAudioPoc PRIVATE
+		"${RS_CEF_SDK_ROOT}/x64/release/libcef.lib"
+		"${RS_CEF_SDK_ROOT}/x64/release/VS2019/libcef_dll_wrapper.lib"
+		comctl32.lib
+		shlwapi.lib
+		version.lib
+		winmm.lib
+	)
+	target_compile_definitions(RearSilver-CefAudioPoc PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
+	set_target_properties(RearSilver-CefAudioPoc PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED YES)
+	if(MSVC)
+		target_compile_options(RearSilver-CefAudioPoc PRIVATE /utf-8)
+	endif()
+	add_custom_command(TARGET RearSilver-CefAudioPoc POST_BUILD
+		COMMAND "${CMAKE_COMMAND}" -E copy_directory
+			"${RS_CEF_RUNTIME_ROOT}/runtimes/win-x64/native"
+			"$<TARGET_FILE_DIR:RearSilver-CefAudioPoc>"
+		COMMAND "${CMAKE_COMMAND}" -E make_directory
+			"$<TARGET_FILE_DIR:RearSilver-CefAudioPoc>/locales"
+		COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+			"${RS_CEF_RUNTIME_ROOT}/CEF/win-x64/locales/en-GB.pak"
+			"$<TARGET_FILE_DIR:RearSilver-CefAudioPoc>/locales/en-GB.pak"
+		COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+			"${RS_CEF_RUNTIME_ROOT}/CEF/win-x64/locales/en-US.pak"
+			"$<TARGET_FILE_DIR:RearSilver-CefAudioPoc>/locales/en-US.pak"
+		COMMENT "Package isolated CEF audio proof-of-concept runtime"
 		VERBATIM)
 endif()
 
@@ -83,6 +159,8 @@ add_library(${PROJECT_NAME} MODULE
     src/rs_music/rs_music_helpers.hpp
     src/rs_music/rs_music_local_player.cpp
     src/rs_music/rs_music_local_player.hpp
+	 src/rs_music/rs_music_pcm_source.cpp
+	 src/rs_music/rs_music_pcm_source.hpp
 	 src/rs_music/rs_music_metadata.cpp
 	 src/rs_music/rs_music_metadata.hpp
     src/rs_music/rs_music_server.cpp
@@ -119,6 +197,8 @@ add_library(${PROJECT_NAME} MODULE
     src/rs_music/rs_music_controller.hpp
     src/rs_music/rs_music_scheduler.cpp
     src/rs_music/rs_music_scheduler.hpp
+	 src/rs_music/rs_music_youtube_resolver.cpp
+	 src/rs_music/rs_music_youtube_resolver.hpp
 
     src/rs_music/rs_music_tls_probe.cpp
     src/rs_music/rs_music_tls_probe.hpp
@@ -172,7 +252,7 @@ endif()
 
 # Force UTF-8 for MSVC (fixes C4828 warnings)
 if (MSVC)
-    target_compile_options(${PROJECT_NAME} PRIVATE /utf-8)
+    target_compile_options(${PROJECT_NAME} PRIVATE /utf-8 /FS)
 endif()
 
 

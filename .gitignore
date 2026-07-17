@@ -7,6 +7,9 @@
 /package/
 /RearSilver-Stream-Suite/
 /installer/
+/third_party/cef_poc/
+/services/youtube-resolver/node_modules/
+/services/youtube-resolver/.wrangler/
 
 # Generated installers and debugging artefacts
 /*.exe
@@ -17,6 +20,8 @@
 # Local scratch files
 /Commands.txt
 /rs_music_ws/
+/MediaDeviceSalts
+/MediaDeviceSalts-journal
 
 # Exclude lock files
 *.lock.json

@@ -54,6 +54,7 @@ QString rsMusicFallbackPlaylistUrl();
 // If empty, fallback effectively does nothing.
 void rsMusicSetFallbackVideoIds(const QStringList &youtubeIds);
 QStringList rsMusicFallbackVideoIds();
+void rsMusicSetFallbackTracks(const QVector<RsMusicTrack> &tracks);
 
 // Optional: set fallback cursor (useful later for persistence)
 void rsMusicSetFallbackIndex(int index);
@@ -94,6 +95,7 @@ signals:
 
 RsMusicBackendEvents &rsMusicBackendEvents();
 QVector<RsMusicQueueEntry> rsMusicQueueSnapshot();
+QVector<RsMusicTrack> rsMusicPlaybackQueueSnapshot();
 
 // Add a song request.
 // - input can be a YouTube URL or free text like "Never Gonna Give You Up Rick Astley".
@@ -108,6 +110,13 @@ RsMusicRequestResult rsMusicRequestSong(const QString &requesterId, const QStrin
 // ===========================
 void rsMusicClearRequestsQueue();
 bool rsMusicRemoveRequestByTrackId(const QString &trackId);
+bool rsMusicResolveRequest(const QString &trackId, const RsMusicTrack &resolved);
+
+// Companion-player scheduling bridge. Requests are selected before fallback
+// tracks. Pending unresolved searches remain queued until Phase 6B resolves
+// them instead of being discarded at a track boundary.
+bool rsMusicTakeNextScheduledTrack(RsMusicTrack &track);
+void rsMusicRecordScheduledTrackStarted(const RsMusicTrack &track);
 
 // ===========================
 // Playback controls (Dock authority)

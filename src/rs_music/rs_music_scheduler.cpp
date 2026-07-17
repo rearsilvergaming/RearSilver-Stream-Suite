@@ -44,6 +44,25 @@ void RsMusicScheduler::enqueueRequest(const RsMusicTrack &track)
 	m_requests.append(track);
 }
 
+bool RsMusicScheduler::resolveRequest(const QString &trackId, const RsMusicTrack &resolved)
+{
+	for (RsMusicTrack &queued : m_requests) {
+		if (queued.trackId != trackId)
+			continue;
+		const QString requesterId = queued.requestedById;
+		const QString requester = queued.requestedBy;
+		const qint64 enqueued = queued.enqueuedTimestampMs;
+		queued = resolved;
+		queued.trackId = trackId;
+		queued.requestedById = requesterId;
+		queued.requestedBy = requester;
+		queued.enqueuedTimestampMs = enqueued;
+		queued.isFromPlaylist = false;
+		return true;
+	}
+	return false;
+}
+
 bool RsMusicScheduler::removeRequest(const QString &trackId)
 {
 	for (int index = 0; index < m_requests.size(); ++index) {
@@ -67,8 +86,15 @@ const QVector<RsMusicTrack> &RsMusicScheduler::requests() const
 
 bool RsMusicScheduler::takeNext(RsMusicTrack &track)
 {
-	if (!m_requests.isEmpty()) {
-		track = m_requests.takeFirst();
+	// Pending search queries remain in the queue until the provider resolver
+	// supplies an actual provider track ID. A later direct-link request may
+	// still play, and the fallback playlist keeps running while resolution is
+	// pending, without silently discarding the unresolved request.
+	for (int index = 0; index < m_requests.size(); ++index) {
+		const RsMusicTrack &candidate = m_requests.at(index);
+		if (candidate.provider == RsMusicProvider::Unknown || candidate.providerTrackId.trimmed().isEmpty())
+			continue;
+		track = m_requests.takeAt(index);
 		return true;
 	}
 

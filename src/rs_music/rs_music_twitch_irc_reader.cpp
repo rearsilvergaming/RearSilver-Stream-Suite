@@ -48,6 +48,7 @@ void RsMusicTwitchIrcReader::connectToChat(const QString &channelName, const QSt
 	}
 
 	m_rxBuffer.clear();
+	m_joinSent = false;
 
 	if (m_socket.state() != QAbstractSocket::UnconnectedState)
 		m_socket.abort();
@@ -62,16 +63,20 @@ void RsMusicTwitchIrcReader::disconnect()
 
 void RsMusicTwitchIrcReader::onSocketEncrypted()
 {
+	blog(LOG_INFO, "[RS Music] Twitch IRC reader TLS connected as %s; joining #%s",
+	     m_loginName.toUtf8().constData(), m_channel.toUtf8().constData());
 	emit connectionStateChanged(true);
 
-	sendRaw("CAP REQ :twitch.tv/tags twitch.tv/commands");
+	// Twitch requires PASS then NICK in this exact order.  Capabilities may be
+	// negotiated after those credentials have been supplied.
 	sendRaw(QString("PASS oauth:%1").arg(m_oauthToken));
 	sendRaw(QString("NICK %1").arg(m_loginName));
-	sendRaw(QString("JOIN #%1").arg(m_channel));
+	sendRaw("CAP REQ :twitch.tv/tags twitch.tv/commands");
 }
 
 void RsMusicTwitchIrcReader::onSocketDisconnected()
 {
+	blog(LOG_INFO, "[RS Music] Twitch IRC reader disconnected");
 	emit connectionStateChanged(false);
 }
 
@@ -99,7 +104,31 @@ static QString tagValue(const QString &tags, const QString &key)
 void RsMusicTwitchIrcReader::handleLine(const QString &line)
 {
 	if (line.startsWith("PING")) {
-		sendRaw("PONG :tmi.twitch.tv");
+		// Echo Twitch's PING payload exactly as required by IRC keepalive.
+		sendRaw("PONG" + line.mid(4));
+		return;
+	}
+
+	if (line.contains(" NOTICE ")) {
+		const int noticeStart = line.lastIndexOf(" :");
+		const QString notice = noticeStart >= 0 ? line.mid(noticeStart + 2) : line;
+		blog(LOG_ERROR, "[RS Music] Twitch IRC notice: %s", notice.toUtf8().constData());
+		return;
+	}
+
+	// Only join after Twitch confirms that PASS/NICK authentication succeeded.
+	// This keeps authentication and channel subscription as two observable steps.
+	if (!m_joinSent && line.contains(" 001 ")) {
+		m_joinSent = true;
+		sendRaw(QString("JOIN #%1").arg(m_channel));
+		blog(LOG_INFO, "[RS Music] Twitch IRC authenticated; joining #%s",
+		     m_channel.toUtf8().constData());
+		return;
+	}
+
+	if (line.contains(" 366 ") && line.contains("#" + m_channel)) {
+		blog(LOG_INFO, "[RS Music] Twitch IRC reader subscribed to #%s",
+		     m_channel.toUtf8().constData());
 		return;
 	}
 
@@ -118,7 +147,10 @@ void RsMusicTwitchIrcReader::handleLine(const QString &line)
 	const bool isMod = (tagValue(tags, "mod") == "1");
 	const bool isBroadcaster = tagValue(tags, "badges").contains("broadcaster");
 
-	const int msgIdx = line.indexOf(" :");
+	// A tagged Twitch IRC line contains an earlier " :" before the sender
+	// prefix as well as the delimiter before the actual chat payload.  The
+	// payload therefore begins after the final delimiter, not the first one.
+	const int msgIdx = line.lastIndexOf(" :");
 	if (msgIdx < 0)
 		return;
 
@@ -130,6 +162,9 @@ void RsMusicTwitchIrcReader::handleLine(const QString &line)
 	msg.message = msgText;
 	msg.isMod = isMod;
 	msg.isBroadcaster = isBroadcaster;
+
+	blog(LOG_INFO, "[RS Music] Twitch chat message received from %s",
+	     displayName.toUtf8().constData());
 
 	emit chatMessageReceived(msg);
 }

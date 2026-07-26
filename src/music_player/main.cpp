@@ -1008,10 +1008,10 @@ public:
 								}
 								if (object->GetString("action").ToString() == "reset") { RegDeleteTreeW(HKEY_CURRENT_USER, kOverlayRegistry); sendConfig(); return S_OK; }
 								const std::string key = object->GetString("key").ToString(), type = object->GetString("type").ToString();
-								static const std::vector<std::string> allowed = {"showArtwork","showTitle","showArtist","showAlbum","showRequester","showProgress","artworkBackground","backgroundTransparent","showCustomText","artworkPosition","timingMode","fontFamily","customText","backgroundColour","textColour","accentColour","titleSize","bodySize","backgroundOpacity","width","height"};
+								static const std::vector<std::string> allowed = {"showArtwork","showTitle","showArtist","showAlbum","showRequester","showProgress","artworkBackground","backgroundTransparent","showCustomText","artworkPosition","timingMode","fontFamily","titleOverflow","scrollDirection","customText","backgroundColour","textColour","accentColour","titleSize","bodySize","scrollSpeed","backgroundOpacity","width","height"};
 								if (std::find(allowed.begin(), allowed.end(), key) == allowed.end()) return S_OK;
 								const std::wstring wideKey = utf8ToWide(key);
-								if (type == "number") { int value = object->GetInt("value"), minimum = 0, maximum = 100; if (key == "titleSize") { minimum = 8; maximum = 240; } else if (key == "bodySize") { minimum = 6; maximum = 160; } else if (key == "width") { minimum = 240; maximum = 3840; } else if (key == "height") { minimum = 100; maximum = 2160; } setOverlayNumber(wideKey.c_str(), DWORD(std::clamp(value, minimum, maximum))); }
+								if (type == "number") { int value = object->GetInt("value"), minimum = 0, maximum = 100; if (key == "titleSize") { minimum = 8; maximum = 240; } else if (key == "bodySize") { minimum = 6; maximum = 160; } else if (key == "scrollSpeed") { minimum = 10; maximum = 200; } else if (key == "width") { minimum = 240; maximum = 3840; } else if (key == "height") { minimum = 100; maximum = 2160; } setOverlayNumber(wideKey.c_str(), DWORD(std::clamp(value, minimum, maximum))); }
 								else if (type == "bool") setOverlaySetting(wideKey.c_str(), object->GetBool("value") ? L"true" : L"false");
 								else { const std::wstring value = utf8ToWide(object->GetString("value").ToString()); if ((key == "backgroundColour" || key == "textColour" || key == "accentColour") && !validColour(value)) return S_OK; setOverlaySetting(wideKey.c_str(), value); }
 								return S_OK;
@@ -1032,7 +1032,7 @@ private:
 		if (!m_ready || !m_webView) return; CefRefPtr<CefDictionaryValue> d = CefDictionaryValue::Create();
 		auto boolean=[&](const char *key,bool fallback){const std::wstring k=utf8ToWide(key);d->SetBool(key,overlayBool(k.c_str(),fallback));}; auto string=[&](const char *key,const wchar_t *fallback){const std::wstring k=utf8ToWide(key);d->SetString(key,wideToUtf8(overlaySetting(k.c_str(),fallback)));}; auto number=[&](const char *key,int fallback){const std::wstring k=utf8ToWide(key);d->SetInt(key,int(overlayNumber(k.c_str(),DWORD(fallback))));};
 		boolean("showArtwork",true); boolean("showTitle",true); boolean("showArtist",true); boolean("showAlbum",true); boolean("showRequester",true); boolean("showProgress",true); boolean("artworkBackground",false); boolean("backgroundTransparent",false);
-		string("artworkPosition",L"left"); string("timingMode",L"elapsedTotal"); string("fontFamily",L"Sora"); string("customText",L""); string("backgroundColour",L"#0b0f14"); string("textColour",L"#e6e8eb"); string("accentColour",L"#00d4ff"); number("titleSize",34); number("bodySize",20); number("backgroundOpacity",82); number("width",800); number("height",240);
+		string("artworkPosition",L"left"); string("timingMode",L"elapsedTotal"); string("fontFamily",L"Sora"); string("titleOverflow",L"ellipsis"); string("scrollDirection",L"left"); string("customText",L""); string("backgroundColour",L"#0b0f14"); string("textColour",L"#e6e8eb"); string("accentColour",L"#00d4ff"); number("titleSize",34); number("bodySize",20); number("scrollSpeed",45); number("backgroundOpacity",82); number("width",800); number("height",240);
 		CefRefPtr<CefValue> root=CefValue::Create(); root->SetDictionary(d); const std::wstring script=L"window.rsApplyConfig("+utf8ToWide(CefWriteJSON(root,JSON_WRITER_DEFAULT).ToString())+L")"; m_webView->ExecuteScript(script.c_str(),nullptr);
 	}
 	void sendLibraryConfig() {
@@ -1240,8 +1240,35 @@ static LRESULT CALLBACK windowProc(HWND window, UINT message, WPARAM wParam, LPA
 	if (message == WM_HUB_REQUEST_RESULT) {
 		std::unique_ptr<HubSearchResult> result(reinterpret_cast<HubSearchResult *>(lParam));
 		if (result && result->error.empty()) {
+			const int maxMinutes = _wtoi(musicSetting(L"maxTrackLengthMinutes", L"10").c_str());
+			if (maxMinutes > 0 && result->track.durationSeconds > maxMinutes * 60)
+				result->error = "That track exceeds the maximum request length.";
+			if (result->error.empty() && musicBool(L"playlistOnly", false)) {
+				const auto fallback = g_hub.youtubeFallback();
+				const bool present = std::any_of(fallback.begin(), fallback.end(), [&](const HubTrack &track) {
+					return track.providerId == result->track.providerId;
+				});
+				if (!present) result->error = "Requests are currently limited to the fallback playlist.";
+			}
+			if (result->error.empty() && musicBool(L"preventDuplicates", true)) {
+				bool duplicate = g_hub.hasCurrent() && g_hub.current().providerId == result->track.providerId;
+				for (const HubTrack &track : g_hub.requests()) duplicate = duplicate || track.providerId == result->track.providerId;
+				if (duplicate) result->error = "That track is already playing or waiting in the queue.";
+			}
+		}
+		if (result && result->error.empty()) {
+			const HubTrack accepted = result->track;
 			g_hub.enqueueRequest(std::move(result->track)); syncHubQueueView();
+			const int position = int(g_hub.requests().size());
+			{
+				std::lock_guard<std::mutex> lock(g_hostEventMutex);
+				g_hostEvents.push_back("HOST\tREQUEST_ACCEPTED\t" + accepted.id + "\t" + accepted.title + "\t" +
+					accepted.artist + "\t" + accepted.requestedBy + "\t" + std::to_string(position) + "\n");
+			}
 			if (!g_hub.hasCurrent()) playHubNext();
+		} else if (result) {
+			std::lock_guard<std::mutex> lock(g_hostEventMutex);
+			g_hostEvents.push_back("HOST\tREQUEST_REJECTED\t" + result->track.id + "\t" + result->error + "\n");
 		}
 		InvalidateRect(window, nullptr, FALSE); return 0;
 	}
@@ -1738,11 +1765,31 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int)
 						std::thread([window, url] { auto *result = new HubPlaylistResult(resolveHubPlaylist(url));
 							if (!PostMessageW(window, WM_HUB_PLAYLIST_RESULT, 0, reinterpret_cast<LPARAM>(result))) delete result; }).detach();
 					} else if (line.rfind("HUB_REQUEST\t", 0) == 0) {
-						const size_t split = line.find('\t', 12);
-						const std::string requester = split == std::string::npos ? std::string{} : line.substr(12, split - 12);
-						const std::string query = split == std::string::npos ? line.substr(12) : line.substr(split + 1);
-						std::thread([window, query, requester] { auto *result = new HubSearchResult(resolveHubSearch(query, requester));
+						const size_t first = line.find('\t', 12);
+						const size_t second = first == std::string::npos ? first : line.find('\t', first + 1);
+						const std::string requestId = first == std::string::npos ? std::string{} : line.substr(12, first - 12);
+						const std::string requester = second == std::string::npos ? std::string{} : line.substr(first + 1, second - first - 1);
+						const std::string query = second == std::string::npos ? std::string{} : line.substr(second + 1);
+						std::thread([window, query, requester, requestId] { auto *result = new HubSearchResult(resolveHubSearch(query, requester));
+							result->track.id = requestId;
 							if (!PostMessageW(window, WM_HUB_REQUEST_RESULT, 0, reinterpret_cast<LPARAM>(result))) delete result; }).detach();
+					} else if (line.rfind("HUB_REMOVE\t", 0) == 0) {
+						const std::string id = line.substr(11); HubTrack removed;
+						for (const HubTrack &track : g_hub.requests()) if (track.id == id) { removed = track; break; }
+						if (removed.id.empty() && g_hub.hasCurrent() && g_hub.current().request && g_hub.current().id == id)
+							removed = g_hub.current();
+						if (!removed.id.empty() && g_hub.removeRequest(id)) {
+							syncHubQueueView(); saveHubState();
+							std::lock_guard<std::mutex> lock(g_hostEventMutex);
+							g_hostEvents.push_back("HOST\tREQUEST_REMOVED\t" + id + "\t" + removed.title + "\t" + removed.artist + "\n");
+						} else if (!removed.id.empty() && g_hub.hasCurrent() && g_hub.current().id == id) {
+							playHubNext();
+							std::lock_guard<std::mutex> lock(g_hostEventMutex);
+							g_hostEvents.push_back("HOST\tREQUEST_REMOVED\t" + id + "\t" + removed.title + "\t" + removed.artist + "\n");
+						} else {
+							std::lock_guard<std::mutex> lock(g_hostEventMutex);
+							g_hostEvents.push_back("HOST\tREQUEST_REMOVE_FAILED\t" + id + "\tThat request is not waiting in the queue.\n");
+						}
 					} else if (line == "HUB_SHUFFLE") {
 						g_hub.shuffleFallback(); g_queuePage = 0; syncHubQueueView(); saveHubState(); InvalidateRect(window, nullptr, FALSE);
 					} else if (line.rfind("META\t", 0) == 0) {

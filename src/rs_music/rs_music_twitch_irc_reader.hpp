@@ -45,6 +45,7 @@ private:
 	QString m_channel;
 	QString m_oauthToken;
 	QString m_loginName;
+	bool m_joinSent = false;
 
 	void sendRaw(const QString &line);
 	void onSocketEncrypted();

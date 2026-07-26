@@ -20,6 +20,21 @@ RsMusicCommandRouter::RsMusicCommandRouter(RsMusicController *controller, QObjec
 	: QObject(parent),
 	  m_controller(controller)
 {
+	connect(m_controller, &RsMusicController::songRequestAccepted, this,
+		[this](const QString &id, const QString &title, const QString &artist, const QString &requester, int position) {
+			emit feedbackMessage(QString("🎵 %1 — %2, requested by %3, was added as request #%4 (queue position %5).")
+				.arg(title, artist, requester, id).arg(position));
+		});
+	connect(m_controller, &RsMusicController::songRequestRejected, this,
+		[this](const QString &, const QString &message) { emit feedbackMessage(QString("Request rejected: %1").arg(message)); });
+	connect(m_controller, &RsMusicController::songRequestRemoved, this,
+		[this](const QString &id, const QString &title, const QString &artist) {
+			emit feedbackMessage(QString("🗑️ Removed request #%1: %2 — %3").arg(id, title, artist));
+		});
+	connect(m_controller, &RsMusicController::songRequestRemoveFailed, this,
+		[this](const QString &id, const QString &message) {
+			emit feedbackMessage(QString("Could not remove request #%1: %2").arg(id, message));
+		});
 }
 
 void RsMusicCommandRouter::ingestChatMessage(const RsMusicChatContext &ctx, const QString &messageText)
@@ -59,6 +74,16 @@ void RsMusicCommandRouter::ingestChatMessage(const RsMusicChatContext &ctx, cons
 		handleRestart(ctx);
 		return;
 	}
+
+	if (lower == "!previous" || lower == "!prev") {
+		handlePrevious(ctx);
+		return;
+	}
+
+	if (lower == "!remove" || lower.startsWith("!remove ")) {
+		handleRemove(ctx, commandArgs(msg, 7));
+		return;
+	}
 }
 
 bool RsMusicCommandRouter::isControlAllowed(const RsMusicChatContext &ctx) const
@@ -80,7 +105,8 @@ void RsMusicCommandRouter::handleSongRequest(const RsMusicChatContext &ctx, cons
 		return;
 	}
 
-	emit feedbackMessage(QString("🎵 %1 added a song to the queue").arg(ctx.displayName));
+	// Resolution is asynchronous. The final title, artist, stable request ID and
+	// queue position are announced only after the Media Player accepts the track.
 }
 
 void RsMusicCommandRouter::handlePlay(const RsMusicChatContext &ctx)
@@ -129,4 +155,29 @@ void RsMusicCommandRouter::handleRestart(const RsMusicChatContext &ctx)
 
 	m_controller->actionRestart();
 	emit feedbackMessage("🔁 Track restarted");
+}
+
+void RsMusicCommandRouter::handlePrevious(const RsMusicChatContext &ctx)
+{
+	if (!isControlAllowed(ctx)) {
+		emit feedbackMessage(QString("%1: you don't have permission to control playback.").arg(ctx.displayName));
+		return;
+	}
+	m_controller->actionPrevious();
+	emit feedbackMessage("⏮️ Playing the previous track");
+}
+
+void RsMusicCommandRouter::handleRemove(const RsMusicChatContext &ctx, const QString &args)
+{
+	if (!isControlAllowed(ctx)) {
+		emit feedbackMessage(QString("%1: you don't have permission to remove requests.").arg(ctx.displayName));
+		return;
+	}
+	QString id = args.trimmed();
+	if (id.startsWith('#')) id.remove(0, 1);
+	if (id.isEmpty()) {
+		emit feedbackMessage("Usage: !remove #<request ID>");
+		return;
+	}
+	m_controller->actionRemoveRequest(id);
 }

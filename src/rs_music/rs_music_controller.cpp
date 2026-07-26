@@ -21,7 +21,7 @@ extern "C" {
 
 RsMusicController::RsMusicController(RsMusicState *state, QObject *parent) : QObject(parent), m_state(state)
 {
-	connect(&RsMusicLocalPlayer::instance(), &RsMusicLocalPlayer::hostCommandReceived, this, [](const QString &command) {
+	connect(&RsMusicLocalPlayer::instance(), &RsMusicLocalPlayer::hostCommandReceived, this, [this](const QString &command) {
 		if (command.startsWith("SETTING\t")) {
 			const QStringList parts = command.split('\t');
 			if (parts.size() < 3) return;
@@ -30,6 +30,29 @@ RsMusicController::RsMusicController(RsMusicState *state, QObject *parent) : QOb
 			else if (key == "queueLimit") rsMusicSetMaxQueueTotal(value.toInt());
 			else if (key == "userLimit") rsMusicSetMaxPerUser(value.toInt());
 			else if (key == "maxTrackMinutes") rsMusicSetMaxTrackLengthSec(value.toInt() * 60);
+			return;
+		}
+		if (command.startsWith("REQUEST_ACCEPTED\t")) {
+			const QStringList parts = command.split('\t');
+			emit songRequestAccepted(parts.value(1), parts.value(2), parts.value(3), parts.value(4), parts.value(5).toInt());
+			return;
+		}
+		if (command.startsWith("REQUEST_REJECTED\t")) {
+			const QStringList parts = command.split('\t');
+			const QString id = parts.value(1);
+			rsMusicRemoveRequestByTrackId(id);
+			emit songRequestRejected(id, parts.mid(2).join(" "));
+			return;
+		}
+		if (command.startsWith("REQUEST_REMOVED\t")) {
+			const QStringList parts = command.split('\t');
+			rsMusicRemoveRequestByTrackId(parts.value(1));
+			emit songRequestRemoved(parts.value(1), parts.value(2), parts.value(3));
+			return;
+		}
+		if (command.startsWith("REQUEST_REMOVE_FAILED\t")) {
+			const QStringList parts = command.split('\t');
+			emit songRequestRemoveFailed(parts.value(1), parts.mid(2).join(" "));
 			return;
 		}
 		if (command != "CREATE_CAPTURE") return;
@@ -446,6 +469,11 @@ RsMusicRequestResult RsMusicController::actionSongRequest(const QString &userId,
 {
 	const RsMusicRequestResult result = rsMusicRequestSong(userId, displayName, query, isModOrBroadcaster);
 	if (result.accepted)
-		RsMusicLocalPlayer::instance().requestYouTubeTrack(displayName, query.trimmed());
+		RsMusicLocalPlayer::instance().requestYouTubeTrack(result.trackId, displayName, query.trimmed());
 	return result;
+}
+
+void RsMusicController::actionRemoveRequest(const QString &requestId)
+{
+	RsMusicLocalPlayer::instance().removeRequest(requestId.trimmed());
 }

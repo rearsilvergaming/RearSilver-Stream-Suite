@@ -121,6 +121,11 @@ RsMainDock::RsMainDock(QWidget *parent) : QWidget(parent)
 	m_musicCommandRouter = new RsMusicCommandRouter(m_musicController, this);
 	m_musicIrcReader = new RsMusicTwitchIrcReader(this);
 	m_musicIrcSender = new RsMusicTwitchIrcSender(this);
+	connect(m_musicIrcSender, &RsMusicTwitchIrcSender::authenticationFailed, this, [this]() {
+		QSettings settings("RearSilver", "RearSilver-Stream-Suite");
+		settings.setValue("music/twitch/send_from_bot", false);
+		QTimer::singleShot(0, this, &RsMainDock::connectMusicChat);
+	});
 
 	connect(m_musicIrcReader, &RsMusicTwitchIrcReader::chatMessageReceived, this,
 		[this](const RsMusicChatMessage &message) {
@@ -137,7 +142,14 @@ RsMainDock::RsMainDock(QWidget *parent) : QWidget(parent)
 	connect(m_botAuth, &RsMusicTwitchAuth::authCompleted, this, &RsMainDock::connectMusicChat);
 	connect(m_streamerAuth, &RsMusicTwitchAuth::loggedOut, m_musicIrcReader, &RsMusicTwitchIrcReader::disconnect);
 	connect(m_streamerAuth, &RsMusicTwitchAuth::loggedOut, m_musicIrcSender, &RsMusicTwitchIrcSender::disconnect);
-	connect(m_botAuth, &RsMusicTwitchAuth::loggedOut, m_musicIrcSender, &RsMusicTwitchIrcSender::disconnect);
+	connect(m_botAuth, &RsMusicTwitchAuth::loggedOut, this, [this]() {
+		m_musicIrcSender->disconnect();
+		QTimer::singleShot(0, this, &RsMainDock::connectMusicChat);
+	});
+	connect(m_botAuth, &RsMusicTwitchAuth::authFailed, this, [this](const QString &) {
+		m_musicIrcSender->disconnect();
+		QTimer::singleShot(0, this, &RsMainDock::connectMusicChat);
+	});
 
 	// Auto-resume if tokens already exist
 	if (m_streamerAuth->hasValidToken())

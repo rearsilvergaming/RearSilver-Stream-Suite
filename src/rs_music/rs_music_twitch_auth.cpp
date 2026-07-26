@@ -23,6 +23,19 @@ static const char *TWITCH_CLIENT_ID = "6h5j0d7kfjaeyw6fejisawwqheeahd";
 // Twitch endpoints
 static const char *DEVICE_CODE_URL = "https://id.twitch.tv/oauth2/device";
 static const char *TOKEN_URL = "https://id.twitch.tv/oauth2/token";
+static const char *TOKEN_VALIDATE_URL = "https://id.twitch.tv/oauth2/validate";
+static const char *CHAT_SCOPES = "chat:read chat:edit";
+
+static bool hasRequiredChatScopes(const QJsonArray &scopes)
+{
+	bool canRead = false;
+	bool canEdit = false;
+	for (const QJsonValue &scope : scopes) {
+		canRead = canRead || scope.toString() == "chat:read";
+		canEdit = canEdit || scope.toString() == "chat:edit";
+	}
+	return canRead && canEdit;
+}
 
 RsMusicTwitchAuth::RsMusicTwitchAuth(const QString &settingsRoot, QObject *parent)
 	: QObject(parent),
@@ -90,7 +103,9 @@ void RsMusicTwitchAuth::requestDeviceCode()
 	QUrl url(DEVICE_CODE_URL);
 	QUrlQuery q;
 	q.addQueryItem("client_id", TWITCH_CLIENT_ID);
-	q.addQueryItem("scope", "chat:read chat:edit");
+	// Twitch's device-code flow deliberately uses `scopes` (plural), unlike
+	// the implicit/authorization-code flows which use `scope`.
+	q.addQueryItem("scopes", CHAT_SCOPES);
 	url.setQuery(q);
 
 	QNetworkRequest req(url);
@@ -144,6 +159,7 @@ void RsMusicTwitchAuth::requestAccessToken()
 	QUrl url(TOKEN_URL);
 	QUrlQuery q;
 	q.addQueryItem("client_id", TWITCH_CLIENT_ID);
+	q.addQueryItem("scopes", CHAT_SCOPES);
 	q.addQueryItem("device_code", m_deviceCode);
 	q.addQueryItem("grant_type", "urn:ietf:params:oauth:grant-type:device_code");
 	url.setQuery(q);
@@ -190,6 +206,14 @@ void RsMusicTwitchAuth::requestAccessToken()
 
 		m_accessToken = json["access_token"].toString();
 		m_refreshToken = json["refresh_token"].toString();
+		if (!hasRequiredChatScopes(json["scope"].toArray())) {
+			blog(LOG_ERROR, "[RS Music] Twitch device login returned without chat:read/chat:edit scopes");
+			m_accessToken.clear();
+			m_refreshToken.clear();
+			clearSettings();
+			emit authFailed("Twitch did not grant the required chat permissions. Please log in again.");
+			return;
+		}
 
 		saveToSettings();
 
@@ -269,12 +293,12 @@ void RsMusicTwitchAuth::reconnect()
 		return;
 	}
 
-	// Re-validate token by asking Twitch who this token belongs to
+	// Validate the token itself so account identity, expiry and granted scopes
+	// are checked before the UI claims chat is connected.
 	QNetworkAccessManager *net = new QNetworkAccessManager(this);
 
-	QNetworkRequest req(QUrl("https://api.twitch.tv/helix/users"));
-	req.setRawHeader("Authorization", QByteArray("Bearer ") + m_accessToken.toUtf8());
-	req.setRawHeader("Client-Id", TWITCH_CLIENT_ID);
+	QNetworkRequest req{QUrl(TOKEN_VALIDATE_URL)};
+	req.setRawHeader("Authorization", QByteArray("OAuth ") + m_accessToken.toUtf8());
 
 	QNetworkReply *reply = net->get(req);
 	connect(reply, &QNetworkReply::finished, this, [this, reply, net]() {
@@ -288,19 +312,15 @@ void RsMusicTwitchAuth::reconnect()
 		}
 
 		const QJsonObject obj = QJsonDocument::fromJson(reply->readAll()).object();
-
-		const QJsonArray data = obj["data"].toArray();
-		if (data.isEmpty()) {
+		if (!hasRequiredChatScopes(obj["scopes"].toArray())) {
 			clearAuth();
-			emit authFailed("Saved Twitch login is no longer valid");
+			emit authFailed("Saved Twitch login lacks chat permissions. Please log in again.");
 			return;
 		}
 
-		const QJsonObject user = data.first().toObject();
-
-		m_userId = user["id"].toString();
-		m_userLogin = user["login"].toString();
-		const QString displayName = user["display_name"].toString();
+		m_userId = obj["user_id"].toString();
+		m_userLogin = obj["login"].toString();
+		const QString displayName = m_userLogin;
 
 		saveToSettings();
 

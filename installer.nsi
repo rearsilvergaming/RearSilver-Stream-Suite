@@ -106,12 +106,18 @@ Section "RearSilver Stream Suite"
   CreateDirectory "$INSTDIR\obs-plugins\64bit"
 
   ; Safety check
-  IfFileExists "${SOURCE_DIR}\build_x64\RelWithDebInfo\RearSilver-Stream-Suite.dll" +2
+  IfFileExists "${SOURCE_DIR}\build_validation\RelWithDebInfo\RearSilver-Stream-Suite.dll" +2
     Abort "RearSilver-Stream-Suite.dll not found. Build the plugin first."
 
 ; Copy plugin
 SetOutPath "$INSTDIR\obs-plugins\64bit"
-File "${SOURCE_DIR}\build_x64\RelWithDebInfo\RearSilver-Stream-Suite.dll"
+File "${SOURCE_DIR}\build_validation\RelWithDebInfo\RearSilver-Stream-Suite.dll"
+File "${SOURCE_DIR}\build_validation\RelWithDebInfo\RearSilver-Music-Player.exe"
+
+; Private Qt TLS backend used for Twitch authentication, IRC and artwork downloads
+CreateDirectory "$INSTDIR\obs-plugins\64bit\RearSilver-Stream-Suite\qt-plugins\tls"
+SetOutPath "$INSTDIR\obs-plugins\64bit\RearSilver-Stream-Suite\qt-plugins\tls"
+File "${SOURCE_DIR}\build_validation\RelWithDebInfo\RearSilver-Stream-Suite\qt-plugins\tls\qschannelbackend.dll"
 
 ; Copy plugin localisation data
 CreateDirectory "$INSTDIR\data\obs-plugins\RearSilver-Stream-Suite\locale"

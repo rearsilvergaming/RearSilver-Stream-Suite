@@ -106,6 +106,7 @@ void RsMusicTwitchIrcSender::onSocketReadyRead()
 		    line.contains(" NOTICE * :Improperly formatted auth")) {
 			blog(LOG_ERROR, "[RS Music] IRC sender authentication failed");
 			m_pendingMessages.clear();
+			emit authenticationFailed();
 			m_socket.abort();
 			continue;
 		}

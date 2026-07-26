@@ -21,7 +21,8 @@ public:
 	void stop();
 	void restart();
 	void seekTo(qint64 positionMs);
-	void requestYouTubeTrack(const QString &requester, const QString &query);
+	void requestYouTubeTrack(const QString &requestId, const QString &requester, const QString &query);
+	void removeRequest(const QString &requestId);
 	void skip();
 	void previous();
 	void shuffleFallback();

@@ -24,6 +24,17 @@ endif()
 find_package(Qt6 REQUIRED COMPONENTS Core Gui Widgets Network)
 
 if(WIN32)
+	# Qt Network requires a TLS backend plugin. Package the native Windows
+	# Schannel backend privately so the Suite never depends on a user's Qt or
+	# OpenSSL installation.
+	get_filename_component(RS_QT_RUNTIME_ROOT "${Qt6_DIR}/../../.." ABSOLUTE)
+	set(RS_QT_SCHANNEL_BACKEND "${RS_QT_RUNTIME_ROOT}/plugins/tls/qschannelbackend.dll")
+	if(NOT EXISTS "${RS_QT_SCHANNEL_BACKEND}")
+		message(FATAL_ERROR "Qt Schannel TLS backend was not found: ${RS_QT_SCHANNEL_BACKEND}")
+	endif()
+endif()
+
+if(WIN32)
 	set(RS_CEF_POC_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/third_party/cef_poc")
 	set(RS_CEF_SDK_ROOT "${RS_CEF_POC_ROOT}/sdk/CEF")
 	set(RS_CEF_RUNTIME_ROOT "${RS_CEF_POC_ROOT}/runtime")
@@ -271,7 +282,12 @@ if(WIN32)
 	add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
 		COMMAND "${CMAKE_COMMAND}" -E copy_if_different
 			"$<TARGET_FILE:RearSilver-Music-Player>" "$<TARGET_FILE_DIR:${PROJECT_NAME}>"
-		COMMENT "Package RearSilver Music Player companion"
+		COMMAND "${CMAKE_COMMAND}" -E make_directory
+			"$<TARGET_FILE_DIR:${PROJECT_NAME}>/RearSilver-Stream-Suite/qt-plugins/tls"
+		COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+			"${RS_QT_SCHANNEL_BACKEND}"
+			"$<TARGET_FILE_DIR:${PROJECT_NAME}>/RearSilver-Stream-Suite/qt-plugins/tls/qschannelbackend.dll"
+		COMMENT "Package RearSilver Music Player companion and private Qt TLS backend"
 		VERBATIM)
 endif()
 

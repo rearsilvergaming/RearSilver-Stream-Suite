@@ -49,10 +49,16 @@ public:
 	// ---- song requests ----
 	RsMusicRequestResult actionSongRequest(const QString &userId, const QString &displayName, const QString &query,
 					       bool isModOrBroadcaster = false);
+	void actionRemoveRequest(const QString &requestId);
 
 signals:
 	void localLibraryChanged();
 	void youtubeRequestResolutionFailed(const QString &trackId, const QString &message);
+	void songRequestAccepted(const QString &requestId, const QString &title, const QString &artist,
+				 const QString &requester, int queuePosition);
+	void songRequestRejected(const QString &requestId, const QString &message);
+	void songRequestRemoved(const QString &requestId, const QString &title, const QString &artist);
+	void songRequestRemoveFailed(const QString &requestId, const QString &message);
 
 private:
 	void syncQueueFromBackend();

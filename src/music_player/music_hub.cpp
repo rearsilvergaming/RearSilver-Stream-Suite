@@ -88,8 +88,11 @@ void MusicHubModel::shuffleFallback()
 bool MusicHubModel::takeNext(HubTrack &track)
 {
 	std::lock_guard<std::mutex> lock(m_mutex);
-	if (!m_replayNext.empty()) { track = m_replayNext.front(); m_replayNext.pop_front(); return true; }
+	// Viewer requests are always the highest-priority upcoming tracks.  A
+	// track interrupted by Previous is retained, but resumes only after the
+	// request queue has drained and before ordinary fallback playback.
 	if (m_activeSource == "youtube" && !m_requests.empty()) { track = m_requests.front(); m_requests.pop_front(); return true; }
+	if (!m_replayNext.empty()) { track = m_replayNext.front(); m_replayNext.pop_front(); return true; }
 	if (m_fallback.empty()) return false;
 	if (m_cursor >= m_fallback.size()) m_cursor = 0;
 	track = m_fallback[m_cursor++];
@@ -102,7 +105,9 @@ bool MusicHubModel::trackAt(size_t playbackIndex, HubTrack &track) const
 	std::lock_guard<std::mutex> lock(m_mutex);
 	const size_t requestCount = m_activeSource == "youtube" ? m_requests.size() : 0;
 	if (playbackIndex < requestCount) { track = m_requests[playbackIndex]; return true; }
-	const size_t fallbackOffset = playbackIndex - requestCount;
+	playbackIndex -= requestCount;
+	if (playbackIndex < m_replayNext.size()) { track = m_replayNext[playbackIndex]; return true; }
+	const size_t fallbackOffset = playbackIndex - m_replayNext.size();
 	if (m_fallback.empty() || fallbackOffset >= m_fallback.size()) return false;
 	const size_t selected = (m_cursor + fallbackOffset) % m_fallback.size();
 	track = m_fallback[selected];
@@ -112,6 +117,13 @@ bool MusicHubModel::trackAt(size_t playbackIndex, HubTrack &track) const
 bool MusicHubModel::selectAt(size_t playbackIndex, HubTrack &track)
 {
 	std::lock_guard<std::mutex> lock(m_mutex);
+	const size_t requestCount = m_activeSource == "youtube" ? m_requests.size() : 0;
+	if (playbackIndex < requestCount) {
+		track = m_requests[playbackIndex];
+		m_requests.erase(m_requests.begin() + static_cast<std::ptrdiff_t>(playbackIndex));
+		return true;
+	}
+	playbackIndex -= requestCount;
 	const size_t replayCount = m_replayNext.size();
 	if (playbackIndex < replayCount) {
 		track = m_replayNext[playbackIndex];
@@ -119,13 +131,7 @@ bool MusicHubModel::selectAt(size_t playbackIndex, HubTrack &track)
 		return true;
 	}
 	playbackIndex -= replayCount;
-	const size_t requestCount = m_activeSource == "youtube" ? m_requests.size() : 0;
-	if (playbackIndex < requestCount) {
-		track = m_requests[playbackIndex];
-		m_requests.erase(m_requests.begin() + static_cast<std::ptrdiff_t>(playbackIndex));
-		return true;
-	}
-	const size_t fallbackOffset = playbackIndex - requestCount;
+	const size_t fallbackOffset = playbackIndex;
 	if (m_fallback.empty() || fallbackOffset >= m_fallback.size()) return false;
 	const size_t selected = (m_cursor + fallbackOffset) % m_fallback.size();
 	track = m_fallback[selected];
@@ -157,8 +163,9 @@ HubTrack MusicHubModel::current() const { std::lock_guard<std::mutex> lock(m_mut
 std::vector<HubTrack> MusicHubModel::playbackOrder() const
 {
 	std::lock_guard<std::mutex> lock(m_mutex);
-	std::vector<HubTrack> order(m_replayNext.begin(), m_replayNext.end());
+	std::vector<HubTrack> order;
 	if (m_activeSource == "youtube") order.insert(order.end(), m_requests.begin(), m_requests.end());
+	order.insert(order.end(), m_replayNext.begin(), m_replayNext.end());
 	order.reserve(order.size() + m_fallback.size());
 	for (size_t offset = 0; offset < m_fallback.size(); ++offset)
 		order.push_back(m_fallback[(m_cursor + offset) % m_fallback.size()]);
@@ -204,8 +211,8 @@ std::string MusicHubModel::snapshotJson(const std::string &status, int64_t posit
 		<< ",\"fallbackLabel\":" << json(m_fallbackLabel) << ",\"fallbackUrl\":" << json(m_fallbackUrl)
 		<< ",\"current\":" << (m_hasCurrent ? trackJson(m_current) : "null") << ",\"queue\":[";
 	bool first = true;
-	for (const HubTrack &track : m_replayNext) { if (!first) out << ','; first = false; out << trackJson(track); }
 	if (m_activeSource == "youtube") for (const HubTrack &track : m_requests) { if (!first) out << ','; first = false; out << trackJson(track); }
+	for (const HubTrack &track : m_replayNext) { if (!first) out << ','; first = false; out << trackJson(track); }
 	for (size_t offset = 0; offset < m_fallback.size(); ++offset) {
 		if (!first) out << ','; first = false; out << trackJson(m_fallback[(m_cursor + offset) % m_fallback.size()]);
 	}

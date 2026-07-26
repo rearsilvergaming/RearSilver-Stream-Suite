@@ -35,6 +35,7 @@ static QString g_sessionId;
 // Authoritative settings (Phase 6A)
 // -----------------------
 static bool g_requestsEnabled = true;
+static quint64 g_nextRequestNumber = 1;
 static int g_maxQueueTotal = 50;
 static int g_maxPerUser = 2;
 static int g_maxTrackLengthSec = 600; // 10m default
@@ -668,7 +669,7 @@ RsMusicRequestResult rsMusicRequestSong(const QString &requesterId, const QStrin
 	}
 
 	RsMusicTrack it;
-	it.trackId = makeTrackId();
+	it.trackId = QString("R%1").arg(g_nextRequestNumber++);
 	it.requestedById = requesterId;
 	it.requestedBy = requesterDisplay;
 	it.enqueuedTimestampMs = nowMs();

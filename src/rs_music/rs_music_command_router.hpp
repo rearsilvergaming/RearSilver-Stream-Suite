@@ -51,6 +51,8 @@ private:
 	void handlePause(const RsMusicChatContext &ctx);
 	void handleSkip(const RsMusicChatContext &ctx);
 	void handleRestart(const RsMusicChatContext &ctx);
+	void handlePrevious(const RsMusicChatContext &ctx);
+	void handleRemove(const RsMusicChatContext &ctx, const QString &args);
 
 private:
 	RsMusicController *m_controller = nullptr; // non-owning

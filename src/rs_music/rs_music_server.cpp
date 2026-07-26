@@ -2,6 +2,7 @@
 #include "rs_music_metadata.hpp"
 #include "state/rs_music_state.hpp"
 #include <QFile>
+#include <QCryptographicHash>
 #include <QHostAddress>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -69,6 +70,8 @@ QByteArray RsMusicServer::stateJson() const
 			track["requestedBy"] = current.requestedBy; track["provider"] = rsMusicProviderKey(current.provider);
 			track["durationMs"] = qint64(current.durationSeconds) * 1000;
 			track["hasArtwork"] = !current.artworkUri.isEmpty();
+			track["artworkKey"] = QString::fromLatin1(QCryptographicHash::hash(
+				current.artworkUri.toUtf8(), QCryptographicHash::Sha1).toHex());
 		}
 		root["positionMs"] = m_state->playbackPositionMs();
 	}
@@ -90,6 +93,8 @@ QByteArray RsMusicServer::configJson() const
 	c["artworkBackground"]=value("artworkBackground",false).toBool();
 	c["accentColour"]=value("accentColour","#9147ff").toString(); c["fontFamily"]=value("fontFamily","Arial").toString();
 	c["titleSize"]=value("titleSize",34).toInt(); c["bodySize"]=value("bodySize",20).toInt();
+	c["titleOverflow"]=value("titleOverflow","ellipsis").toString(); c["scrollDirection"]=value("scrollDirection","left").toString();
+	c["scrollSpeed"]=value("scrollSpeed",45).toInt();
 	return QJsonDocument(c).toJson(QJsonDocument::Compact);
 }
 
@@ -110,7 +115,9 @@ void RsMusicServer::readRequest(QTcpSocket *socket)
 		QByteArray artwork;
 		if (m_state && m_state->hasCurrentTrack()) artwork = RsMusicMetadata::artworkBytes(m_state->currentTrack().artworkUri);
 		if (artwork.isEmpty()) artwork = RsMusicMetadata::artworkBytes(":/rs/music/music-fallback-vinyl.png");
-		payload = response("image/png", artwork);
+		const QByteArray type = artwork.startsWith("\xFF\xD8") ? "image/jpeg" :
+			(artwork.startsWith("RIFF") ? "image/webp" : "image/png");
+		payload = response(type, artwork);
 	} else payload = response("text/plain", "Not found", 404);
 	if (payload.isEmpty()) payload = response("text/plain", "Not found", 404);
 	socket->write(payload); socket->disconnectFromHost();

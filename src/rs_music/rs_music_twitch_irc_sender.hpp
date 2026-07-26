@@ -33,6 +33,7 @@ public:
 
 signals:
 	void connectionStateChanged(bool connected);
+	void authenticationFailed();
 
 private:
 	void onSocketEncrypted();

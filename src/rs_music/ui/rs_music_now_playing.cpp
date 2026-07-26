@@ -176,7 +176,8 @@ void RsMusicNowPlaying::updateFromState()
 		}
 
 		if (track.isFromPlaylist) {
-			m_lblRequester->setText(QString("Requested by: %1").arg(m_state->playlistLabel()));
+			const QString label = track.requestedBy.trimmed().isEmpty() ? m_state->playlistLabel() : track.requestedBy;
+			m_lblRequester->setText(QString("Requested by: %1").arg(label));
 		} else {
 			m_lblRequester->setText(QString("Requested by: %1").arg(track.requestedBy));
 		}

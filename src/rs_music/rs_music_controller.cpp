@@ -16,10 +16,32 @@
 
 extern "C" {
 #include <obs-module.h>
+#include <obs-frontend-api.h>
 }
 
 RsMusicController::RsMusicController(RsMusicState *state, QObject *parent) : QObject(parent), m_state(state)
 {
+	connect(&RsMusicLocalPlayer::instance(), &RsMusicLocalPlayer::hostCommandReceived, this, [](const QString &command) {
+		if (command.startsWith("SETTING\t")) {
+			const QStringList parts = command.split('\t');
+			if (parts.size() < 3) return;
+			const QString key = parts[1], value = parts[2];
+			if (key == "requestsEnabled") rsMusicSetRequestsEnabled(value == "true" || value == "1");
+			else if (key == "queueLimit") rsMusicSetMaxQueueTotal(value.toInt());
+			else if (key == "userLimit") rsMusicSetMaxPerUser(value.toInt());
+			else if (key == "maxTrackMinutes") rsMusicSetMaxTrackLengthSec(value.toInt() * 60);
+			return;
+		}
+		if (command != "CREATE_CAPTURE") return;
+		obs_source_t *source = obs_get_source_by_name("Music Capture");
+		if (!source) {
+			obs_source_t *sceneSource = obs_frontend_get_current_scene(); obs_scene_t *scene = sceneSource ? obs_scene_from_source(sceneSource) : nullptr;
+			source = obs_source_create("wasapi_process_output_capture", "Music Capture", nullptr, nullptr);
+			if (source && scene) obs_scene_add(scene, source);
+			if (sceneSource) obs_source_release(sceneSource);
+		}
+		if (source) { obs_frontend_open_source_properties(source); obs_source_release(source); }
+	});
 	m_youtubeResolver = new RsMusicYouTubeResolver(this);
 	QSettings settings("RearSilver", "RearSilver-Stream-Suite");
 	m_localLibrary = settings.value("music/local/library").toStringList();
@@ -40,13 +62,7 @@ RsMusicController::RsMusicController(RsMusicState *state, QObject *parent) : QOb
 		}
 	});
 	connect(&RsMusicLocalPlayer::instance(), &RsMusicLocalPlayer::playbackEnded, this, [this]() {
-		if (m_state && currentTrackIsLocal())
-			playNextLocalTrack();
-		else if (m_state && currentTrackUsesCompanion() &&
-			 m_state->currentTrack().provider != RsMusicProvider::YouTube) {
-			m_state->setPlaybackStatus(RsMusicState::PlaybackStatus::Stopped);
-			m_state->clearCurrentTrack();
-		}
+		// Automatic advancement is owned by the Suite Media Player.
 	});
 	connect(&RsMusicLocalPlayer::instance(), &RsMusicLocalPlayer::playbackProgress, this,
 		[this](qint64 positionMs, qint64 durationMs) {
@@ -71,11 +87,13 @@ RsMusicController::RsMusicController(RsMusicState *state, QObject *parent) : QOb
 			auto trackFromJson = [](const QJsonObject &value) {
 				RsMusicTrack track;
 				track.trackId = value.value("id").toString();
-				track.provider = RsMusicProvider::YouTube;
+				track.provider = value.value("provider").toString() == "local" ? RsMusicProvider::LocalFile : RsMusicProvider::YouTube;
 				track.providerTrackId = value.value("providerId").toString();
-				track.providerUri = QString("https://www.youtube.com/watch?v=%1").arg(track.providerTrackId);
+				track.providerUri = track.provider == RsMusicProvider::LocalFile ? track.providerTrackId :
+					QString("https://www.youtube.com/watch?v=%1").arg(track.providerTrackId);
 				track.title = value.value("title").toString();
 				track.artist = value.value("artist").toString();
+				track.album = value.value("album").toString();
 				track.artworkUri = value.value("artworkUrl").toString();
 				track.requestedBy = value.value("requestedBy").toString();
 				track.durationSeconds = value.value("durationSeconds").toInt();
@@ -89,15 +107,17 @@ RsMusicController::RsMusicController(RsMusicState *state, QObject *parent) : QOb
 				if (!changed && m_state->currentTrack().artworkUri.startsWith("file:", Qt::CaseInsensitive))
 					track.artworkUri = m_state->currentTrack().artworkUri;
 				m_state->setCurrentTrack(track);
-				if (changed) hydrateCurrentYouTubeArtwork(track);
+				if (changed && track.provider == RsMusicProvider::YouTube) hydrateCurrentYouTubeArtwork(track);
 			}
 			else m_state->clearCurrentTrack();
 			QVector<RsMusicTrack> queue;
 			for (const QJsonValue &value : root.value("queue").toArray())
 				if (value.isObject()) queue.append(trackFromJson(value.toObject()));
 			m_state->setQueue(queue);
-			m_state->setActiveProvider(RsMusicProvider::YouTube);
-			m_state->setPlaylistLabel(root.value("fallbackLabel").toString("YouTube fallback"));
+			const bool localSource = root.value("activeSource").toString() == "local";
+			m_state->setActiveProvider(localSource ? RsMusicProvider::LocalFile : RsMusicProvider::YouTube);
+			m_state->setPlaylistLabel(localSource ? "Local files" : root.value("fallbackLabel").toString("YouTube fallback"));
+			m_state->setRequestsEnabled(localSource ? false : rsMusicRequestsEnabled());
 			m_state->setPlaybackProgress(root.value("positionMs").toVariant().toLongLong(),
 				root.value("durationMs").toVariant().toLongLong());
 			const QString status = root.value("status").toString();
@@ -191,10 +211,6 @@ void RsMusicController::actionRestart()
 
 void RsMusicController::actionSkip(const QString &source)
 {
-	if (currentTrackIsLocal()) {
-		playNextLocalTrack();
-		return;
-	}
 	if (currentTrackUsesCompanion()) {
 		RsMusicLocalPlayer::instance().skip();
 		return;
@@ -237,17 +253,6 @@ bool RsMusicController::actionPlayYouTubeVideo(const QString &url)
 	m_state->setRequestsEnabled(true);
 	rsMusicSetRequestsEnabled(true);
 	return true;
-}
-
-void RsMusicController::actionImportYouTubePlaylist(const QString &url)
-{
-	if (url.trimmed().isEmpty()) {
-		emit youtubePlaylistError("Enter a YouTube or YouTube Music playlist URL.");
-		return;
-	}
-	RsMusicLocalPlayer::instance().importYouTubePlaylist(url.trimmed());
-	QSettings("RearSilver", "RearSilver-Stream-Suite").setValue("music/youtube/fallbackPlaylistUrl", url.trimmed());
-	emit youtubePlaylistImported(0, "Import sent to Suite Media Player");
 }
 
 bool RsMusicController::playScheduledTrack(const RsMusicTrack &track)
@@ -321,7 +326,7 @@ void RsMusicController::refreshYouTubeCaptureSource()
 
 void RsMusicController::actionPrevious()
 {
-	if (m_state && m_state->hasCurrentTrack() && m_state->currentTrack().provider == RsMusicProvider::YouTube) {
+	if (currentTrackUsesCompanion()) {
 		RsMusicLocalPlayer::instance().previous(); return;
 	}
 	if (!currentTrackIsLocal() || m_localLibrary.isEmpty()) return;

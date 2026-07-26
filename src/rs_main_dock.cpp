@@ -517,7 +517,8 @@ m_stack = new RsCurrentSizeStack();
 // SPLITTER
 	m_splitter = new QSplitter(Qt::Vertical);
 	m_splitter->setChildrenCollapsible(false);
-	m_splitter->setMinimumWidth(350);
+	// Keep all three primary navigation tabs fully readable at the dock's narrowest size.
+	m_splitter->setMinimumWidth(370);
 
 	// Top container exists (required by rs_layout.cpp)
 	m_topContainer = new QWidget();

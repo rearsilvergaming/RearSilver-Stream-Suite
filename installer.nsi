@@ -17,14 +17,14 @@ Name "RearSilver Stream Suite"
 ; ----------------------------------------
 ; Output + Icons (ORDER MATTERS)
 ; ----------------------------------------
-!define MUI_ICON "installer.ico"
+!define MUI_ICON "assets\branding\rearsilver-stream-suite.ico"
 
 ; Top header (right-side header area)
 !define MUI_HEADERIMAGE
-!define MUI_HEADERIMAGE_BITMAP "installer_header.bmp"
+!define MUI_HEADERIMAGE_BITMAP "assets\branding\installer-header.bmp"
 
 ; Left-side big image (Welcome + Finish)
-!define MUI_WELCOMEFINISHPAGE_BITMAP "welcome_banner.bmp"
+!define MUI_WELCOMEFINISHPAGE_BITMAP "assets\branding\installer-welcome.bmp"
 ; Optional (uncomment if you don’t want it stretched/cropped)
 ; !define MUI_WELCOMEFINISHPAGE_BITMAP_NOSTRETCH
 

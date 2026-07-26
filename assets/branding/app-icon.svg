@@ -1,0 +1,75 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg id="App_Icon" data-name="App Icon" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 1000 1000">
+  <defs>
+    <style>
+      .cls-1 {
+        stroke: #00d4ff;
+      }
+
+      .cls-1, .cls-2 {
+        fill: none;
+        stroke-miterlimit: 10;
+        stroke-width: 25.71px;
+      }
+
+      .cls-2 {
+        stroke: url(#Silver);
+      }
+
+      .cls-3 {
+        fill: #0b0f14;
+      }
+
+      .cls-3, .cls-4, .cls-5, .cls-6, .cls-7 {
+        stroke-width: 0px;
+      }
+
+      .cls-4 {
+        fill: url(#radial-gradient-2);
+      }
+
+      .cls-5 {
+        fill: url(#radial-gradient);
+      }
+
+      .cls-6 {
+        fill: #00d0f9;
+      }
+
+      .cls-7 {
+        fill: url(#radial-gradient-3);
+      }
+    </style>
+    <linearGradient id="Silver" x1="200.91" y1="845.83" x2="718.05" y2="328.69" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#e5e2df"/>
+      <stop offset="0" stop-color="#ded9d6"/>
+      <stop offset=".06" stop-color="#cfcac8"/>
+      <stop offset=".18" stop-color="#a8a4a6"/>
+      <stop offset=".26" stop-color="#8b878d"/>
+      <stop offset=".52" stop-color="#f3f4f4"/>
+      <stop offset=".58" stop-color="#e4e5e5"/>
+      <stop offset=".7" stop-color="#bfbec0"/>
+      <stop offset=".86" stop-color="#847f84"/>
+      <stop offset=".88" stop-color="#807b80"/>
+      <stop offset="1" stop-color="#d1d3d4"/>
+      <stop offset="1" stop-color="#a7a9ac"/>
+    </linearGradient>
+    <radialGradient id="radial-gradient" cx="681.58" cy="278.5" fx="681.58" fy="278.5" r="73.99" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#00d4ff"/>
+      <stop offset=".5" stop-color="#fff"/>
+      <stop offset="1" stop-color="#00d4ff"/>
+    </radialGradient>
+    <radialGradient id="radial-gradient-2" cx="722.72" cy="242.5" fx="722.72" fy="242.5" r="73.99" xlink:href="#radial-gradient"/>
+    <radialGradient id="radial-gradient-3" cx="763.87" cy="206.5" fx="763.87" fy="206.5" r="73.99" xlink:href="#radial-gradient"/>
+  </defs>
+  <rect class="cls-3" x="50" y="50" width="900" height="900" rx="200.66" ry="200.66"/>
+  <g>
+    <path class="cls-2" d="M240.56,859.77v-322.79h284.64c38.73,0,70.13-31.4,70.13-70.13v-45.38c0-38.73-31.4-70.13-70.13-70.13H240.56v-97.97h325.89c77.46,0,140.26,62.79,140.26,140.26v128.91c0,59.64-48.65,107.83-108.29,107.26h0s132.01,229.98,132.01,229.98h-128.91l-109.32-229.98h-150.57v229.98h-101.07Z"/>
+    <path class="cls-5" d="M607.59,212.23c18.39-3.23,37.87-1.17,55.99,5.08,18.14,6.27,34.94,16.86,48.63,30.55,13.71,13.68,24.29,30.48,30.57,48.63,6.25,18.13,8.31,37.61,5.06,56-1.7-9.18-3.7-18.06-6.41-26.63-2.68-8.57-5.95-16.84-9.86-24.73-7.77-15.79-18.01-30.08-30.27-42.37-12.28-12.27-26.57-22.52-42.36-30.29-7.89-3.91-16.16-7.18-24.73-9.86-8.58-2.7-17.46-4.7-26.63-6.39Z"/>
+    <path class="cls-4" d="M648.74,176.23c18.39-3.23,37.87-1.17,55.99,5.08,18.14,6.27,34.94,16.86,48.63,30.55,13.71,13.68,24.29,30.48,30.57,48.63,6.25,18.13,8.31,37.61,5.06,56-1.7-9.18-3.7-18.06-6.41-26.63-2.68-8.57-5.95-16.84-9.86-24.73-7.77-15.79-18.01-30.08-30.27-42.37-12.28-12.27-26.57-22.52-42.36-30.29-7.89-3.91-16.16-7.18-24.73-9.86-8.58-2.7-17.46-4.7-26.63-6.39Z"/>
+    <path class="cls-7" d="M689.88,140.23c18.39-3.23,37.87-1.17,55.99,5.08,18.14,6.27,34.94,16.86,48.63,30.55,13.71,13.68,24.29,30.48,30.57,48.63,6.25,18.13,8.31,37.61,5.06,56-1.7-9.18-3.7-18.06-6.41-26.63-2.68-8.57-5.95-16.84-9.86-24.73-7.77-15.79-18.01-30.08-30.27-42.37-12.28-12.27-26.57-22.52-42.36-30.29-7.89-3.91-16.16-7.18-24.73-9.86-8.58-2.7-17.46-4.7-26.63-6.39Z"/>
+    <polygon class="cls-6" points="862.29 458.08 750.66 393.63 750.66 522.53 862.29 458.08"/>
+    <line class="cls-1" x1="655.28" y1="522.53" x2="655.28" y2="393.63"/>
+    <line class="cls-1" x1="706.71" y1="522.53" x2="706.71" y2="393.63"/>
+  </g>
+</svg>

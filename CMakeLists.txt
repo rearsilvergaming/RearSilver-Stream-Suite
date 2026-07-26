@@ -36,7 +36,7 @@ if(WIN32)
 		CXX_STANDARD 17 CXX_STANDARD_REQUIRED YES
 		MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 	add_executable(RearSilver-Music-Player WIN32 src/music_player/main.cpp src/music_player/music_hub.cpp
-		src/music_player/youtube_resolver.cpp src/music_player/app.rc)
+		src/music_player/youtube_resolver.cpp src/music_player/local_library.cpp src/music_player/app.rc)
 	target_include_directories(RearSilver-Music-Player PRIVATE
 		"${CMAKE_CURRENT_SOURCE_DIR}/third_party/miniaudio"
 		"${CMAKE_CURRENT_SOURCE_DIR}/third_party/webview2/include"
@@ -67,6 +67,33 @@ if(WIN32)
 		COMMAND "${CMAKE_COMMAND}" -E copy_if_different
 			"${CMAKE_CURRENT_SOURCE_DIR}/src/rs_music/rs_music_player.html"
 			"$<TARGET_FILE_DIR:RearSilver-Music-Player>/youtube-player.html"
+		COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+			"${CMAKE_CURRENT_SOURCE_DIR}/src/music_player/overlay-designer.html"
+			"$<TARGET_FILE_DIR:RearSilver-Music-Player>/overlay-designer.html"
+		COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+			"${CMAKE_CURRENT_SOURCE_DIR}/src/music_player/library.html"
+			"$<TARGET_FILE_DIR:RearSilver-Music-Player>/library.html"
+		COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+			"${CMAKE_CURRENT_SOURCE_DIR}/src/music_player/settings.html"
+			"$<TARGET_FILE_DIR:RearSilver-Music-Player>/settings.html"
+		COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+			"${CMAKE_CURRENT_SOURCE_DIR}/assets/music/music-fallback-vinyl.png"
+			"$<TARGET_FILE_DIR:RearSilver-Music-Player>/music-fallback-vinyl.png"
+		COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+			"${CMAKE_CURRENT_SOURCE_DIR}/assets/branding/app-icon.png"
+			"$<TARGET_FILE_DIR:RearSilver-Music-Player>/suite-app-icon.png"
+		COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+			"${CMAKE_CURRENT_SOURCE_DIR}/assets/branding/header-wide.png"
+			"$<TARGET_FILE_DIR:RearSilver-Music-Player>/suite-header.png"
+		COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+			"${CMAKE_CURRENT_SOURCE_DIR}/assets/branding/splash.png"
+			"$<TARGET_FILE_DIR:RearSilver-Music-Player>/suite-splash.png"
+		COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+			"${CMAKE_CURRENT_SOURCE_DIR}/assets/fonts/Sora-Variable.ttf"
+			"$<TARGET_FILE_DIR:RearSilver-Music-Player>/Sora-Variable.ttf"
+		COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+			"${CMAKE_CURRENT_SOURCE_DIR}/assets/fonts/Sora-OFL.txt"
+			"$<TARGET_FILE_DIR:RearSilver-Music-Player>/Sora-OFL.txt"
 		COMMAND "${CMAKE_COMMAND}" -E copy_directory
 			"${RS_CEF_RUNTIME_ROOT}/runtimes/win-x64/native"
 			"$<TARGET_FILE_DIR:RearSilver-Music-Player>"
@@ -173,8 +200,6 @@ add_library(${PROJECT_NAME} MODULE
     src/rs_music/ui/rs_music_queue.hpp
     src/rs_music/ui/rs_music_requests.cpp
     src/rs_music/ui/rs_music_requests.hpp
-    src/rs_music/ui/rs_music_playlist.cpp
-    src/rs_music/ui/rs_music_playlist.hpp
     src/rs_music/ui/rs_music_settings.cpp
     src/rs_music/ui/rs_music_settings.hpp
 	 src/rs_music/ui/rs_music_setup.cpp

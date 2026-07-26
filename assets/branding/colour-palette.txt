@@ -1,0 +1,7 @@
+Deep Graphite #0b0f14
+Midnight Grey #111821
+Slate #1e2430
+Silver White #e6e8eb
+Stream Cyan #00d4ff
+Signal Blue #0a8cff
+Accent Gold #ffb800

@@ -128,7 +128,6 @@ void RsMainDock::createSidebarMenus()
 		makeButton("Now Playing", "Current track and playback controls", "media-playback-start", "🎵");
 	m_btnMusicQueue = makeButton("Queue", "Upcoming requests and order", "view-list-details", "📜");
 	m_btnMusicRequests = makeButton("Requests", "Request rules and toggles", "emblem-favorite", "🎫");
-	m_btnMusicPlaylist = makeButton("Playlist", "Fallback playlist settings", "folder-music", "🎧");
 	m_btnMusicSettings = makeButton("Settings", "Music system configuration", "preferences-system", "⚙");
 	m_btnMusicSetup = makeButton("Setup", "Audio capture and player setup", "configure", "🔧");
 	m_btnMusicOverlay = makeButton("Overlay", "On-stream music overlay designer", "applications-graphics", "🖼");
@@ -138,18 +137,15 @@ void RsMainDock::createSidebarMenus()
 	m_musicMenuLayout->addWidget(m_btnMusicQueue, 0, 1);
 
 	m_musicMenuLayout->addWidget(m_btnMusicRequests, 1, 0);
-	m_musicMenuLayout->addWidget(m_btnMusicPlaylist, 1, 1);
-
-	m_musicMenuLayout->addWidget(m_btnMusicSettings, 2, 0);
-	m_musicMenuLayout->addWidget(m_btnMusicSetup, 2, 1);
-	m_musicMenuLayout->addWidget(m_btnMusicOverlay, 3, 0);
+	m_musicMenuLayout->addWidget(m_btnMusicSettings, 1, 1);
+	m_musicMenuLayout->addWidget(m_btnMusicSetup, 2, 0);
+	m_musicMenuLayout->addWidget(m_btnMusicOverlay, 2, 1);
 
 	m_musicMenuLayout->setColumnStretch(0, 1);
 	m_musicMenuLayout->setColumnStretch(1, 1);
 	m_musicMenuLayout->setRowStretch(0, 0);
 	m_musicMenuLayout->setRowStretch(1, 0);
 	m_musicMenuLayout->setRowStretch(2, 0);
-	m_musicMenuLayout->setRowStretch(3, 0);
 
 	m_musicMenu->setMinimumWidth(300);
 
@@ -169,7 +165,6 @@ void RsMainDock::createSidebarMenus()
 	connect(m_btnMusicNowPlaying, &QToolButton::clicked, this, &RsMainDock::showMusicNowPlaying);
 	connect(m_btnMusicQueue, &QToolButton::clicked, this, &RsMainDock::showMusicQueue);
 	connect(m_btnMusicRequests, &QToolButton::clicked, this, &RsMainDock::showMusicRequests);
-	connect(m_btnMusicPlaylist, &QToolButton::clicked, this, &RsMainDock::showMusicPlaylist);
 	connect(m_btnMusicSettings, &QToolButton::clicked, this, &RsMainDock::showMusicSettings);
 	connect(m_btnMusicSetup, &QToolButton::clicked, this, &RsMainDock::showMusicSetup);
 	connect(m_btnMusicOverlay, &QToolButton::clicked, this, &RsMainDock::showMusicOverlay);

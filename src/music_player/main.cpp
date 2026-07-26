@@ -1,6 +1,7 @@
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
 #include <windows.h>
+#include <shellapi.h>
 #include <objidl.h>
 #include <gdiplus.h>
 #include <wrl.h>
@@ -25,6 +26,7 @@
 #include "include/cef_parser.h"
 #include "include/cef_task.h"
 #include "music_hub.hpp"
+#include "local_library.hpp"
 #include "youtube_resolver.hpp"
 
 #define MINIAUDIO_IMPLEMENTATION
@@ -49,16 +51,36 @@ using Microsoft::WRL::Callback;
 using Microsoft::WRL::ComPtr;
 
 static bool g_sidebarCollapsed = false;
-static int sidebarWidthFor(int clientWidth) { return (g_sidebarCollapsed || clientWidth < 820) ? 104 : 220; }
+static std::unique_ptr<Image> g_brandIconImage;
+static std::unique_ptr<Image> g_brandHeaderImage;
+static std::unique_ptr<Image> g_splashImage;
+static int sidebarWidthFor(int clientWidth) { return (g_sidebarCollapsed || clientWidth < 820) ? 120 : 232; }
 struct QueueItem { std::wstring title, artist, source; int durationSeconds = 0; bool current = false; };
 static std::vector<QueueItem> g_queue;
 static MusicHubModel g_hub;
 static HWND g_playlistEdit = nullptr, g_importPlaylistButton = nullptr;
+static HWND g_addFilesButton = nullptr, g_addFolderButton = nullptr, g_useLocalButton = nullptr,
+	g_useYouTubeButton = nullptr, g_clearLocalButton = nullptr;
+static HWND g_overlayCustomTextEdit = nullptr;
+static HWND g_overlayFontCombo = nullptr;
+static HWND g_overlayStyleEdits[8]{};
+static HBRUSH g_controlBackgroundBrush = nullptr;
+static HFONT g_controlFont = nullptr;
+static int g_overlaySection = 0;
 static std::wstring g_libraryStatus = L"Paste a YouTube or YouTube Music playlist URL to import it into the Suite Media Player.";
 static constexpr UINT WM_HUB_PLAYLIST_RESULT = WM_APP + 40;
 static constexpr UINT WM_HUB_REQUEST_RESULT = WM_APP + 41;
 static constexpr int ID_IMPORT_PLAYLIST = 4101;
+static constexpr int ID_ADD_LOCAL_FILES = 4102, ID_ADD_LOCAL_FOLDER = 4103, ID_USE_LOCAL = 4104,
+	ID_USE_YOUTUBE = 4105, ID_CLEAR_LOCAL = 4106;
+static constexpr int ID_OVERLAY_CUSTOM_TEXT = 4110;
+static constexpr int ID_OVERLAY_FONT = 4120;
+static constexpr int ID_OVERLAY_TITLE_SIZE = 4121, ID_OVERLAY_BODY_SIZE = 4122,
+	ID_OVERLAY_OPACITY = 4123, ID_OVERLAY_BACKGROUND_COLOUR = 4124, ID_OVERLAY_TEXT_COLOUR = 4125,
+	ID_OVERLAY_ACCENT_COLOUR = 4126, ID_OVERLAY_WIDTH = 4127, ID_OVERLAY_HEIGHT = 4128;
 static int g_queuePage = 0;
+static std::mutex g_hostEventMutex;
+static std::vector<std::string> g_hostEvents;
 static RECT g_queuePreviousPage{}, g_queueNextPage{}, g_queueShuffle{};
 
 class SuiteCefApp final : public CefApp, public CefBrowserProcessHandler {
@@ -95,6 +117,14 @@ static std::string wideToUtf8(const std::wstring &value)
 	std::string result(size_t(count), '\0');
 	WideCharToMultiByte(CP_UTF8, 0, value.data(), int(value.size()), result.data(), count, nullptr, nullptr);
 	return result;
+}
+
+static std::wstring executableAssetPath(const wchar_t *name)
+{
+	wchar_t executable[MAX_PATH]{}; GetModuleFileNameW(nullptr, executable, MAX_PATH);
+	std::wstring path(executable); const size_t separator = path.find_last_of(L"\\/");
+	if (separator != std::wstring::npos) path.resize(separator + 1); else path.clear();
+	path += name; return path;
 }
 
 class WebViewYouTubePlayer {
@@ -758,18 +788,35 @@ static void syncHubQueueView()
 	}
 	for (const HubTrack &track : g_hub.playbackOrder())
 		g_queue.push_back({utf8ToWide(track.title), utf8ToWide(track.artist),
-			track.request ? L"Request" : L"Fallback playlist", track.durationSeconds, false});
+			track.request ? L"Request" : (track.provider == "local" ? L"Local library" : L"Fallback playlist"), track.durationSeconds, false});
 }
 
 static void saveHubState();
 
+static std::string playerFallbackArtwork()
+{
+	return wideToUtf8(executableAssetPath(L"music-fallback-vinyl.png"));
+}
+
+static void writeTextOutput(const HubTrack &track);
+
 static bool startHubTrack(const HubTrack &track, bool record = true)
 {
 	if (track.providerId.empty()) return false;
-	if (g_player) g_player->suspend();
 	if (record) g_hub.recordStarted(track);
-	g_youtubePlayer->load(track.providerId);
+	if (track.provider == "local") {
+		if (g_youtubePlayer) { g_youtubePlayer->command("STOP"); g_youtubePlayer->hide(); }
+		if (!g_player) return false;
+		g_player->setMetadata(track.title + "\t" + track.artist + "\t" + track.album + "\t" +
+			(track.artworkUrl.empty() ? playerFallbackArtwork() : track.artworkUrl));
+		const std::string result = g_player->command("LOAD\t" + track.providerId);
+		if (result.rfind("ERROR\t", 0) == 0) return false;
+	} else {
+		if (g_player) g_player->suspend();
+		g_youtubePlayer->load(track.providerId);
+	}
 	g_queuePage = 0; syncHubQueueView();
+	writeTextOutput(track);
 	return true;
 }
 
@@ -800,33 +847,56 @@ static void loadHubState()
 	if (!input) return; const std::string json((std::istreambuf_iterator<char>(input)), {});
 	CefRefPtr<CefValue> root = CefParseJSON(json, JSON_PARSER_RFC);
 	if (!root || root->GetType() != VTYPE_DICTIONARY) return;
-	CefRefPtr<CefDictionaryValue> object = root->GetDictionary(); CefRefPtr<CefListValue> queue = object->GetList("queue");
-	std::vector<HubTrack> fallback;
-	if (queue) for (size_t i = 0; i < queue->GetSize(); ++i) {
-		CefRefPtr<CefDictionaryValue> value = queue->GetDictionary(i); if (!value || value->GetBool("request")) continue;
-		HubTrack track; track.id = value->GetString("id").ToString(); track.providerId = value->GetString("providerId").ToString();
-		track.title = value->GetString("title").ToString(); track.artist = value->GetString("artist").ToString();
-		track.artworkUrl = value->GetString("artworkUrl").ToString(); track.durationSeconds = value->GetInt("durationSeconds");
-		if (!track.providerId.empty()) fallback.push_back(std::move(track));
+	CefRefPtr<CefDictionaryValue> object = root->GetDictionary();
+	auto readTracks = [](CefRefPtr<CefListValue> list) {
+		std::vector<HubTrack> tracks; if (!list) return tracks;
+		for (size_t i = 0; i < list->GetSize(); ++i) {
+			CefRefPtr<CefDictionaryValue> value = list->GetDictionary(i); if (!value) continue;
+			HubTrack track; track.id = value->GetString("id").ToString(); track.providerId = value->GetString("providerId").ToString();
+			track.provider = value->GetString("provider").ToString(); if (track.provider.empty()) track.provider = "youtube";
+			track.title = value->GetString("title").ToString(); track.artist = value->GetString("artist").ToString();
+			track.album = value->GetString("album").ToString(); track.artworkUrl = value->GetString("artworkUrl").ToString();
+			track.requestedBy = value->GetString("requestedBy").ToString(); track.durationSeconds = value->GetInt("durationSeconds");
+			if (!track.providerId.empty()) tracks.push_back(std::move(track));
+		} return tracks;
+	};
+	std::vector<HubTrack> youtube = readTracks(object->GetList("youtubeLibrary"));
+	if (youtube.empty()) {
+		for (HubTrack &track : readTracks(object->GetList("queue"))) if (track.provider != "local") youtube.push_back(std::move(track));
 	}
-	if (!fallback.empty()) {
-		g_hub.replaceFallback(std::move(fallback), object->GetString("fallbackLabel").ToString(), object->GetString("fallbackUrl").ToString());
-		syncHubQueueView(); g_libraryStatus = L"Restored the saved fallback playlist.";
-	}
+	g_hub.replaceFallback(std::move(youtube), object->GetString("fallbackLabel").ToString(), object->GetString("fallbackUrl").ToString());
+	g_hub.replaceLocalLibrary(readTracks(object->GetList("localLibrary")));
+	g_hub.activateSource(object->GetString("activeSource").ToString());
+	syncHubQueueView(); g_libraryStatus = L"Restored the saved YouTube and local libraries.";
 }
 
 static void positionLibraryControls(HWND window)
 {
 	if (!g_playlistEdit || !g_importPlaylistButton) return;
 	RECT client{}; GetClientRect(window, &client);
-	const bool visible = g_page == 2;
-	ShowWindow(g_playlistEdit, visible ? SW_SHOW : SW_HIDE);
-	ShowWindow(g_importPlaylistButton, visible ? SW_SHOW : SW_HIDE);
+	const bool visible = false;
+	ShowWindow(g_playlistEdit, SW_HIDE);
+	for (HWND control : {g_importPlaylistButton, g_addFilesButton, g_addFolderButton, g_useLocalButton, g_useYouTubeButton, g_clearLocalButton})
+		ShowWindow(control, SW_HIDE);
 	if (!visible) return;
 	const int sidebar = sidebarWidthFor(client.right);
 	const int x = sidebar + 56, width = std::max(240, int(client.right) - x - 56);
 	MoveWindow(g_playlistEdit, x, 205, width, 34, TRUE);
 	MoveWindow(g_importPlaylistButton, x, 249, std::min(260, width), 36, TRUE);
+	const int half = std::max(120, (width - 12) / 2);
+	MoveWindow(g_addFilesButton, x, 440, half, 36, TRUE); MoveWindow(g_addFolderButton, x + half + 12, 440, half, 36, TRUE);
+	MoveWindow(g_useLocalButton, x, 486, half, 36, TRUE); MoveWindow(g_useYouTubeButton, x + half + 12, 486, half, 36, TRUE);
+	MoveWindow(g_clearLocalButton, x, 532, std::min(260, width), 36, TRUE);
+}
+
+static void updateOverlayDesignerSurface();
+
+static void positionOverlayControls(HWND window)
+{
+	if (!g_overlayCustomTextEdit) return;
+	ShowWindow(g_overlayCustomTextEdit, SW_HIDE); ShowWindow(g_overlayFontCombo, SW_HIDE);
+	for (HWND edit : g_overlayStyleEdits) ShowWindow(edit, SW_HIDE);
+	updateOverlayDesignerSurface();
 }
 
 static std::wstring clockText(float seconds)
@@ -837,6 +907,153 @@ static std::wstring clockText(float seconds)
 
 static RECT g_transportButtons[5]{};
 static RECT g_sidebarToggle{};
+static RECT g_overlayOptions[10]{};
+static RECT g_overlayReset{};
+static RECT g_overlayTabs[2]{};
+static RECT g_overlayStyleOptions[10]{};
+
+static constexpr const wchar_t *kOverlayRegistry =
+	L"Software\\RearSilver\\RearSilver-Stream-Suite\\music\\overlay\\main";
+static constexpr const wchar_t *kMusicSettingsRegistry = L"Software\\RearSilver\\RearSilver-Stream-Suite\\music";
+
+static std::wstring musicSetting(const wchar_t *name,const wchar_t *fallback){HKEY key{};if(RegOpenKeyExW(HKEY_CURRENT_USER,kMusicSettingsRegistry,0,KEY_READ,&key)!=ERROR_SUCCESS)return fallback;wchar_t value[1024]{};DWORD type=0,bytes=sizeof(value);const LSTATUS result=RegQueryValueExW(key,name,nullptr,&type,reinterpret_cast<BYTE*>(value),&bytes);RegCloseKey(key);return result==ERROR_SUCCESS&&type==REG_SZ?value:fallback;}
+static void setMusicSetting(const wchar_t *name,const std::wstring &value){HKEY key{};DWORD d=0;if(RegCreateKeyExW(HKEY_CURRENT_USER,kMusicSettingsRegistry,0,nullptr,0,KEY_WRITE,nullptr,&key,&d)!=ERROR_SUCCESS)return;RegSetValueExW(key,name,0,REG_SZ,reinterpret_cast<const BYTE*>(value.c_str()),DWORD((value.size()+1)*sizeof(wchar_t)));RegCloseKey(key);}
+static bool musicBool(const wchar_t *name,bool fallback){const auto value=musicSetting(name,fallback?L"true":L"false");return value==L"true"||value==L"1";}
+static std::wstring textOutputFolder(){wchar_t appData[MAX_PATH]{};GetEnvironmentVariableW(L"APPDATA",appData,MAX_PATH);std::wstring folder=std::wstring(appData)+L"\\RearSilver Stream Suite";CreateDirectoryW(folder.c_str(),nullptr);return folder;}
+static std::wstring textOutputPath(){return textOutputFolder()+L"\\now-playing.txt";}
+static void ensureTextOutputFile(){const std::wstring path=textOutputPath();if(GetFileAttributesW(path.c_str())==INVALID_FILE_ATTRIBUTES){std::ofstream output(path,std::ios::binary);}}
+static void writeTextOutput(const HubTrack &track){if(!musicBool(L"textOutputEnabled",false))return;std::wstring value=musicSetting(L"textOutputFormat",L"{{title}} — {{artist}} — Requested by {{user}}");auto replace=[&](const std::wstring&token,const std::string&text){size_t p=0;const std::wstring w=utf8ToWide(text);while((p=value.find(token,p))!=std::wstring::npos){value.replace(p,token.size(),w);p+=w.size();}};replace(L"{{title}}",track.title);replace(L"{{artist}}",track.artist);replace(L"{{album}}",track.album);replace(L"{{user}}",track.requestedBy);if(value.empty()||value.back()!=L' ')value.push_back(L' ');std::ofstream out(textOutputPath(),std::ios::binary|std::ios::trunc);if(out)out<<wideToUtf8(value);}
+
+static std::wstring overlaySetting(const wchar_t *name, const wchar_t *fallback)
+{
+	HKEY key{}; if (RegOpenKeyExW(HKEY_CURRENT_USER, kOverlayRegistry, 0, KEY_READ, &key) != ERROR_SUCCESS) return fallback;
+	wchar_t value[512]{}; DWORD type = 0, bytes = sizeof(value);
+	const LSTATUS result = RegQueryValueExW(key, name, nullptr, &type, reinterpret_cast<BYTE *>(value), &bytes);
+	RegCloseKey(key); return result == ERROR_SUCCESS && (type == REG_SZ || type == REG_EXPAND_SZ) ? value : fallback;
+}
+
+static bool overlayBool(const wchar_t *name, bool fallback)
+{
+	const std::wstring value = overlaySetting(name, fallback ? L"true" : L"false");
+	return value == L"true" || value == L"1";
+}
+
+static void setOverlaySetting(const wchar_t *name, const std::wstring &value)
+{
+	HKEY key{}; DWORD disposition = 0;
+	if (RegCreateKeyExW(HKEY_CURRENT_USER, kOverlayRegistry, 0, nullptr, 0, KEY_WRITE, nullptr, &key, &disposition) != ERROR_SUCCESS) return;
+	RegSetValueExW(key, name, 0, REG_SZ, reinterpret_cast<const BYTE *>(value.c_str()), DWORD((value.size() + 1) * sizeof(wchar_t)));
+	RegCloseKey(key);
+}
+
+static void toggleOverlaySetting(const wchar_t *name, bool fallback)
+{
+	setOverlaySetting(name, overlayBool(name, fallback) ? L"false" : L"true");
+}
+
+static DWORD overlayNumber(const wchar_t *name, DWORD fallback)
+{
+	HKEY key{}; if (RegOpenKeyExW(HKEY_CURRENT_USER, kOverlayRegistry, 0, KEY_READ, &key) != ERROR_SUCCESS) return fallback;
+	DWORD value = fallback, type = 0, bytes = sizeof(value);
+	if (RegQueryValueExW(key, name, nullptr, &type, reinterpret_cast<BYTE *>(&value), &bytes) != ERROR_SUCCESS || type != REG_DWORD) value = fallback;
+	RegCloseKey(key); return value;
+}
+
+static void setOverlayNumber(const wchar_t *name, DWORD value)
+{
+	HKEY key{}; DWORD disposition = 0;
+	if (RegCreateKeyExW(HKEY_CURRENT_USER, kOverlayRegistry, 0, nullptr, 0, KEY_WRITE, nullptr, &key, &disposition) != ERROR_SUCCESS) return;
+	RegSetValueExW(key, name, 0, REG_DWORD, reinterpret_cast<const BYTE *>(&value), sizeof(value)); RegCloseKey(key);
+}
+
+class OverlayDesignerSurface {
+public:
+	void initialise(HWND parent)
+	{
+		m_parent = parent;
+		wchar_t localAppData[MAX_PATH]{}; GetEnvironmentVariableW(L"LOCALAPPDATA", localAppData, MAX_PATH);
+		const std::wstring suiteData = std::wstring(localAppData) + L"\\RearSilver Stream Suite"; CreateDirectoryW(suiteData.c_str(), nullptr);
+		const std::wstring webData = suiteData + L"\\OverlayDesignerWebView2"; CreateDirectoryW(webData.c_str(), nullptr);
+		std::wstring folder = executableAssetPath(L""); if (!folder.empty() && (folder.back() == L'\\' || folder.back() == L'/')) folder.pop_back();
+		CreateCoreWebView2EnvironmentWithOptions(nullptr, webData.c_str(), nullptr,
+			Callback<ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler>([this, folder](HRESULT result, ICoreWebView2Environment *environment) -> HRESULT {
+				if (FAILED(result) || !environment) return result;
+				return environment->CreateCoreWebView2Controller(m_parent,
+					Callback<ICoreWebView2CreateCoreWebView2ControllerCompletedHandler>([this, folder](HRESULT controllerResult, ICoreWebView2Controller *controller) -> HRESULT {
+						if (FAILED(controllerResult) || !controller) return controllerResult;
+						m_controller = controller; m_controller->get_CoreWebView2(&m_webView);
+						ComPtr<ICoreWebView2_3> webView3; if (SUCCEEDED(m_webView.As(&webView3))) webView3->SetVirtualHostNameToFolderMapping(L"rearsilver.local", folder.c_str(), COREWEBVIEW2_HOST_RESOURCE_ACCESS_KIND_ALLOW);
+						ComPtr<ICoreWebView2Settings> settings; if (SUCCEEDED(m_webView->get_Settings(&settings))) { settings->put_AreDefaultContextMenusEnabled(FALSE); settings->put_AreDevToolsEnabled(FALSE); settings->put_IsZoomControlEnabled(FALSE); }
+						EventRegistrationToken token{}; m_webView->add_WebMessageReceived(
+							Callback<ICoreWebView2WebMessageReceivedEventHandler>([this](ICoreWebView2 *, ICoreWebView2WebMessageReceivedEventArgs *args) -> HRESULT {
+								wchar_t *raw = nullptr; if (FAILED(args->TryGetWebMessageAsString(&raw)) || !raw) return S_OK;
+								const std::string message = wideToUtf8(raw); CoTaskMemFree(raw);
+								if (message == "ready") { m_ready = true; sendConfig(); return S_OK; }
+								if (message == "library-ready") { m_ready = true; sendLibraryConfig(); return S_OK; }
+								if (message == "settings-ready") { m_ready = true; sendSettingsConfig(); return S_OK; }
+								CefRefPtr<CefValue> parsed = CefParseJSON(message, JSON_PARSER_RFC); if (!parsed || parsed->GetType() != VTYPE_DICTIONARY) return S_OK;
+								CefRefPtr<CefDictionaryValue> object = parsed->GetDictionary();
+								if (object->GetString("page").ToString() == "library") {
+									const std::string action = object->GetString("action").ToString();
+									if (action == "import") { const std::wstring value=utf8ToWide(object->GetString("value").ToString()); SetWindowTextW(g_playlistEdit,value.c_str()); SendMessageW(m_parent,WM_COMMAND,MAKEWPARAM(ID_IMPORT_PLAYLIST,BN_CLICKED),reinterpret_cast<LPARAM>(g_importPlaylistButton)); }
+									else { int id=action=="addFiles"?ID_ADD_LOCAL_FILES:action=="addFolder"?ID_ADD_LOCAL_FOLDER:action=="useLocal"?ID_USE_LOCAL:action=="useYouTube"?ID_USE_YOUTUBE:action=="clearLocal"?ID_CLEAR_LOCAL:0; if(id) SendMessageW(m_parent,WM_COMMAND,MAKEWPARAM(id,BN_CLICKED),0); }
+									sendLibraryConfig(); return S_OK;
+								}
+								if(object->GetString("page").ToString()=="settings"){
+									const std::string action=object->GetString("action").ToString();
+									if(action=="set"){const std::string rawKey=object->GetString("key").ToString();const std::wstring key=utf8ToWide(rawKey);std::wstring value;if(object->GetType("value")==VTYPE_BOOL)value=object->GetBool("value")?L"true":L"false";else if(object->GetType("value")==VTYPE_INT)value=std::to_wstring(object->GetInt("value"));else value=utf8ToWide(object->GetString("value").ToString());const wchar_t *storedKey=key.c_str();if(rawKey=="queueLimit")storedKey=L"maxQueueTotal";else if(rawKey=="userLimit")storedKey=L"maxPerUser";else if(rawKey=="maxTrackMinutes")storedKey=L"maxTrackLengthMinutes";setMusicSetting(storedKey,value);if(rawKey=="textOutputEnabled"&&(value==L"true"||value==L"1"))ensureTextOutputFile();if(rawKey=="nonRequestLabel"){g_hub.setNonRequestLabel(wideToUtf8(value));writeTextOutput(g_hub.current());saveHubState();}if(rawKey=="requestsEnabled"||rawKey=="queueLimit"||rawKey=="userLimit"||rawKey=="maxTrackMinutes"){std::lock_guard<std::mutex>lock(g_hostEventMutex);g_hostEvents.push_back("HOST\tSETTING\t"+rawKey+"\t"+wideToUtf8(value)+"\n");}}
+									else if(action=="createCapture"){std::lock_guard<std::mutex>lock(g_hostEventMutex);g_hostEvents.push_back("HOST\tCREATE_CAPTURE\n");}
+									else if(action=="openOutputFolder")ShellExecuteW(m_parent,L"open",textOutputFolder().c_str(),nullptr,nullptr,SW_SHOWNORMAL);
+									sendSettingsConfig();return S_OK;
+								}
+								if (object->GetString("action").ToString() == "reset") { RegDeleteTreeW(HKEY_CURRENT_USER, kOverlayRegistry); sendConfig(); return S_OK; }
+								const std::string key = object->GetString("key").ToString(), type = object->GetString("type").ToString();
+								static const std::vector<std::string> allowed = {"showArtwork","showTitle","showArtist","showAlbum","showRequester","showProgress","artworkBackground","backgroundTransparent","showCustomText","artworkPosition","timingMode","fontFamily","customText","backgroundColour","textColour","accentColour","titleSize","bodySize","backgroundOpacity","width","height"};
+								if (std::find(allowed.begin(), allowed.end(), key) == allowed.end()) return S_OK;
+								const std::wstring wideKey = utf8ToWide(key);
+								if (type == "number") { int value = object->GetInt("value"), minimum = 0, maximum = 100; if (key == "titleSize") { minimum = 8; maximum = 240; } else if (key == "bodySize") { minimum = 6; maximum = 160; } else if (key == "width") { minimum = 240; maximum = 3840; } else if (key == "height") { minimum = 100; maximum = 2160; } setOverlayNumber(wideKey.c_str(), DWORD(std::clamp(value, minimum, maximum))); }
+								else if (type == "bool") setOverlaySetting(wideKey.c_str(), object->GetBool("value") ? L"true" : L"false");
+								else { const std::wstring value = utf8ToWide(object->GetString("value").ToString()); if ((key == "backgroundColour" || key == "textColour" || key == "accentColour") && !validColour(value)) return S_OK; setOverlaySetting(wideKey.c_str(), value); }
+								return S_OK;
+							}).Get(), &token);
+						resize(); m_controller->put_IsVisible(FALSE); m_page=3; m_webView->Navigate(L"https://rearsilver.local/overlay-designer.html"); return S_OK;
+					}).Get());
+			}).Get());
+	}
+	void showPage(int page) { const bool visible=page>=2&&page<=4; if (visible && page!=m_page && m_webView) { m_page=page; m_ready=false; injectPage(page==2?L"library.html":page==3?L"overlay-designer.html":L"settings.html"); } if (m_controller) { resize(); m_controller->put_IsVisible(visible?TRUE:FALSE); } if (visible && m_ready) { if(page==2) sendLibraryConfig(); else if(page==3)sendConfig();else sendSettingsConfig(); } }
+	void refresh() { if(m_page==2) sendLibraryConfig(); else if(m_page==3) sendConfig(); else if(m_page==4)sendSettingsConfig(); }
+	void resize() { if (!m_controller || !m_parent) return; RECT client{}; GetClientRect(m_parent, &client); const int sidebar = sidebarWidthFor(client.right); RECT bounds{sidebar + 16, 100, std::max(sidebar + 17, int(client.right) - 16), std::max(101, int(client.bottom) - 112)}; m_controller->put_Bounds(bounds); }
+private:
+	static bool validColour(const std::wstring &value) { return value.size() == 7 && value[0] == L'#' && std::all_of(value.begin() + 1, value.end(), [](wchar_t c) { return iswxdigit(c) != 0; }); }
+	void injectPage(const wchar_t *name) {
+		if(!m_webView)return; std::ifstream input(executableAssetPath(name),std::ios::binary); if(!input){m_webView->Navigate((std::wstring(L"https://rearsilver.local/")+name).c_str());return;} const std::string html((std::istreambuf_iterator<char>(input)),{}); CefRefPtr<CefValue> value=CefValue::Create(); value->SetString(html); const std::wstring literal=utf8ToWide(CefWriteJSON(value,JSON_WRITER_DEFAULT).ToString()); const std::wstring script=L"document.open();document.write("+literal+L");document.close();"; m_webView->ExecuteScript(script.c_str(),nullptr);
+	}
+	void sendConfig() {
+		if (!m_ready || !m_webView) return; CefRefPtr<CefDictionaryValue> d = CefDictionaryValue::Create();
+		auto boolean=[&](const char *key,bool fallback){const std::wstring k=utf8ToWide(key);d->SetBool(key,overlayBool(k.c_str(),fallback));}; auto string=[&](const char *key,const wchar_t *fallback){const std::wstring k=utf8ToWide(key);d->SetString(key,wideToUtf8(overlaySetting(k.c_str(),fallback)));}; auto number=[&](const char *key,int fallback){const std::wstring k=utf8ToWide(key);d->SetInt(key,int(overlayNumber(k.c_str(),DWORD(fallback))));};
+		boolean("showArtwork",true); boolean("showTitle",true); boolean("showArtist",true); boolean("showAlbum",true); boolean("showRequester",true); boolean("showProgress",true); boolean("artworkBackground",false); boolean("backgroundTransparent",false);
+		string("artworkPosition",L"left"); string("timingMode",L"elapsedTotal"); string("fontFamily",L"Sora"); string("customText",L""); string("backgroundColour",L"#0b0f14"); string("textColour",L"#e6e8eb"); string("accentColour",L"#00d4ff"); number("titleSize",34); number("bodySize",20); number("backgroundOpacity",82); number("width",800); number("height",240);
+		CefRefPtr<CefValue> root=CefValue::Create(); root->SetDictionary(d); const std::wstring script=L"window.rsApplyConfig("+utf8ToWide(CefWriteJSON(root,JSON_WRITER_DEFAULT).ToString())+L")"; m_webView->ExecuteScript(script.c_str(),nullptr);
+	}
+	void sendLibraryConfig() {
+		if(!m_ready||!m_webView||m_page!=2)return; CefRefPtr<CefDictionaryValue>d=CefDictionaryValue::Create(); d->SetString("url",g_hub.fallbackUrl()); d->SetString("status",wideToUtf8(g_libraryStatus)); d->SetString("label",g_hub.fallbackLabel()); d->SetInt("youtubeCount",int(g_hub.youtubeFallback().size())); d->SetInt("requestCount",int(g_hub.requests().size())); d->SetInt("localCount",int(g_hub.localLibrary().size())); d->SetString("source",g_hub.activeSource()); CefRefPtr<CefValue>root=CefValue::Create();root->SetDictionary(d);const std::wstring script=L"window.rsApplyLibrary("+utf8ToWide(CefWriteJSON(root,JSON_WRITER_DEFAULT).ToString())+L")";m_webView->ExecuteScript(script.c_str(),nullptr);
+	}
+	void sendSettingsConfig(){if(!m_ready||!m_webView||m_page!=4)return;CefRefPtr<CefDictionaryValue>d=CefDictionaryValue::Create();auto b=[&](const char*k,bool f){const auto w=utf8ToWide(k);d->SetBool(k,musicBool(w.c_str(),f));};auto s=[&](const char*k,const wchar_t*f){const auto w=utf8ToWide(k);d->SetString(k,wideToUtf8(musicSetting(w.c_str(),f)));};auto n=[&](const char*k,const wchar_t*stored,int f){d->SetInt(k,_wtoi(musicSetting(stored,std::to_wstring(f).c_str()).c_str()));};b("requestsEnabled",true);b("playlistOnly",false);b("preventDuplicates",true);b("textOutputEnabled",false);s("minimumRole",L"everyone");s("exemptRole",L"moderator");s("nonRequestLabel",L"Stream DJ");s("textOutputFormat",L"{{title}} - {{artist}} - Requested by {{user}}");n("queueLimit",L"maxQueueTotal",50);n("userLimit",L"maxPerUser",2);n("maxTrackMinutes",L"maxTrackLengthMinutes",10);d->SetString("outputPath",wideToUtf8(textOutputPath()));d->SetString("captureStatus","Checks for Music Capture, creates it if missing, then opens its properties.");CefRefPtr<CefValue>root=CefValue::Create();root->SetDictionary(d);m_webView->ExecuteScript((L"window.rsApplySettings("+utf8ToWide(CefWriteJSON(root,JSON_WRITER_DEFAULT).ToString())+L")").c_str(),nullptr);}
+	HWND m_parent=nullptr; ComPtr<ICoreWebView2Controller> m_controller; ComPtr<ICoreWebView2> m_webView; bool m_ready=false; int m_page=-1;
+};
+
+static std::unique_ptr<OverlayDesignerSurface> g_overlayDesigner;
+
+static void updateOverlayDesignerSurface()
+{
+	if (g_overlayDesigner) { g_overlayDesigner->resize(); g_overlayDesigner->showPage(g_page); }
+}
+
+static std::wstring cycleValue(const std::wstring &current, const std::vector<std::wstring> &values)
+{
+	auto found = std::find(values.begin(), values.end(), current);
+	return found == values.end() || ++found == values.end() ? values.front() : *found;
+}
 
 static void roundedPanel(Graphics &graphics, const RectF &rect, float radius, const Color &colour)
 {
@@ -863,11 +1080,27 @@ static void label(Graphics &graphics, const std::wstring &text, Font &font, cons
 	graphics.DrawString(text.c_str(), -1, &font, rect, &format, &brush);
 }
 
+static void drawBrandedButton(const DRAWITEMSTRUCT &item)
+{
+	Graphics graphics(item.hDC); graphics.SetSmoothingMode(SmoothingModeHighQuality);
+	const bool pressed = (item.itemState & ODS_SELECTED) != 0;
+	const bool disabled = (item.itemState & ODS_DISABLED) != 0;
+	const bool selected = (item.CtlID == ID_USE_LOCAL && g_hub.activeSource() == "local") ||
+		(item.CtlID == ID_USE_YOUTUBE && g_hub.activeSource() == "youtube");
+	const Color fill = pressed ? Color(255, 0, 118, 148) : (selected ? Color(255, 0, 74, 92) : Color(255, 30, 36, 48));
+	roundedPanel(graphics, RectF(float(item.rcItem.left), float(item.rcItem.top), float(item.rcItem.right-item.rcItem.left), float(item.rcItem.bottom-item.rcItem.top)), 7.0f, fill);
+	Pen border(selected ? Color(255, 0, 212, 255) : Color(255, 55, 70, 91), selected ? 1.5f : 1.0f);
+	graphics.DrawRectangle(&border, RectF(float(item.rcItem.left)+0.5f, float(item.rcItem.top)+0.5f, float(item.rcItem.right-item.rcItem.left)-1.0f, float(item.rcItem.bottom-item.rcItem.top)-1.0f));
+	wchar_t text[256]{}; GetWindowTextW(item.hwndItem, text, 256); FontFamily family(L"Sora"); Font font(&family, 14, FontStyleBold, UnitPixel);
+	label(graphics, text, font, RectF(float(item.rcItem.left)+12, float(item.rcItem.top), float(item.rcItem.right-item.rcItem.left)-24, float(item.rcItem.bottom-item.rcItem.top)), disabled ? Color(255, 93, 111, 139) : Color(255, 230, 232, 235), StringAlignmentCenter);
+}
+
 static LRESULT CALLBACK legacyWindowProc(HWND window, UINT message, WPARAM wParam, LPARAM lParam)
 {
 	if (message == WM_CLOSE) { g_closeRequested = true; return 0; }
 	if (message == WM_SIZE) {
 		if (g_youtubePlayer) g_youtubePlayer->resize();
+		if (g_overlayDesigner) g_overlayDesigner->resize();
 		return 0;
 	}
 	if (message == WM_ERASEBKGND) return 1;
@@ -887,8 +1120,8 @@ static LRESULT CALLBACK legacyWindowProc(HWND window, UINT message, WPARAM wPara
 		HGDIOBJ previousBitmap = SelectObject(bufferDc, bufferBitmap);
 		SetViewportOrgEx(bufferDc, -paint.rcPaint.left, -paint.rcPaint.top, nullptr);
 		Graphics graphics(bufferDc); graphics.SetSmoothingMode(SmoothingModeHighQuality); graphics.Clear(Color(255, 12, 12, 18));
-		SolidBrush white(Color(255, 245, 245, 248)), muted(Color(255, 175, 175, 188)), accent(Color(255, 143, 61, 242));
-		FontFamily family(L"Segoe UI"); Font titleFont(&family, 22, FontStyleBold, UnitPixel), bodyFont(&family, 16, FontStyleRegular, UnitPixel), smallFont(&family, 13, FontStyleRegular, UnitPixel);
+		SolidBrush white(Color(255, 230, 232, 235)), muted(Color(255, 164, 175, 194)), accent(Color(255, 0, 212, 255));
+		FontFamily family(L"Sora"); Font titleFont(&family, 22, FontStyleBold, UnitPixel), bodyFont(&family, 16, FontStyleRegular, UnitPixel), smallFont(&family, 13, FontStyleRegular, UnitPixel);
 		const int width = client.right - client.left, artSize = std::min(width - 48, 360), artX = (width - artSize) / 2, artY = 24;
 		if (g_player && g_player->artwork() && g_player->artwork()->GetLastStatus() == Ok)
 			graphics.DrawImage(g_player->artwork(), artX, artY, artSize, artSize);
@@ -919,15 +1152,71 @@ static LRESULT CALLBACK legacyWindowProc(HWND window, UINT message, WPARAM wPara
 static LRESULT CALLBACK windowProc(HWND window, UINT message, WPARAM wParam, LPARAM lParam)
 {
 	if (message == WM_CLOSE) { g_closeRequested = true; return 0; }
+	if (message == WM_DRAWITEM) {
+		auto *item = reinterpret_cast<DRAWITEMSTRUCT *>(lParam);
+		if (item && item->CtlType == ODT_BUTTON && item->CtlID >= ID_IMPORT_PLAYLIST && item->CtlID <= ID_CLEAR_LOCAL) { drawBrandedButton(*item); return TRUE; }
+	}
+	if (message == WM_CTLCOLOREDIT) {
+		SetTextColor(reinterpret_cast<HDC>(wParam), RGB(230, 232, 235)); SetBkColor(reinterpret_cast<HDC>(wParam), RGB(17, 24, 33));
+		return reinterpret_cast<LRESULT>(g_controlBackgroundBrush);
+	}
+	if (message == WM_COMMAND && LOWORD(wParam) == ID_OVERLAY_CUSTOM_TEXT && HIWORD(wParam) == EN_CHANGE && g_overlayCustomTextEdit) {
+		wchar_t text[512]{}; GetWindowTextW(g_overlayCustomTextEdit, text, 512); setOverlaySetting(L"customText", text);
+		setOverlaySetting(L"showCustomText", text[0] ? L"true" : L"false"); return 0;
+	}
+	if (message == WM_COMMAND && LOWORD(wParam) == ID_OVERLAY_FONT && HIWORD(wParam) == CBN_SELCHANGE && g_overlayFontCombo) {
+		wchar_t text[128]{}; GetWindowTextW(g_overlayFontCombo, text, 128); setOverlaySetting(L"fontFamily", text); InvalidateRect(window,nullptr,FALSE); return 0;
+	}
+	if (message == WM_COMMAND && LOWORD(wParam) >= ID_OVERLAY_TITLE_SIZE && LOWORD(wParam) <= ID_OVERLAY_HEIGHT && HIWORD(wParam) == EN_CHANGE) {
+		const int index = LOWORD(wParam) - ID_OVERLAY_TITLE_SIZE; wchar_t text[64]{}; GetWindowTextW(g_overlayStyleEdits[index], text, 64);
+		const wchar_t *keys[] = {L"titleSize",L"bodySize",L"backgroundOpacity",L"backgroundColour",L"textColour",L"accentColour",L"width",L"height"};
+		if (index == 3 || index == 4 || index == 5) {
+			const size_t length=wcslen(text); if(text[0]==L'#' && (length==4 || length==7 || length==9)) setOverlaySetting(keys[index],text);
+		} else if (text[0]) {
+			wchar_t *end=nullptr; const unsigned long value=wcstoul(text,&end,10);
+			if(end && *end==L'\0' && value>0 && (index!=2 || value<=100)) setOverlayNumber(keys[index],DWORD(value));
+		}
+		InvalidateRect(window,nullptr,FALSE); return 0;
+	}
+	if (message == WM_COMMAND && HIWORD(wParam) == BN_CLICKED && LOWORD(wParam) >= ID_ADD_LOCAL_FILES && LOWORD(wParam) <= ID_CLEAR_LOCAL) {
+		const int action = LOWORD(wParam);
+		if (action == ID_CLEAR_LOCAL) {
+			if (g_hub.activeSource() == "local") { if (g_player) g_player->command("STOP"); g_hub.clearCurrent(); }
+			g_hub.clearLocalLibrary(); g_libraryStatus = L"Local library cleared.";
+		} else if (action == ID_USE_LOCAL || action == ID_USE_YOUTUBE) {
+			const std::string source = action == ID_USE_LOCAL ? "local" : "youtube";
+			if (source == "local" && g_hub.localLibrary().empty()) g_libraryStatus = L"Add local files or a folder before selecting Local files.";
+			else if (source == "youtube" && g_hub.youtubeFallback().empty()) g_libraryStatus = L"Import a YouTube fallback playlist before selecting YouTube.";
+			else {
+				if (g_player) g_player->command("STOP"); if (g_youtubePlayer) { g_youtubePlayer->command("STOP"); g_youtubePlayer->hide(); }
+				g_hub.activateSource(source); syncHubQueueView(); playHubNext();
+				g_libraryStatus = source == "local" ? L"Local files are now the active music source. Chat requests are unavailable." : L"YouTube is now the active music source.";
+			}
+		} else {
+			std::vector<HubTrack> imported;
+			if (action == ID_ADD_LOCAL_FILES) imported = scanLocalAudioFiles(chooseLocalAudioFiles(window));
+			else { const std::wstring folder = chooseLocalAudioFolder(window); if (!folder.empty()) imported = scanLocalAudioFolder(folder); }
+			if (!imported.empty()) {
+				std::vector<HubTrack> library = g_hub.localLibrary();
+				for (HubTrack &track : imported) {
+					const auto found = std::find_if(library.begin(), library.end(), [&](const HubTrack &item) { return item.providerId == track.providerId; });
+					if (found == library.end()) library.push_back(std::move(track));
+				}
+				g_hub.replaceLocalLibrary(std::move(library));
+				g_libraryStatus = L"Added " + std::to_wstring(imported.size()) + L" local track(s).";
+			}
+		}
+		g_queuePage = 0; syncHubQueueView(); saveHubState(); if(g_overlayDesigner)g_overlayDesigner->refresh(); InvalidateRect(window, nullptr, FALSE); return 0;
+	}
 	if (message == WM_COMMAND && LOWORD(wParam) == ID_IMPORT_PLAYLIST && HIWORD(wParam) == BN_CLICKED) {
 		const int length = GetWindowTextLengthW(g_playlistEdit);
 		std::wstring value(size_t(length + 1), L'\0');
 		if (length > 0) GetWindowTextW(g_playlistEdit, value.data(), length + 1);
 		value.resize(size_t(length));
 		const std::string url = wideToUtf8(value);
-		if (url.empty()) { g_libraryStatus = L"Enter a playlist URL first."; InvalidateRect(window, nullptr, FALSE); return 0; }
+		if (url.empty()) { g_libraryStatus = L"Enter a playlist URL first."; if(g_overlayDesigner)g_overlayDesigner->refresh(); InvalidateRect(window, nullptr, FALSE); return 0; }
 		g_libraryStatus = L"Importing playlist into the Suite Media Player...";
-		EnableWindow(g_importPlaylistButton, FALSE); InvalidateRect(window, nullptr, FALSE);
+		EnableWindow(g_importPlaylistButton, FALSE); if(g_overlayDesigner)g_overlayDesigner->refresh(); InvalidateRect(window, nullptr, FALSE);
 		std::thread([window, url] {
 			auto *result = new HubPlaylistResult(resolveHubPlaylist(url));
 			if (!PostMessageW(window, WM_HUB_PLAYLIST_RESULT, 0, reinterpret_cast<LPARAM>(result))) delete result;
@@ -946,7 +1235,7 @@ static LRESULT CALLBACK windowProc(HWND window, UINT message, WPARAM wParam, LPA
 			g_libraryStatus = L"Imported " + std::to_wstring(count) + L" tracks. The player now owns this fallback playlist.";
 			if (!g_hub.hasCurrent()) playHubNext(); else saveHubState();
 		}
-		InvalidateRect(window, nullptr, FALSE); return 0;
+		if(g_overlayDesigner)g_overlayDesigner->refresh(); InvalidateRect(window, nullptr, FALSE); return 0;
 	}
 	if (message == WM_HUB_REQUEST_RESULT) {
 		std::unique_ptr<HubSearchResult> result(reinterpret_cast<HubSearchResult *>(lParam));
@@ -966,6 +1255,7 @@ static LRESULT CALLBACK windowProc(HWND window, UINT message, WPARAM wParam, LPA
 	if (message == WM_SIZE) {
 		if (g_youtubePlayer) g_youtubePlayer->resize();
 		positionLibraryControls(window);
+		positionOverlayControls(window);
 		InvalidateRect(window, nullptr, FALSE);
 		return 0;
 	}
@@ -993,6 +1283,7 @@ static LRESULT CALLBACK windowProc(HWND window, UINT message, WPARAM wParam, LPA
 		if (PtInRect(&g_sidebarToggle, point)) {
 			g_sidebarCollapsed = !g_sidebarCollapsed;
 			if (g_youtubePlayer) g_youtubePlayer->resize();
+			if (g_overlayDesigner) g_overlayDesigner->resize();
 			InvalidateRect(window, nullptr, FALSE);
 			return 0;
 		}
@@ -1002,10 +1293,37 @@ static LRESULT CALLBACK windowProc(HWND window, UINT message, WPARAM wParam, LPA
 			g_hub.shuffleFallback(); g_queuePage = 0; syncHubQueueView(); saveHubState();
 			InvalidateRect(window, nullptr, FALSE); return 0;
 		}
+		if (g_page == 3) {
+			for (int i = 0; i < 2; ++i) if (PtInRect(&g_overlayTabs[i], point)) {
+				g_overlaySection = i; positionOverlayControls(window); InvalidateRect(window, nullptr, FALSE); return 0;
+			}
+			if (g_overlaySection == 1) {
+				return 0;
+			}
+			const wchar_t *boolKeys[] = {L"showArtwork", L"showTitle", L"showArtist", L"showAlbum", L"showRequester", L"showProgress"};
+			for (int i = 0; i < 6; ++i) if (PtInRect(&g_overlayOptions[i], point)) {
+				toggleOverlaySetting(boolKeys[i], i != 4); InvalidateRect(window, nullptr, FALSE); return 0;
+			}
+			if (PtInRect(&g_overlayOptions[6], point)) {
+				setOverlaySetting(L"artworkPosition", overlaySetting(L"artworkPosition", L"left") == L"left" ? L"right" : L"left");
+				InvalidateRect(window, nullptr, FALSE); return 0;
+			}
+			if (PtInRect(&g_overlayOptions[7], point)) {
+				const std::wstring current = overlaySetting(L"timingMode", L"elapsedTotal");
+				setOverlaySetting(L"timingMode", current == L"elapsedTotal" ? L"remaining" : (current == L"remaining" ? L"none" : L"elapsedTotal"));
+				InvalidateRect(window, nullptr, FALSE); return 0;
+			}
+			if (PtInRect(&g_overlayOptions[8], point)) { toggleOverlaySetting(L"artworkBackground", false); InvalidateRect(window, nullptr, FALSE); return 0; }
+			if (PtInRect(&g_overlayOptions[9], point)) { toggleOverlaySetting(L"backgroundTransparent", false); InvalidateRect(window, nullptr, FALSE); return 0; }
+			if (PtInRect(&g_overlayReset, point)) {
+				RegDeleteTreeW(HKEY_CURRENT_USER, kOverlayRegistry); if(g_overlayCustomTextEdit) SetWindowTextW(g_overlayCustomTextEdit,L""); InvalidateRect(window, nullptr, FALSE); return 0;
+			}
+		}
 		const int navStart = 104;
 		if (point.x < sidebar && point.y >= navStart && point.y < navStart + 260) {
 			g_page = std::clamp((static_cast<int>(point.y) - navStart) / 52, 0, 4);
 			positionLibraryControls(window);
+			positionOverlayControls(window);
 			if (g_youtubePlayer && g_youtubePlayer->active())
 				g_youtubePlayer->resize();
 			InvalidateRect(window, nullptr, FALSE);
@@ -1024,7 +1342,7 @@ static LRESULT CALLBACK windowProc(HWND window, UINT message, WPARAM wParam, LPA
 			if (displayIndex == 0 && g_hub.hasCurrent()) g_youtubePlayer->command("RESTART");
 			else {
 				const size_t playbackIndex = displayIndex - (g_hub.hasCurrent() ? 1u : 0u);
-				HubTrack selected; if (g_hub.trackAt(playbackIndex, selected)) startHubTrack(selected);
+				HubTrack selected; if (g_hub.selectAt(playbackIndex, selected)) { startHubTrack(selected); saveHubState(); }
 			}
 			InvalidateRect(window, nullptr, FALSE);
 		}
@@ -1060,12 +1378,12 @@ static LRESULT CALLBACK windowProc(HWND window, UINT message, WPARAM wParam, LPA
 	Graphics graphics(bufferDc);
 	graphics.SetSmoothingMode(SmoothingModeAntiAlias);
 	graphics.SetTextRenderingHint(TextRenderingHintClearTypeGridFit);
-	graphics.Clear(Color(255, 9, 14, 23));
+	graphics.Clear(Color(255, 11, 15, 20));
 
-	const Color primary(255, 241, 244, 249), secondary(255, 164, 175, 194), tertiary(255, 105, 120, 143);
-	const Color accent(255, 139, 86, 246), accentSoft(72, 139, 86, 246);
-	const Color surface(255, 18, 26, 39), raised(255, 24, 34, 50), border(255, 40, 52, 70);
-	FontFamily family(L"Segoe UI");
+	const Color primary(255, 230, 232, 235), secondary(255, 178, 189, 204), tertiary(255, 112, 130, 151);
+	const Color accent(255, 0, 212, 255), accentSoft(56, 0, 212, 255), signalBlue(255, 10, 140, 255), gold(255, 255, 184, 0);
+	const Color surface(255, 17, 24, 33), raised(255, 30, 36, 48), border(255, 48, 59, 74);
+	FontFamily family(L"Sora");
 	Font display(&family, 28, FontStyleBold, UnitPixel), heading(&family, 20, FontStyleBold, UnitPixel);
 	Font body(&family, 15, FontStyleRegular, UnitPixel), bodyBold(&family, 15, FontStyleBold, UnitPixel);
 	Font smallFont(&family, 12, FontStyleRegular, UnitPixel);
@@ -1074,17 +1392,19 @@ static LRESULT CALLBACK windowProc(HWND window, UINT message, WPARAM wParam, LPA
 	const bool expanded = sidebar > 150;
 	const int transportTop = std::max(400, height - 106);
 
-	SolidBrush sidebarBrush(Color(255, 12, 19, 30));
+	SolidBrush sidebarBrush(Color(255, 8, 14, 22));
 	graphics.FillRectangle(&sidebarBrush, 0, 0, sidebar, height);
 	roundedPanel(graphics, RectF(14, 16, float(sidebar - 28), 62), 12, raised);
-	label(graphics, L"RS", heading, RectF(expanded ? 22.0f : 15.0f, 18, expanded ? 44.0f : 48.0f, 58), accent, StringAlignmentCenter);
-	g_sidebarToggle = expanded ? RECT{sidebar - 34, 31, sidebar - 8, 57} : RECT{64, 31, 90, 57};
+	if (expanded && g_brandHeaderImage && g_brandHeaderImage->GetLastStatus() == Ok) {
+		graphics.DrawImage(g_brandHeaderImage.get(), 20.0f, 21.0f, 168.0f, 52.5f);
+	} else if (g_brandIconImage && g_brandIconImage->GetLastStatus() == Ok) {
+		graphics.DrawImage(g_brandIconImage.get(), 22.0f, 24.0f, 46.0f, 46.0f);
+	} else {
+		label(graphics, L"RS", heading, RectF(20.0f, 18, 48.0f, 58), accent, StringAlignmentCenter);
+	}
+	g_sidebarToggle = expanded ? RECT{194, 31, 220, 57} : RECT{78, 31, 104, 57};
 	label(graphics, expanded ? L"\u2039" : L"\u203A", heading,
 		RectF(float(g_sidebarToggle.left), float(g_sidebarToggle.top), 26, 26), secondary, StringAlignmentCenter);
-	if (expanded) {
-		label(graphics, L"RearSilver", bodyBold, RectF(68, 23, 132, 25), primary);
-		label(graphics, L"STREAM SUITE", smallFont, RectF(68, 46, 132, 20), tertiary);
-	}
 	const wchar_t *pages[] = {L"Now Playing", L"Queue & Requests", L"Library", L"Overlay Designer", L"Settings"};
 	const wchar_t *icons[] = {L"\u25B6", L"\u2261", L"\u266B", L"\u25C7", L"\u2699"};
 	const float navStart = 104.0f;
@@ -1099,7 +1419,7 @@ static LRESULT CALLBACK windowProc(HWND window, UINT message, WPARAM wParam, LPA
 	}
 	if (expanded) {
 		roundedPanel(graphics, RectF(20, float(height - 58), 44, 24), 7, accentSoft);
-		label(graphics, L"PRO", smallFont, RectF(20, float(height - 58), 44, 24), accent, StringAlignmentCenter);
+		label(graphics, L"PRO", smallFont, RectF(20, float(height - 58), 44, 24), gold, StringAlignmentCenter);
 		label(graphics, L"Media Player", smallFont, RectF(72, float(height - 58), 128, 24), tertiary);
 	}
 
@@ -1133,10 +1453,22 @@ static LRESULT CALLBACK windowProc(HWND window, UINT message, WPARAM wParam, LPA
 		label(graphics, L"Queue & Requests", bodyBold, RectF(infoX + 14, queueY + 27, infoWidth - 28, 26), primary);
 		SolidBrush divider(border);
 		graphics.FillRectangle(&divider, infoX + 14, queueY + 57, infoWidth - 28, 1.0f);
-		label(graphics, L"No tracks queued", body, RectF(infoX + 14, queueY + 65, infoWidth - 28, 26), secondary);
-		if (queueHeight > 125)
-			label(graphics, L"Song requests will appear here first", smallFont,
+		const std::vector<HubTrack> upcoming = g_hub.playbackOrder();
+		if (!upcoming.empty()) {
+			const HubTrack &next = upcoming.front();
+			label(graphics, utf8ToWide(next.title), bodyBold, RectF(infoX + 14, queueY + 65, infoWidth - 28, 26), primary);
+			if (queueHeight > 125) {
+				std::wstring detail = utf8ToWide(next.artist);
+				if (!detail.empty()) detail += L"  |  ";
+				detail += next.request ? L"Requested by " + utf8ToWide(next.requestedBy) :
+					(next.provider == "local" ? L"Local library" : L"Fallback playlist");
+				label(graphics, detail, smallFont, RectF(infoX + 14, queueY + 91, infoWidth - 28, 24), tertiary);
+			}
+		} else {
+			label(graphics, L"No tracks queued", body, RectF(infoX + 14, queueY + 65, infoWidth - 28, 26), secondary);
+			if (queueHeight > 125) label(graphics, L"Add music from the Library page", smallFont,
 				RectF(infoX + 14, queueY + 91, infoWidth - 28, 24), tertiary);
+		}
 	} else if (g_page == 1) {
 		const float panelY = 108, panelHeight = float(transportTop - 130);
 		roundedPanel(graphics, RectF(contentX, panelY, contentWidth, panelHeight), 16, surface);
@@ -1183,9 +1515,41 @@ static LRESULT CALLBACK windowProc(HWND window, UINT message, WPARAM wParam, LPA
 		const std::wstring playlistName = utf8ToWide(g_hub.fallbackLabel());
 		if (!playlistName.empty()) label(graphics, L"Current: " + playlistName, bodyBold,
 			RectF(contentX + 28, 350, contentWidth - 56, 28), primary);
-		label(graphics, std::to_wstring(g_hub.fallback().size()) + L" fallback tracks  |  " +
+		label(graphics, std::to_wstring(g_hub.youtubeFallback().size()) + L" YouTube tracks  |  " +
 			std::to_wstring(g_hub.requests().size()) + L" requests", body,
 			RectF(contentX + 28, 382, contentWidth - 56, 28), secondary);
+		label(graphics, L"Local music library", heading, RectF(contentX + 28, 404, contentWidth - 56, 34), primary);
+		label(graphics, std::to_wstring(g_hub.localLibrary().size()) + L" local tracks  |  Active source: " + utf8ToWide(g_hub.activeSource()),
+			body, RectF(contentX + 28, 568, contentWidth - 56, 28), secondary);
+	} else if (g_page == 3) {
+		const float panelY = 108, panelHeight = float(transportTop - 130);
+		roundedPanel(graphics, RectF(contentX, panelY, contentWidth, panelHeight), 16, surface);
+		const float tabWidth = std::min(210.0f, (contentWidth - 72) / 2);
+		for (int i=0;i<2;++i) { const float x=contentX+24+i*(tabWidth+12); g_overlayTabs[i]=RECT{int(x),126,int(x+tabWidth),164}; roundedPanel(graphics,RectF(x,126,tabWidth,38),8,i==g_overlaySection?accentSoft:raised); }
+		label(graphics,L"Content",bodyBold,RectF(float(g_overlayTabs[0].left),126,tabWidth,38),g_overlaySection==0?accent:secondary,StringAlignmentCenter);
+		label(graphics,L"Style & Canvas",bodyBold,RectF(float(g_overlayTabs[1].left),126,tabWidth,38),g_overlaySection==1?accent:secondary,StringAlignmentCenter);
+		label(graphics, L"Changes save instantly and update the live OBS overlay.", body, RectF(contentX + 28, 170, contentWidth - 56, 28), secondary);
+		if (g_overlaySection == 0) {
+			const wchar_t *names[] = {L"Artwork",L"Track title",L"Artist",L"Album",L"Requested by",L"Progress bar"};
+			const wchar_t *keys[] = {L"showArtwork",L"showTitle",L"showArtist",L"showAlbum",L"showRequester",L"showProgress"};
+			for(int i=0;i<6;++i){const int column=i%2,row=i/2;const float cardWidth=(contentWidth-72)/2,x=contentX+24+column*(cardWidth+24),y=204.0f+row*50.0f;g_overlayOptions[i]=RECT{int(x),int(y),int(x+cardWidth),int(y+40)};roundedPanel(graphics,RectF(x,y,cardWidth,40),8,raised);const bool enabled=overlayBool(keys[i],i!=4);label(graphics,enabled?L"✓":L"○",bodyBold,RectF(x+10,y,28,40),enabled?accent:tertiary,StringAlignmentCenter);label(graphics,names[i],body,RectF(x+44,y,cardWidth-54,40),enabled?primary:tertiary);}
+			const float optionY=362.0f;
+			for(int i=6;i<10;++i){const int column=(i-6)%2,row=(i-6)/2;const float cardWidth=(contentWidth-72)/2,x=contentX+24+column*(cardWidth+24),y=optionY+row*50;g_overlayOptions[i]=RECT{int(x),int(y),int(x+cardWidth),int(y+40)};roundedPanel(graphics,RectF(x,y,cardWidth,40),8,raised);}
+			const std::wstring artworkSide=overlaySetting(L"artworkPosition",L"left"),timingMode=overlaySetting(L"timingMode",L"elapsedTotal");
+			label(graphics,std::wstring(L"Artwork: ")+artworkSide,body,RectF(float(g_overlayOptions[6].left+14),optionY,220,40),primary);label(graphics,std::wstring(L"Timing: ")+(timingMode==L"remaining"?L"remaining":(timingMode==L"none"?L"hidden":L"elapsed / total")),body,RectF(float(g_overlayOptions[7].left+14),optionY,250,40),primary);
+			const bool artBackground=overlayBool(L"artworkBackground",false),transparent=overlayBool(L"backgroundTransparent",false);
+			label(graphics,(artBackground?L"✓  ":L"○  ")+std::wstring(L"Blurred artwork background"),body,RectF(float(g_overlayOptions[8].left+14),optionY+50,280,40),artBackground?primary:tertiary);label(graphics,(transparent?L"✓  ":L"○  ")+std::wstring(L"Transparent background"),body,RectF(float(g_overlayOptions[9].left+14),optionY+50,260,40),transparent?primary:tertiary);
+			label(graphics,L"Custom text",smallFont,RectF(contentX+28,488,160,22),tertiary);
+		} else {
+			const wchar_t *labels[]={L"Font",L"Title size",L"Body size",L"Background opacity",L"Background colour",L"Text colour",L"Accent colour",L"Canvas width",L"Canvas height"};
+			const float cardWidth=(contentWidth-96)/3;
+			for(int i=0;i<9;++i){const int column=i%3,row=i/3;const float x=contentX+24+column*(cardWidth+24),y=210.0f+row*74.0f;g_overlayStyleOptions[i]=RECT{int(x),int(y),int(x+cardWidth),int(y+64)};roundedPanel(graphics,RectF(x,y,cardWidth,64),9,raised);label(graphics,labels[i],smallFont,RectF(x+12,y+3,cardWidth-24,20),tertiary);}
+			label(graphics,L"Enter any valid size or hex colour. Font choices use bundled and common Windows typefaces.",smallFont,RectF(contentX+28,444,contentWidth-56,28),tertiary);
+		}
+		g_overlayReset = RECT{int(contentX + contentWidth - 188), int(panelY + panelHeight - 52), int(contentX + contentWidth - 24), int(panelY + panelHeight - 18)};
+		roundedPanel(graphics, RectF(float(g_overlayReset.left), float(g_overlayReset.top), 164, 34), 7, raised);
+		label(graphics, L"Reset to defaults", smallFont, RectF(float(g_overlayReset.left), float(g_overlayReset.top), 164, 34), secondary, StringAlignmentCenter);
+		label(graphics,L"OBS source creation remains in the dock until the player-to-OBS action bridge is verified.",smallFont,RectF(contentX+28,float(g_overlayReset.top),contentWidth-236,34),tertiary);
 	} else if (g_page != 0) {
 		roundedPanel(graphics, RectF(contentX, 108, contentWidth, float(transportTop - 130)), 16, surface);
 		label(graphics, pages[g_page], heading, RectF(contentX + 28, 132, contentWidth - 56, 34), primary);
@@ -1232,6 +1596,19 @@ static LRESULT CALLBACK windowProc(HWND window, UINT message, WPARAM wParam, LPA
 
 static void send(HANDLE pipe, const std::string &message) { if (pipe != INVALID_HANDLE_VALUE && !message.empty()) { DWORD written = 0; WriteFile(pipe, message.data(), DWORD(message.size()), &written, nullptr); } }
 
+static LRESULT CALLBACK splashWindowProc(HWND window, UINT message, WPARAM wParam, LPARAM lParam)
+{
+	if (message == WM_ERASEBKGND) return 1;
+	if (message == WM_PAINT) {
+		PAINTSTRUCT paint{}; HDC dc = BeginPaint(window, &paint); RECT client{}; GetClientRect(window, &client);
+		Graphics graphics(dc); graphics.Clear(Color(255, 11, 15, 20));
+		if (g_splashImage && g_splashImage->GetLastStatus() == Ok)
+			graphics.DrawImage(g_splashImage.get(), 0, 0, client.right, client.bottom);
+		EndPaint(window, &paint); return 0;
+	}
+	return DefWindowProcW(window, message, wParam, lParam);
+}
+
 int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int)
 {
 	PROCESS_POWER_THROTTLING_STATE powerState{};
@@ -1245,15 +1622,31 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int)
 	CefScopedSandboxInfo sandboxInfo;
 	const int subprocessExit = CefExecuteProcess(cefMainArgs, cefApp, sandboxInfo.sandbox_info());
 	if (subprocessExit >= 0) return subprocessExit;
+	CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+	GdiplusStartupInput gdiplusInput; ULONG_PTR gdiplusToken = 0; GdiplusStartup(&gdiplusToken, &gdiplusInput, nullptr);
+	const std::wstring soraPath = executableAssetPath(L"Sora-Variable.ttf");
+	AddFontResourceExW(soraPath.c_str(), FR_PRIVATE, nullptr);
+	g_brandIconImage.reset(Image::FromFile(executableAssetPath(L"suite-app-icon.png").c_str()));
+	g_brandHeaderImage.reset(Image::FromFile(executableAssetPath(L"suite-header.png").c_str()));
+	g_splashImage.reset(Image::FromFile(executableAssetPath(L"suite-splash.png").c_str()));
+	WNDCLASSW splashClass{}; splashClass.lpfnWndProc = splashWindowProc; splashClass.hInstance = instance;
+	splashClass.hCursor = LoadCursor(nullptr, IDC_ARROW); splashClass.lpszClassName = L"RearSilverSuiteSplashWindow";
+	RegisterClassW(&splashClass);
+	const int splashSize = 520, screenWidth = GetSystemMetrics(SM_CXSCREEN), screenHeight = GetSystemMetrics(SM_CYSCREEN);
+	HWND splash = CreateWindowExW(WS_EX_TOOLWINDOW | WS_EX_TOPMOST, splashClass.lpszClassName, L"RearSilver Stream Suite",
+		WS_POPUP, (screenWidth - splashSize) / 2, (screenHeight - splashSize) / 2, splashSize, splashSize,
+		nullptr, nullptr, instance, nullptr);
+	const ULONGLONG splashShownAt = GetTickCount64();
+	if (splash) { ShowWindow(splash, SW_SHOW); UpdateWindow(splash); }
 	CefSettings cefSettings;
 	cefSettings.multi_threaded_message_loop = true;
 	cefSettings.windowless_rendering_enabled = true;
 	cefSettings.log_severity = LOGSEVERITY_WARNING;
 	CefString(&cefSettings.locale) = "en-GB";
-	if (!CefInitialize(cefMainArgs, cefSettings, cefApp, sandboxInfo.sandbox_info())) return 1;
-
-	CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
-	GdiplusStartupInput gdiplusInput; ULONG_PTR gdiplusToken = 0; GdiplusStartup(&gdiplusToken, &gdiplusInput, nullptr);
+	if (!CefInitialize(cefMainArgs, cefSettings, cefApp, sandboxInfo.sandbox_info())) {
+		if (splash) DestroyWindow(splash); RemoveFontResourceExW(soraPath.c_str(), FR_PRIVATE, nullptr);
+		GdiplusShutdown(gdiplusToken); CoUninitialize(); return 1;
+	}
 	Player player; g_player = &player; if (!player.initialise()) return 2;
 	HICON appIcon = static_cast<HICON>(LoadImageW(instance, MAKEINTRESOURCEW(101), IMAGE_ICON, 0, 0, LR_DEFAULTSIZE));
 	WNDCLASSW wc{}; wc.style = CS_DBLCLKS; wc.lpfnWndProc = windowProc; wc.hInstance = instance; wc.hCursor = LoadCursor(nullptr, IDC_ARROW); wc.hIcon = appIcon; wc.lpszClassName = L"RearSilverMusicPlayerWindow"; RegisterClassW(&wc);
@@ -1262,19 +1655,67 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int)
 	SendMessageW(window, WM_SETICON, ICON_BIG, reinterpret_cast<LPARAM>(appIcon));
 	SendMessageW(window, WM_SETICON, ICON_SMALL, reinterpret_cast<LPARAM>(appIcon));
 	ShowWindow(window, SW_SHOW); UpdateWindow(window);
-	g_playlistEdit = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"", WS_CHILD | ES_AUTOHSCROLL,
+	if (splash) {
+		while (GetTickCount64() - splashShownAt < 1200) {
+			MSG splashMessage{};
+			while (PeekMessageW(&splashMessage, nullptr, 0, 0, PM_REMOVE)) {
+				TranslateMessage(&splashMessage);
+				DispatchMessageW(&splashMessage);
+			}
+			Sleep(10);
+		}
+		DestroyWindow(splash);
+		splash = nullptr;
+	}
+	g_playlistEdit = CreateWindowExW(0, L"EDIT", L"", WS_CHILD | ES_AUTOHSCROLL | WS_BORDER,
 		0, 0, 0, 0, window, nullptr, instance, nullptr);
 	g_importPlaylistButton = CreateWindowExW(0, L"BUTTON", L"Import fallback playlist",
-		WS_CHILD | BS_PUSHBUTTON, 0, 0, 0, 0, window, reinterpret_cast<HMENU>(static_cast<INT_PTR>(ID_IMPORT_PLAYLIST)), instance, nullptr);
-	HFONT uiFont = static_cast<HFONT>(GetStockObject(DEFAULT_GUI_FONT));
+		WS_CHILD | BS_OWNERDRAW, 0, 0, 0, 0, window, reinterpret_cast<HMENU>(static_cast<INT_PTR>(ID_IMPORT_PLAYLIST)), instance, nullptr);
+	g_addFilesButton = CreateWindowExW(0, L"BUTTON", L"Add local files", WS_CHILD | BS_OWNERDRAW, 0, 0, 0, 0, window,
+		reinterpret_cast<HMENU>(static_cast<INT_PTR>(ID_ADD_LOCAL_FILES)), instance, nullptr);
+	g_addFolderButton = CreateWindowExW(0, L"BUTTON", L"Add local folder", WS_CHILD | BS_OWNERDRAW, 0, 0, 0, 0, window,
+		reinterpret_cast<HMENU>(static_cast<INT_PTR>(ID_ADD_LOCAL_FOLDER)), instance, nullptr);
+	g_useLocalButton = CreateWindowExW(0, L"BUTTON", L"Use local files", WS_CHILD | BS_OWNERDRAW, 0, 0, 0, 0, window,
+		reinterpret_cast<HMENU>(static_cast<INT_PTR>(ID_USE_LOCAL)), instance, nullptr);
+	g_useYouTubeButton = CreateWindowExW(0, L"BUTTON", L"Use YouTube", WS_CHILD | BS_OWNERDRAW, 0, 0, 0, 0, window,
+		reinterpret_cast<HMENU>(static_cast<INT_PTR>(ID_USE_YOUTUBE)), instance, nullptr);
+	g_clearLocalButton = CreateWindowExW(0, L"BUTTON", L"Clear local library", WS_CHILD | BS_OWNERDRAW, 0, 0, 0, 0, window,
+		reinterpret_cast<HMENU>(static_cast<INT_PTR>(ID_CLEAR_LOCAL)), instance, nullptr);
+	g_overlayCustomTextEdit = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", overlaySetting(L"customText", L"").c_str(),
+		WS_CHILD | ES_AUTOHSCROLL, 0, 0, 0, 0, window, reinterpret_cast<HMENU>(static_cast<INT_PTR>(ID_OVERLAY_CUSTOM_TEXT)), instance, nullptr);
+	g_overlayFontCombo = CreateWindowExW(0,L"COMBOBOX",L"",WS_CHILD|CBS_DROPDOWNLIST|WS_VSCROLL,0,0,0,0,window,
+		reinterpret_cast<HMENU>(static_cast<INT_PTR>(ID_OVERLAY_FONT)),instance,nullptr);
+	const wchar_t *fonts[]={L"Sora",L"Arial",L"Segoe UI",L"Calibri",L"Verdana",L"Tahoma",L"Trebuchet MS",L"Georgia",L"Times New Roman",L"Impact",L"Comic Sans MS"};
+	for(const wchar_t *font:fonts) SendMessageW(g_overlayFontCombo,CB_ADDSTRING,0,reinterpret_cast<LPARAM>(font));
+	SendMessageW(g_overlayFontCombo,CB_SELECTSTRING,WPARAM(-1),reinterpret_cast<LPARAM>(overlaySetting(L"fontFamily",L"Sora").c_str()));
+	auto createOverlayEdit=[&](int id,const std::wstring &value,bool numeric){return CreateWindowExW(WS_EX_CLIENTEDGE,L"EDIT",value.c_str(),WS_CHILD|ES_AUTOHSCROLL|(numeric?ES_NUMBER:0),0,0,0,0,window,reinterpret_cast<HMENU>(static_cast<INT_PTR>(id)),instance,nullptr);};
+	g_overlayStyleEdits[0]=createOverlayEdit(ID_OVERLAY_TITLE_SIZE,std::to_wstring(overlayNumber(L"titleSize",34)),true);
+	g_overlayStyleEdits[1]=createOverlayEdit(ID_OVERLAY_BODY_SIZE,std::to_wstring(overlayNumber(L"bodySize",20)),true);
+	g_overlayStyleEdits[2]=createOverlayEdit(ID_OVERLAY_OPACITY,std::to_wstring(overlayNumber(L"backgroundOpacity",82)),true);
+	g_overlayStyleEdits[3]=createOverlayEdit(ID_OVERLAY_BACKGROUND_COLOUR,overlaySetting(L"backgroundColour",L"#0b0f14"),false);
+	g_overlayStyleEdits[4]=createOverlayEdit(ID_OVERLAY_TEXT_COLOUR,overlaySetting(L"textColour",L"#ffffff"),false);
+	g_overlayStyleEdits[5]=createOverlayEdit(ID_OVERLAY_ACCENT_COLOUR,overlaySetting(L"accentColour",L"#00d4ff"),false);
+	g_overlayStyleEdits[6]=createOverlayEdit(ID_OVERLAY_WIDTH,std::to_wstring(overlayNumber(L"width",800)),true);
+	g_overlayStyleEdits[7]=createOverlayEdit(ID_OVERLAY_HEIGHT,std::to_wstring(overlayNumber(L"height",240)),true);
+	g_controlBackgroundBrush = CreateSolidBrush(RGB(17, 24, 33));
+	g_controlFont = CreateFontW(-18, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, DEFAULT_PITCH, L"Sora");
+	HFONT uiFont = g_controlFont ? g_controlFont : static_cast<HFONT>(GetStockObject(DEFAULT_GUI_FONT));
 	SendMessageW(g_playlistEdit, WM_SETFONT, reinterpret_cast<WPARAM>(uiFont), TRUE);
-	SendMessageW(g_importPlaylistButton, WM_SETFONT, reinterpret_cast<WPARAM>(uiFont), TRUE);
+	SendMessageW(g_overlayCustomTextEdit, WM_SETFONT, reinterpret_cast<WPARAM>(uiFont), TRUE);
+	SendMessageW(g_overlayFontCombo,WM_SETFONT,reinterpret_cast<WPARAM>(uiFont),TRUE);
+	for(HWND edit:g_overlayStyleEdits) SendMessageW(edit,WM_SETFONT,reinterpret_cast<WPARAM>(uiFont),TRUE);
+	for (HWND control : {g_importPlaylistButton, g_addFilesButton, g_addFolderButton, g_useLocalButton, g_useYouTubeButton, g_clearLocalButton})
+		SendMessageW(control, WM_SETFONT, reinterpret_cast<WPARAM>(uiFont), TRUE);
 	loadHubState();
+	g_hub.setNonRequestLabel(wideToUtf8(musicSetting(L"nonRequestLabel", L"Stream DJ")));
+	g_overlayDesigner = std::make_unique<OverlayDesignerSurface>();
+	g_overlayDesigner->initialise(window);
 	positionLibraryControls(window);
+	positionOverlayControls(window);
 	g_youtubePlayer = new CefYouTubePlayer();
 	g_youtubePlayer->initialise(window);
 	HANDLE pipe = CreateNamedPipeW(L"\\\\.\\pipe\\RearSilverStreamSuiteMusicPlayer", PIPE_ACCESS_DUPLEX,
-		PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_NOWAIT, 1, 65536, 65536, 0, nullptr);
+		PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_NOWAIT, 1, 1024 * 1024, 1024 * 1024, 0, nullptr);
 	if (pipe == INVALID_HANDLE_VALUE) return 3;
 	bool connected = false, running = true; std::string input; ULONGLONG lastStatus = 0, lastHubStatus = 0, lastYouTubePoll = 0;
 	while (running) {
@@ -1285,6 +1726,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int)
 		}
 		if (!connected) { connected = ConnectNamedPipe(pipe, nullptr) || GetLastError() == ERROR_PIPE_CONNECTED; if (connected) send(pipe, player.status()); }
 		if (connected) {
+			{ std::lock_guard<std::mutex> lock(g_hostEventMutex); for(const auto &event:g_hostEvents)send(pipe,event); g_hostEvents.clear(); }
 			char buffer[4096]; DWORD read = 0;
 			if (ReadFile(pipe, buffer, sizeof(buffer), &read, nullptr) && read > 0) {
 				input.append(buffer, read); size_t newline = 0;
@@ -1332,31 +1774,30 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int)
 					}
 				}
 			} else if (GetLastError() == ERROR_BROKEN_PIPE) { DisconnectNamedPipe(pipe); connected = false; input.clear(); }
-			if (connected && player.takeEnded()) send(pipe, "EVENT\tended\t" + player.path() + "\n");
-			if (connected) {
-				for (const std::string &event : g_youtubePlayer->takeEvents()) {
-					if (event.rfind("EVENT\tyoutube-ended\t", 0) == 0 || event.rfind("EVENT\tyoutube-error\t", 0) == 0) playHubNext();
-					send(pipe, event);
-				}
-			}
-			if (connected && GetTickCount64() - lastStatus >= 100) {
-				if (!g_youtubePlayer->active()) send(pipe, player.status());
-				lastStatus = GetTickCount64();
-				RECT client{}; GetClientRect(window, &client);
-				RECT playbackRegion{0, std::max(0L, client.bottom - 86), client.right, client.bottom};
-				InvalidateRect(window, &playbackRegion, FALSE);
-			}
 			if (connected && GetTickCount64() - lastHubStatus >= 500) {
 				const std::string hubStatus = g_youtubePlayer->active() ?
 					(g_youtubePlayer->playing() ? "playing" : "paused") : wideToUtf8(player.state());
 				const int64_t hubPosition = int64_t((g_youtubePlayer->active() ? g_youtubePlayer->position() : player.position()) * 1000.0f);
 				const int64_t hubDuration = int64_t((g_youtubePlayer->active() ? g_youtubePlayer->duration() : player.duration()) * 1000.0f);
-				send(pipe, "HUB_STATE\t" + g_hub.snapshotJson(hubStatus, hubPosition, hubDuration) + "\n");
+				send(pipe, "HUB_STATE\t" + g_hub.snapshotJson(hubStatus, hubPosition, hubDuration, false) + "\n");
 				lastHubStatus = GetTickCount64();
 			}
 		}
+		if (player.takeEnded()) { if (connected) send(pipe, "EVENT\tended\t" + player.path() + "\n"); playHubNext(); }
+		for (const std::string &event : g_youtubePlayer->takeEvents()) {
+			if (event.rfind("EVENT\tyoutube-ended\t", 0) == 0 || event.rfind("EVENT\tyoutube-error\t", 0) == 0) playHubNext();
+			if (connected) send(pipe, event);
+		}
+		if (GetTickCount64() - lastStatus >= 100) {
+			const std::string status = player.status(); if (connected && !g_youtubePlayer->active()) send(pipe, status);
+			lastStatus = GetTickCount64(); RECT client{}; GetClientRect(window, &client);
+			RECT playbackRegion{0, std::max(0L, client.bottom - 106), client.right, client.bottom};
+			InvalidateRect(window, &playbackRegion, FALSE);
+		}
 		Sleep(10);
 	}
-	CloseHandle(pipe); g_youtubePlayer->shutdown(); g_youtubePlayer = nullptr; DestroyWindow(window); g_player = nullptr;
+	CloseHandle(pipe); g_overlayDesigner.reset(); g_youtubePlayer->shutdown(); g_youtubePlayer = nullptr; DestroyWindow(window); g_player = nullptr;
+	if (g_controlFont) { DeleteObject(g_controlFont); g_controlFont = nullptr; } if (g_controlBackgroundBrush) { DeleteObject(g_controlBackgroundBrush); g_controlBackgroundBrush = nullptr; }
+	g_splashImage.reset(); g_brandHeaderImage.reset(); g_brandIconImage.reset(); RemoveFontResourceExW(soraPath.c_str(), FR_PRIVATE, nullptr);
 	GdiplusShutdown(gdiplusToken); CoUninitialize(); CefShutdown(); return 0;
 }

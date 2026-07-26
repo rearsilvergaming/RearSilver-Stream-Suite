@@ -21,7 +21,6 @@ public:
 	void stop();
 	void restart();
 	void seekTo(qint64 positionMs);
-	void importYouTubePlaylist(const QString &url);
 	void requestYouTubeTrack(const QString &requester, const QString &query);
 	void skip();
 	void previous();
@@ -38,6 +37,7 @@ signals:
 	void playbackProgress(qint64 positionMs, qint64 durationMs);
 	void playbackMetadata(const QString &title, const QString &artist, qint64 durationMs);
 	void hubStateReceived(const QByteArray &json);
+	void hostCommandReceived(const QString &command);
 
 private:
 	RsMusicLocalPlayer();

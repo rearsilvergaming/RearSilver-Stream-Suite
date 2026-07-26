@@ -82,7 +82,7 @@ QByteArray RsMusicServer::configJson() const
 	auto value=[&](const char *key,const QVariant &fallback){return s.value(QString("music/overlay/main/")+key,fallback);};
 	c["showArtwork"]=value("showArtwork",true).toBool(); c["showTitle"]=value("showTitle",true).toBool();
 	c["showArtist"]=value("showArtist",true).toBool(); c["showAlbum"]=value("showAlbum",true).toBool();
-	c["showRequester"]=value("showRequester",false).toBool(); c["showProgress"]=value("showProgress",true).toBool();
+	c["showRequester"]=value("showRequester",true).toBool(); c["showProgress"]=value("showProgress",true).toBool();
 	c["showCustomText"]=value("showCustomText",false).toBool(); c["customText"]=value("customText","").toString();
 	c["timingMode"]=value("timingMode","elapsedTotal").toString(); c["artworkPosition"]=value("artworkPosition","left").toString();
 	c["backgroundTransparent"]=value("backgroundTransparent",false).toBool(); c["backgroundColour"]=value("backgroundColour","#0c0c12").toString();

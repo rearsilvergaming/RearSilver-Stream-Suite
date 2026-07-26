@@ -13,6 +13,8 @@
 #include <QSettings>
 #include <QDir>
 #include <QFileInfo>
+#include <QFont>
+#include <QFontDatabase>
 
 #include "rs_main_dock.hpp"
 #include "rs_entitlements.hpp"
@@ -32,6 +34,7 @@ OBS_MODULE_USE_DEFAULT_LOCALE("RearSilver-Stream-Suite", "en-GB")
 #define LOG_ERR_MSG(fmt, ...)   blog(LOG_ERROR, "[RearSilver-Stream-Suite] " fmt, ##__VA_ARGS__)
 
 static RsMainDock *g_dock = nullptr;
+static QString g_suiteFontFamily = "Sora";
 
 const char *obs_module_description(void)
 {
@@ -48,6 +51,7 @@ static void create_rs_dock(void)
 
 	// Create our QWidget-based dock content
 	g_dock = new RsMainDock(nullptr);
+	g_dock->setFont(QFont(g_suiteFontFamily));
 	g_dock->setObjectName("RearSilverStreamSuiteDock");
 
 	// OBS wraps the QWidget into a real QDockWidget
@@ -150,6 +154,13 @@ bool obs_module_load(void)
 	QCoreApplication::setOrganizationName("RearSilver");
 	QCoreApplication::setApplicationName("RearSilver-Stream-Suite");
 	QSettings::setDefaultFormat(QSettings::NativeFormat);
+	const int soraFontId = QFontDatabase::addApplicationFont(":/rs/branding/Sora-Variable.ttf");
+	if (soraFontId >= 0) {
+		const QStringList families = QFontDatabase::applicationFontFamilies(soraFontId);
+		if (!families.isEmpty()) g_suiteFontFamily = families.first();
+	} else {
+		LOG_ERR_MSG("Bundled Sora font could not be loaded; using the system fallback.");
+	}
 
 
 	// Log current Qt paths, then try to add OBS appDir/plugins (where tls backend should be),

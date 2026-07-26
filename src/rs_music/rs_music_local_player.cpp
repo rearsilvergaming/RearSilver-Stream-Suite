@@ -33,6 +33,17 @@ RsMusicLocalPlayer::RsMusicLocalPlayer()
 	m_process = new QProcess(this);
 	m_socket = new QLocalSocket(this);
 	connect(m_socket, &QLocalSocket::readyRead, this, &RsMusicLocalPlayer::readMessages);
+	connect(m_socket, &QLocalSocket::connected, this, [this]() {
+		m_hubConnectionAttempts = 0;
+		blog(LOG_INFO, "[RS Music] Companion control channel connected.");
+	});
+	connect(m_socket, &QLocalSocket::disconnected, this, [this]() {
+		if (m_shuttingDown)
+			return;
+		blog(LOG_WARNING, "[RS Music] Companion control channel disconnected; reconnecting.");
+		m_hubConnectionAttempts = 0;
+		QTimer::singleShot(250, this, &RsMusicLocalPlayer::connectToHub);
+	});
 	connect(m_process, &QProcess::errorOccurred, this, [this](QProcess::ProcessError) {
 		if (!m_shuttingDown)
 			emit playbackError("The bundled local music player could not be started.");
@@ -47,8 +58,11 @@ void RsMusicLocalPlayer::connectToHub()
 		blog(LOG_INFO, "[RS Music] Player-owned hub connection is active.");
 		m_hubConnectionAttempts = 0; return;
 	}
-	if (++m_hubConnectionAttempts < 40)
-		QTimer::singleShot(250, this, &RsMusicLocalPlayer::connectToHub);
+	++m_hubConnectionAttempts;
+	// Keep trying for the lifetime of OBS. The companion may be deliberately closed,
+	// restarted, delayed by Windows startup, or launched later by the user.
+	QTimer::singleShot(m_hubConnectionAttempts < 40 ? 250 : 1500, this,
+			   &RsMusicLocalPlayer::connectToHub);
 }
 
 RsMusicLocalPlayer::~RsMusicLocalPlayer()
@@ -242,7 +256,6 @@ void RsMusicLocalPlayer::stop() { sendCommand("STOP"); emit playbackStopped(); }
 void RsMusicLocalPlayer::restart() { sendCommand("RESTART"); }
 void RsMusicLocalPlayer::seekTo(qint64 positionMs) { sendCommand("SEEK", QString::number(qMax<qint64>(0, positionMs))); }
 
-void RsMusicLocalPlayer::importYouTubePlaylist(const QString &url) { sendCommand("HUB_IMPORT", protocolField(url)); }
 void RsMusicLocalPlayer::requestYouTubeTrack(const QString &requester, const QString &query)
 {
 	sendCommand("HUB_REQUEST", protocolField(requester) + "\t" + protocolField(query));
@@ -258,6 +271,8 @@ void RsMusicLocalPlayer::readMessages()
 		const QStringList parts = line.split('\t');
 		if (parts.value(0) == "HUB_STATE") {
 			emit hubStateReceived(parts.mid(1).join('\t').toUtf8());
+		} else if (parts.value(0) == "HOST") {
+			emit hostCommandReceived(parts.mid(1).join('\t'));
 		} else if (parts.value(0) == "STATUS") {
 			emit playbackProgress(parts.value(2).toLongLong(), parts.value(3).toLongLong());
 			if (parts.value(1) == "playing") emit playbackStarted();

@@ -1,4 +1,4 @@
-﻿#include "rs_main_dock.hpp"
+#include "rs_main_dock.hpp"
 
 #include <QComboBox>
 #include <QSettings>
@@ -72,6 +72,7 @@ void RsMainDock::applyTheme()
 /* ---------- Global app defaults ---------- */
 QWidget {
 	font-size: 12px;
+	font-family: "Sora", "Segoe UI", sans-serif;
 }
 
 /* Make focus visible (keyboard + accessibility) */
@@ -105,9 +106,9 @@ QPushButton#ControlButton {
 }
 
 QPushButton#ControlButton[active="true"] {
-	background-color: #9146ff;
+	background-color: #0a8cff;
 	color: #ffffff;
-	border: 1px solid #b388ff;
+	border: 1px solid #00d4ff;
 }
 
 /* ---------- NEW: Primary / Secondary action buttons ---------- */
@@ -374,18 +375,18 @@ QLineEdit:hover, QComboBox:hover {
 }
 
 QLineEdit:focus, QComboBox:focus {
-	border-color: rgba(145,70,255,0.55);
+	border-color: rgba(10,140,255,0.55);
 }
 
 /* --- Buttons --- */
 QPushButton#rs-primary-button {
-	background-color: rgba(145,70,255,0.75);
+	background-color: rgba(10,140,255,0.75);
 	border: none;
 	color: #ffffff;
 }
 
 QPushButton#rs-primary-button:hover {
-	background-color: rgba(145,70,255,0.95);
+	background-color: rgba(10,140,255,0.95);
 }
 
 QPushButton#rs-secondary-button {
@@ -420,7 +421,7 @@ QListWidget::item:hover {
 }
 
 QListWidget::item:selected {
-	background-color: rgba(145,70,255,0.22);
+	background-color: rgba(10,140,255,0.22);
 }
 
 /* --- Scrollbars (extra subtle) --- */
@@ -445,7 +446,7 @@ QPlainTextEdit {
 /* ===============================
    PRO: Calm Studio Theme
    =============================== */
-	else if (m_currentTheme == "pro_night") {
+	else if (m_currentTheme == "brand" || m_currentTheme == "pro_night") {
 		css += R"(
 
 QWidget {
@@ -474,17 +475,17 @@ QLineEdit, QComboBox {
     color: #d6d9e0;
 }
 QLineEdit:hover, QComboBox:hover {
-    border-color: rgba(111,108,255,0.45);
+    border-color: rgba(10,140,255,0.45);
 }
 
 /* Buttons */
 QPushButton#rs-primary-button {
-    background-color: #6f6cff;
+    background-color: #0a8cff;
     color: #ffffff;
     border-radius: 10px;
 }
 QPushButton#rs-primary-button:hover {
-    background-color: #817eff;
+    background-color: #00d4ff;
 }
 
 QPushButton#rs-secondary-button {
@@ -502,7 +503,7 @@ QListWidget {
     border: none;
 }
 QListWidget::item:selected {
-    background-color: rgba(111,108,255,0.22);
+    background-color: rgba(10,140,255,0.22);
 }
 
 /* Logs */

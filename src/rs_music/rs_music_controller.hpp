@@ -42,7 +42,6 @@ public:
 	void actionSeek(qint64 positionMs);
 	bool actionPlayLocalFile(const QString &filePath);
 	bool actionPlayYouTubeVideo(const QString &url);
-	void actionImportYouTubePlaylist(const QString &url);
 	void setLocalLibrary(const QStringList &files);
 	QStringList localLibrary() const;
 	void shuffleLocalLibrary();
@@ -53,8 +52,6 @@ public:
 
 signals:
 	void localLibraryChanged();
-	void youtubePlaylistImported(int trackCount, const QString &label);
-	void youtubePlaylistError(const QString &message);
 	void youtubeRequestResolutionFailed(const QString &trackId, const QString &message);
 
 private:

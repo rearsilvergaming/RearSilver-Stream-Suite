@@ -55,7 +55,6 @@ private slots:
 	void showMusicNowPlaying();
 	void showMusicQueue();
 	void showMusicRequests();
-	void showMusicPlaylist();
 	void showMusicSettings();
 	void showMusicSetup();
 	void showMusicOverlay();
@@ -152,7 +151,7 @@ private:
 
 	QComboBox *m_layoutCombo = nullptr;
 	QComboBox *m_themeCombo = nullptr;
-	QString m_currentTheme = "default";
+	QString m_currentTheme = "brand";
 
 	// Remember last pages
 	int m_lastSystemPage = 0;
@@ -213,7 +212,6 @@ private:
 	QToolButton *m_btnMusicNowPlaying = nullptr;
 	QToolButton *m_btnMusicQueue = nullptr;
 	QToolButton *m_btnMusicRequests = nullptr;
-	QToolButton *m_btnMusicPlaylist = nullptr;
 	QToolButton *m_btnMusicSettings = nullptr;
 	QToolButton *m_btnMusicSetup = nullptr;
 	QToolButton *m_btnMusicOverlay = nullptr;
@@ -233,7 +231,6 @@ private:
 	QWidget *m_pageMusicNowPlaying = nullptr;
 	QWidget *m_pageMusicQueue = nullptr;
 	QWidget *m_pageMusicRequests = nullptr;
-	QWidget *m_pageMusicPlaylist = nullptr;
 	QWidget *m_pageMusicSettings = nullptr;
 	QWidget *m_pageMusicSetup = nullptr;
 	QWidget *m_pageMusicOverlay = nullptr;

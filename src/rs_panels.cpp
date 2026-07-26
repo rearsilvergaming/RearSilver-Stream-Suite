@@ -30,7 +30,6 @@
 #include "rs_music/ui/rs_music_now_playing.hpp"
 #include "rs_music/ui/rs_music_queue.hpp"
 #include "rs_music/ui/rs_music_requests.hpp"
-#include "rs_music/ui/rs_music_playlist.hpp"
 #include "rs_music/ui/rs_music_settings.hpp"
 #include "rs_music/ui/rs_music_setup.hpp"
 #include "rs_music/ui/rs_music_overlay.hpp"
@@ -236,7 +235,8 @@ void RsMainDock::createPanels()
 		// Theme dropdown
 		auto *themeLbl = new QLabel("Theme:");
 		m_themeCombo = new QComboBox();
-		m_themeCombo->addItem("Default", "default");
+		m_themeCombo->addItem("RearSilver (Default)", "brand");
+		m_themeCombo->addItem("OBS Default", "default");
 		m_themeCombo->addItem("Pro (Twitch Dark)", "twitch_dark");
 		m_themeCombo->addItem("Pro (Calm)", "pro_calm");
 		m_themeCombo->addItem("Pro (Night)", "pro_night");
@@ -283,7 +283,6 @@ void RsMainDock::createPanels()
 	m_pageMusicNowPlaying = new RsMusicNowPlaying(musicState, m_musicController, m_contentCard);
 	m_pageMusicQueue = new RsMusicQueue(musicState, m_contentCard);
 	m_pageMusicRequests = new RsMusicRequests(musicState, m_contentCard);
-	m_pageMusicPlaylist = new RsMusicPlaylist(musicState, m_musicController, m_contentCard);
 	auto *musicSettings = new RsMusicSettings(musicState, m_musicController, m_streamerAuth, m_botAuth, m_contentCard);
 	m_pageMusicSettings = musicSettings;
 	m_pageMusicSetup = new RsMusicSetup(m_contentCard);
@@ -306,10 +305,9 @@ void RsMainDock::createPanels()
 	m_stack->addWidget(m_pageMusicNowPlaying); // 9
 	m_stack->addWidget(m_pageMusicQueue);      // 10
 	m_stack->addWidget(m_pageMusicRequests);   // 11
-	m_stack->addWidget(m_pageMusicPlaylist);   // 12
-	m_stack->addWidget(m_pageMusicSettings);   // 13
-	m_stack->addWidget(m_pageMusicSetup);      // 14
-	m_stack->addWidget(m_pageMusicOverlay);    // 15
+	m_stack->addWidget(m_pageMusicSettings);   // 12
+	m_stack->addWidget(m_pageMusicSetup);      // 13
+	m_stack->addWidget(m_pageMusicOverlay);    // 14
 
 	applyTheme();
 }

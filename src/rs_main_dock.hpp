@@ -104,6 +104,7 @@ private:
 	void updateSceneSourceInfo();
 	void updateMusicStatusInfo();
 	void connectMusicChat();
+	void publishMusicAuthState();
 
 	// 🔒 Safety Lock helpers
 	void beginStopHold(QPushButton *btn, std::function<void()> action);

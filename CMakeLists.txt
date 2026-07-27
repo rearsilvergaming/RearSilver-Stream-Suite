@@ -88,6 +88,12 @@ if(WIN32)
 			"${CMAKE_CURRENT_SOURCE_DIR}/src/music_player/settings.html"
 			"$<TARGET_FILE_DIR:RearSilver-Music-Player>/settings.html"
 		COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+			"${CMAKE_CURRENT_SOURCE_DIR}/src/music_player/commands.html"
+			"$<TARGET_FILE_DIR:RearSilver-Music-Player>/commands.html"
+		COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+			"${CMAKE_CURRENT_SOURCE_DIR}/src/music_player/accounts.html"
+			"$<TARGET_FILE_DIR:RearSilver-Music-Player>/accounts.html"
+		COMMAND "${CMAKE_COMMAND}" -E copy_if_different
 			"${CMAKE_CURRENT_SOURCE_DIR}/assets/music/music-fallback-vinyl.png"
 			"$<TARGET_FILE_DIR:RearSilver-Music-Player>/music-fallback-vinyl.png"
 		COMMAND "${CMAKE_COMMAND}" -E copy_if_different

@@ -60,6 +60,9 @@ signals:
 	void songRequestRemoved(const QString &requestId, const QString &title, const QString &artist);
 	void songRequestRemoveFailed(const QString &requestId, const QString &message);
 	void nowPlayingAnnounced(const QString &title, const QString &artist, const QString &requester);
+	void twitchAuthActionRequested(const QString &account, const QString &action);
+	void twitchSenderPreferenceRequested(bool useBot);
+	void twitchAuthStatusRequested();
 
 private:
 	void syncQueueFromBackend();

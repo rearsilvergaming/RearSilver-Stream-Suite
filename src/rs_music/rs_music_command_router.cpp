@@ -2,6 +2,7 @@
 #include "rs_music_controller.hpp" // interface only, implementation elsewhere
 
 #include <QString>
+#include <QSettings>
 
 extern "C" {
 #include <obs-module.h>
@@ -55,6 +56,7 @@ void RsMusicCommandRouter::ingestChatMessage(const RsMusicChatContext &ctx, cons
 
 	// ---- Song request (everyone allowed) ----
 	if (lower.startsWith("!sr")) {
+		if (!isCommandAllowed("sr", ctx)) { emit feedbackMessage(QString("%1: you don't have permission to request songs.").arg(ctx.displayName)); return; }
 		handleSongRequest(ctx, commandArgs(msg, 3));
 		return;
 	}
@@ -91,9 +93,16 @@ void RsMusicCommandRouter::ingestChatMessage(const RsMusicChatContext &ctx, cons
 	}
 }
 
-bool RsMusicCommandRouter::isControlAllowed(const RsMusicChatContext &ctx) const
+bool RsMusicCommandRouter::isCommandAllowed(const QString &command, const RsMusicChatContext &ctx) const
 {
-	return ctx.isMod || ctx.isBroadcaster;
+	if (ctx.isBroadcaster) return true;
+	QSettings settings("RearSilver", "RearSilver-Stream-Suite");
+	const QString root = QString("music/commands/%1/").arg(command);
+	const bool request = command == "sr";
+	if (settings.value(root + "everyone", request).toBool()) return true;
+	return (ctx.isSubscriber && settings.value(root + "subscriber", false).toBool()) ||
+	       (ctx.isVip && settings.value(root + "vip", false).toBool()) ||
+	       (ctx.isMod && settings.value(root + "moderator", !request).toBool());
 }
 
 void RsMusicCommandRouter::handleSongRequest(const RsMusicChatContext &ctx, const QString &args)
@@ -104,10 +113,10 @@ void RsMusicCommandRouter::handleSongRequest(const RsMusicChatContext &ctx, cons
 	}
 
 	int requesterLevel = 0;
-	if (ctx.isSubscriber) requesterLevel = 1;
-	if (ctx.isVip) requesterLevel = 2;
-	if (ctx.isMod) requesterLevel = 3;
-	if (ctx.isBroadcaster) requesterLevel = 4;
+	if (ctx.isSubscriber) requesterLevel |= 1;
+	if (ctx.isVip) requesterLevel |= 2;
+	if (ctx.isMod) requesterLevel |= 4;
+	if (ctx.isBroadcaster) requesterLevel |= 8;
 	const RsMusicRequestResult result =
 		m_controller->actionSongRequest(ctx.userId, ctx.displayName, args, requesterLevel);
 	if (!result.accepted) {
@@ -121,7 +130,7 @@ void RsMusicCommandRouter::handleSongRequest(const RsMusicChatContext &ctx, cons
 
 void RsMusicCommandRouter::handlePlay(const RsMusicChatContext &ctx)
 {
-	if (!isControlAllowed(ctx)) {
+	if (!isCommandAllowed("play", ctx)) {
 		emit feedbackMessage(
 			QString("%1: you don't have permission to control playback.").arg(ctx.displayName));
 		return;
@@ -133,7 +142,7 @@ void RsMusicCommandRouter::handlePlay(const RsMusicChatContext &ctx)
 
 void RsMusicCommandRouter::handlePause(const RsMusicChatContext &ctx)
 {
-	if (!isControlAllowed(ctx)) {
+	if (!isCommandAllowed("pause", ctx)) {
 		emit feedbackMessage(
 			QString("%1: you don't have permission to control playback.").arg(ctx.displayName));
 		return;
@@ -145,7 +154,7 @@ void RsMusicCommandRouter::handlePause(const RsMusicChatContext &ctx)
 
 void RsMusicCommandRouter::handleSkip(const RsMusicChatContext &ctx)
 {
-	if (!isControlAllowed(ctx)) {
+	if (!isCommandAllowed("skip", ctx)) {
 		emit feedbackMessage(QString("%1: you don't have permission to skip tracks.").arg(ctx.displayName));
 		return;
 	}
@@ -157,7 +166,7 @@ void RsMusicCommandRouter::handleSkip(const RsMusicChatContext &ctx)
 
 void RsMusicCommandRouter::handleRestart(const RsMusicChatContext &ctx)
 {
-	if (!isControlAllowed(ctx)) {
+	if (!isCommandAllowed("restart", ctx)) {
 		emit feedbackMessage(
 			QString("%1: you don't have permission to restart playback.").arg(ctx.displayName));
 		return;
@@ -169,7 +178,7 @@ void RsMusicCommandRouter::handleRestart(const RsMusicChatContext &ctx)
 
 void RsMusicCommandRouter::handlePrevious(const RsMusicChatContext &ctx)
 {
-	if (!isControlAllowed(ctx)) {
+	if (!isCommandAllowed("previous", ctx)) {
 		emit feedbackMessage(QString("%1: you don't have permission to control playback.").arg(ctx.displayName));
 		return;
 	}
@@ -179,7 +188,7 @@ void RsMusicCommandRouter::handlePrevious(const RsMusicChatContext &ctx)
 
 void RsMusicCommandRouter::handleRemove(const RsMusicChatContext &ctx, const QString &args)
 {
-	if (!isControlAllowed(ctx)) {
+	if (!isCommandAllowed("remove", ctx)) {
 		emit feedbackMessage(QString("%1: you don't have permission to remove requests.").arg(ctx.displayName));
 		return;
 	}

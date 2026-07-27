@@ -27,6 +27,7 @@ public:
 	void skip();
 	void previous();
 	void shuffleFallback();
+	void sendUiCommand(const QString &command, const QString &argument = {});
 	void shutdown();
 	QString currentFile() const;
 	QString executablePath() const { return companionPath(); }

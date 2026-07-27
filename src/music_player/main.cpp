@@ -778,6 +778,9 @@ static Player *g_player = nullptr;
 static CefRefPtr<CefYouTubePlayer> g_youtubePlayer;
 static bool g_closeRequested = false;
 static int g_page = 0;
+static std::string g_streamerAuthState = "disconnected", g_streamerLogin;
+static std::string g_botAuthState = "disconnected", g_botLogin, g_authSender = "streamer";
+static bool g_captureExists = false, g_playerAutoStart = false;
 
 static void syncHubQueueView()
 {
@@ -998,6 +1001,8 @@ public:
 								if (message == "ready") { m_ready = true; sendConfig(); return S_OK; }
 								if (message == "library-ready") { m_ready = true; sendLibraryConfig(); return S_OK; }
 								if (message == "settings-ready") { m_ready = true; sendSettingsConfig(); return S_OK; }
+								if (message == "commands-ready") { m_ready = true; sendCommandsConfig(); return S_OK; }
+								if (message == "accounts-ready") { m_ready = true; sendAccountsConfig(); std::lock_guard<std::mutex> lock(g_hostEventMutex); g_hostEvents.push_back("HOST\tAUTH_STATUS\n"); return S_OK; }
 								CefRefPtr<CefValue> parsed = CefParseJSON(message, JSON_PARSER_RFC); if (!parsed || parsed->GetType() != VTYPE_DICTIONARY) return S_OK;
 								CefRefPtr<CefDictionaryValue> object = parsed->GetDictionary();
 								if (object->GetString("page").ToString() == "library") {
@@ -1008,10 +1013,17 @@ public:
 								}
 								if(object->GetString("page").ToString()=="settings"){
 									const std::string action=object->GetString("action").ToString();
-									if(action=="set"){const std::string rawKey=object->GetString("key").ToString();const std::wstring key=utf8ToWide(rawKey);std::wstring value;if(object->GetType("value")==VTYPE_BOOL)value=object->GetBool("value")?L"true":L"false";else if(object->GetType("value")==VTYPE_INT)value=std::to_wstring(object->GetInt("value"));else value=utf8ToWide(object->GetString("value").ToString());const wchar_t *storedKey=key.c_str();if(rawKey=="queueLimit")storedKey=L"maxQueueTotal";else if(rawKey=="userLimit")storedKey=L"maxPerUser";else if(rawKey=="maxTrackMinutes")storedKey=L"maxTrackLengthMinutes";setMusicSetting(storedKey,value);if(rawKey=="textOutputEnabled"&&(value==L"true"||value==L"1"))ensureTextOutputFile();if(rawKey=="nonRequestLabel"){g_hub.setNonRequestLabel(wideToUtf8(value));writeTextOutput(g_hub.current());saveHubState();}if(rawKey=="requestsEnabled"||rawKey=="queueLimit"||rawKey=="userLimit"||rawKey=="maxTrackMinutes"){std::lock_guard<std::mutex>lock(g_hostEventMutex);g_hostEvents.push_back("HOST\tSETTING\t"+rawKey+"\t"+wideToUtf8(value)+"\n");}}
+									if(action=="set"){const std::string rawKey=object->GetString("key").ToString();const std::wstring key=utf8ToWide(rawKey);std::wstring value;if(object->GetType("value")==VTYPE_BOOL)value=object->GetBool("value")?L"true":L"false";else if(object->GetType("value")==VTYPE_INT)value=std::to_wstring(object->GetInt("value"));else value=utf8ToWide(object->GetString("value").ToString());const wchar_t *storedKey=key.c_str();if(rawKey=="queueLimit")storedKey=L"maxQueueTotal";else if(rawKey=="userLimit")storedKey=L"maxPerUser";else if(rawKey=="maxTrackMinutes")storedKey=L"maxTrackLengthMinutes";setMusicSetting(storedKey,value);if(rawKey=="textOutputEnabled"&&(value==L"true"||value==L"1"))ensureTextOutputFile();if(rawKey=="nonRequestLabel"){g_hub.setNonRequestLabel(wideToUtf8(value));writeTextOutput(g_hub.current());saveHubState();}if(rawKey=="requestsEnabled"||rawKey=="queueLimit"||rawKey=="userLimit"||rawKey=="maxTrackMinutes"||rawKey.rfind("command.",0)==0){std::lock_guard<std::mutex>lock(g_hostEventMutex);g_hostEvents.push_back("HOST\tSETTING\t"+rawKey+"\t"+wideToUtf8(value)+"\n");}}
 									else if(action=="createCapture"){std::lock_guard<std::mutex>lock(g_hostEventMutex);g_hostEvents.push_back("HOST\tCREATE_CAPTURE\n");}
+									else if(action=="autostart"){std::lock_guard<std::mutex>lock(g_hostEventMutex);g_hostEvents.push_back(std::string("HOST\tAUTOSTART\t")+(object->GetBool("value")?"true":"false")+"\n");}
+									else if(action=="setupStatus"){std::lock_guard<std::mutex>lock(g_hostEventMutex);g_hostEvents.push_back("HOST\tSETUP_STATUS\n");}
 									else if(action=="openOutputFolder")ShellExecuteW(m_parent,L"open",textOutputFolder().c_str(),nullptr,nullptr,SW_SHOWNORMAL);
 									sendSettingsConfig();return S_OK;
+								}
+								if(object->GetString("page").ToString()=="accounts"){
+									const std::string action=object->GetString("action").ToString(); std::lock_guard<std::mutex>lock(g_hostEventMutex);
+									if(action=="sender")g_hostEvents.push_back("HOST\tAUTH_SENDER\t"+object->GetString("value").ToString()+"\n");
+									else g_hostEvents.push_back("HOST\tAUTH_ACTION\t"+object->GetString("account").ToString()+"\t"+action+"\n"); return S_OK;
 								}
 								if (object->GetString("action").ToString() == "reset") { RegDeleteTreeW(HKEY_CURRENT_USER, kOverlayRegistry); sendConfig(); return S_OK; }
 								const std::string key = object->GetString("key").ToString(), type = object->GetString("type").ToString();
@@ -1027,8 +1039,8 @@ public:
 					}).Get());
 			}).Get());
 	}
-	void showPage(int page) { const bool visible=page>=2&&page<=4; if (visible && page!=m_page && m_webView) { m_page=page; m_ready=false; injectPage(page==2?L"library.html":page==3?L"overlay-designer.html":L"settings.html"); } if (m_controller) { resize(); m_controller->put_IsVisible(visible?TRUE:FALSE); } if (visible && m_ready) { if(page==2) sendLibraryConfig(); else if(page==3)sendConfig();else sendSettingsConfig(); } }
-	void refresh() { if(m_page==2) sendLibraryConfig(); else if(m_page==3) sendConfig(); else if(m_page==4)sendSettingsConfig(); }
+	void showPage(int page) { const bool visible=page>=2&&page<=6; if (visible && page!=m_page && m_webView) { m_page=page; m_ready=false; injectPage(page==2?L"library.html":page==3?L"overlay-designer.html":page==4?L"settings.html":page==5?L"accounts.html":L"commands.html"); } if (m_controller) { resize(); m_controller->put_IsVisible(visible?TRUE:FALSE); } if (visible && m_ready) { if(page==2) sendLibraryConfig(); else if(page==3)sendConfig();else if(page==4)sendSettingsConfig();else if(page==5)sendAccountsConfig();else if(page==6)sendCommandsConfig(); } }
+	void refresh() { if(m_page==2) sendLibraryConfig(); else if(m_page==3) sendConfig(); else if(m_page==4)sendSettingsConfig(); else if(m_page==5)sendAccountsConfig(); }
 	void resize() { if (!m_controller || !m_parent) return; RECT client{}; GetClientRect(m_parent, &client); const int sidebar = sidebarWidthFor(client.right); RECT bounds{sidebar + 16, 100, std::max(sidebar + 17, int(client.right) - 16), std::max(101, int(client.bottom) - 112)}; m_controller->put_Bounds(bounds); }
 private:
 	static bool validColour(const std::wstring &value) { return value.size() == 7 && value[0] == L'#' && std::all_of(value.begin() + 1, value.end(), [](wchar_t c) { return iswxdigit(c) != 0; }); }
@@ -1042,10 +1054,12 @@ private:
 		string("artworkPosition",L"left"); string("timingMode",L"elapsedTotal"); string("fontFamily",L"Sora"); string("titleOverflow",L"ellipsis"); string("scrollDirection",L"left"); string("customText",L""); string("backgroundColour",L"#0b0f14"); string("textColour",L"#e6e8eb"); string("accentColour",L"#00d4ff"); number("titleSize",34); number("bodySize",20); number("scrollSpeed",45); number("backgroundOpacity",82); number("width",800); number("height",240);
 		CefRefPtr<CefValue> root=CefValue::Create(); root->SetDictionary(d); const std::wstring script=L"window.rsApplyConfig("+utf8ToWide(CefWriteJSON(root,JSON_WRITER_DEFAULT).ToString())+L")"; m_webView->ExecuteScript(script.c_str(),nullptr);
 	}
+	void sendCommandsConfig(){if(!m_ready||!m_webView||m_page!=6)return;CefRefPtr<CefDictionaryValue>d=CefDictionaryValue::Create();for(const char*cmd:{"sr","play","pause","skip","restart","previous","remove"})for(const char*role:{"everyone","subscriber","vip","moderator"}){const std::string key=std::string("command.")+cmd+"."+role;const bool fallback=std::string(cmd)=="sr"?std::string(role)=="everyone":std::string(role)=="moderator";d->SetBool(key,musicBool(utf8ToWide(key).c_str(),fallback));}CefRefPtr<CefValue>root=CefValue::Create();root->SetDictionary(d);m_webView->ExecuteScript((L"window.rsApplyCommands("+utf8ToWide(CefWriteJSON(root,JSON_WRITER_DEFAULT).ToString())+L")").c_str(),nullptr);}
 	void sendLibraryConfig() {
 		if(!m_ready||!m_webView||m_page!=2)return; CefRefPtr<CefDictionaryValue>d=CefDictionaryValue::Create(); d->SetString("url",g_hub.fallbackUrl()); d->SetString("status",wideToUtf8(g_libraryStatus)); d->SetString("label",g_hub.fallbackLabel()); d->SetInt("youtubeCount",int(g_hub.youtubeFallback().size())); d->SetInt("requestCount",int(g_hub.requests().size())); d->SetInt("localCount",int(g_hub.localLibrary().size())); d->SetString("source",g_hub.activeSource()); CefRefPtr<CefValue>root=CefValue::Create();root->SetDictionary(d);const std::wstring script=L"window.rsApplyLibrary("+utf8ToWide(CefWriteJSON(root,JSON_WRITER_DEFAULT).ToString())+L")";m_webView->ExecuteScript(script.c_str(),nullptr);
 	}
-	void sendSettingsConfig(){if(!m_ready||!m_webView||m_page!=4)return;CefRefPtr<CefDictionaryValue>d=CefDictionaryValue::Create();auto b=[&](const char*k,bool f){const auto w=utf8ToWide(k);d->SetBool(k,musicBool(w.c_str(),f));};auto s=[&](const char*k,const wchar_t*f){const auto w=utf8ToWide(k);d->SetString(k,wideToUtf8(musicSetting(w.c_str(),f)));};auto n=[&](const char*k,const wchar_t*stored,int f){d->SetInt(k,_wtoi(musicSetting(stored,std::to_wstring(f).c_str()).c_str()));};b("requestsEnabled",true);b("playlistOnly",false);b("preventDuplicates",true);b("announceTrackChanges",false);b("textOutputEnabled",false);s("minimumRole",L"everyone");s("exemptRole",L"moderator");s("nonRequestLabel",L"Stream DJ");s("textOutputFormat",L"{{title}} - {{artist}} - Requested by {{user}}");n("queueLimit",L"maxQueueTotal",50);n("userLimit",L"maxPerUser",2);n("maxTrackMinutes",L"maxTrackLengthMinutes",10);d->SetString("outputPath",wideToUtf8(textOutputPath()));d->SetString("captureStatus","Checks for Music Capture, creates it if missing, then opens its properties.");CefRefPtr<CefValue>root=CefValue::Create();root->SetDictionary(d);m_webView->ExecuteScript((L"window.rsApplySettings("+utf8ToWide(CefWriteJSON(root,JSON_WRITER_DEFAULT).ToString())+L")").c_str(),nullptr);}
+	void sendSettingsConfig(){if(!m_ready||!m_webView||m_page!=4)return;CefRefPtr<CefDictionaryValue>d=CefDictionaryValue::Create();auto b=[&](const char*k,bool f){const auto w=utf8ToWide(k);d->SetBool(k,musicBool(w.c_str(),f));};auto s=[&](const char*k,const wchar_t*f){const auto w=utf8ToWide(k);d->SetString(k,wideToUtf8(musicSetting(w.c_str(),f)));};auto n=[&](const char*k,const wchar_t*stored,int f){d->SetInt(k,_wtoi(musicSetting(stored,std::to_wstring(f).c_str()).c_str()));};b("requestsEnabled",true);b("playlistOnly",false);b("preventDuplicates",true);b("announceTrackChanges",false);b("textOutputEnabled",false);s("minimumRole",L"everyone");const std::wstring legacy=musicSetting(L"exemptRole",L"moderator");d->SetBool("exemptSubscriber",musicBool(L"exemptSubscriber",legacy==L"subscriber"));d->SetBool("exemptVip",musicBool(L"exemptVip",legacy==L"subscriber"||legacy==L"vip"));d->SetBool("exemptModerator",musicBool(L"exemptModerator",legacy!=L"none"&&legacy!=L"broadcaster"));d->SetBool("exemptBroadcaster",musicBool(L"exemptBroadcaster",legacy!=L"none"));for(const char*cmd:{"sr","play","pause","skip","restart","previous","remove"})for(const char*role:{"everyone","subscriber","vip","moderator"}){const std::string key=std::string("command.")+cmd+"."+role;const bool fallback=std::string(cmd)=="sr"?std::string(role)=="everyone":std::string(role)=="moderator";b(key.c_str(),fallback);}s("nonRequestLabel",L"Stream DJ");s("textOutputFormat",L"{{title}} - {{artist}} - Requested by {{user}}");n("queueLimit",L"maxQueueTotal",50);n("userLimit",L"maxPerUser",2);n("maxTrackMinutes",L"maxTrackLengthMinutes",10);d->SetString("outputPath",wideToUtf8(textOutputPath()));d->SetBool("captureExists",g_captureExists);d->SetBool("autoStart",g_playerAutoStart);d->SetString("captureStatus",g_captureExists?"Music Capture exists. Use the button to review or change the captured application.":"Music Capture has not been created yet.");CefRefPtr<CefValue>root=CefValue::Create();root->SetDictionary(d);m_webView->ExecuteScript((L"window.rsApplySettings("+utf8ToWide(CefWriteJSON(root,JSON_WRITER_DEFAULT).ToString())+L")").c_str(),nullptr);}
+	void sendAccountsConfig(){if(!m_ready||!m_webView||m_page!=5)return;CefRefPtr<CefDictionaryValue>d=CefDictionaryValue::Create();d->SetString("streamerState",g_streamerAuthState);d->SetString("streamerLogin",g_streamerLogin);d->SetString("botState",g_botAuthState);d->SetString("botLogin",g_botLogin);d->SetString("sender",g_authSender);CefRefPtr<CefValue>root=CefValue::Create();root->SetDictionary(d);m_webView->ExecuteScript((L"window.rsApplyAccounts("+utf8ToWide(CefWriteJSON(root,JSON_WRITER_DEFAULT).ToString())+L")").c_str(),nullptr);}
 	HWND m_parent=nullptr; ComPtr<ICoreWebView2Controller> m_controller; ComPtr<ICoreWebView2> m_webView; bool m_ready=false; int m_page=-1;
 };
 
@@ -1254,10 +1268,15 @@ static LRESULT CALLBACK windowProc(HWND window, UINT message, WPARAM wParam, LPA
 				if (role == L"moderator") return 3; if (role == L"broadcaster") return 4; return 0;
 			};
 			const int minimumLevel = roleLevel(musicSetting(L"minimumRole", L"everyone"));
-			const int exemptLevel = roleLevel(musicSetting(L"exemptRole", L"moderator"));
-			const bool exempt = exemptLevel > 0 && result->track.requesterLevel >= exemptLevel;
+			const int roles = result->track.requesterLevel;
+			const int highestLevel = (roles & 8) ? 4 : (roles & 4) ? 3 : (roles & 2) ? 2 : (roles & 1) ? 1 : 0;
+			const std::wstring legacyExempt = musicSetting(L"exemptRole", L"moderator");
+			const bool exempt = ((roles & 1) && musicBool(L"exemptSubscriber", legacyExempt == L"subscriber")) ||
+				((roles & 2) && musicBool(L"exemptVip", legacyExempt == L"subscriber" || legacyExempt == L"vip")) ||
+				((roles & 4) && musicBool(L"exemptModerator", legacyExempt != L"none" && legacyExempt != L"broadcaster")) ||
+				((roles & 8) && musicBool(L"exemptBroadcaster", legacyExempt != L"none"));
 			const auto queuedRequests = g_hub.requests();
-			if (result->error.empty() && result->track.requesterLevel < minimumLevel)
+			if (result->error.empty() && highestLevel < minimumLevel)
 				result->error = "You do not have the required viewer role to request songs.";
 			const int queueLimit = _wtoi(musicSetting(L"maxQueueTotal", L"50").c_str());
 			if (result->error.empty() && !exempt && queueLimit > 0 && int(queuedRequests.size()) >= queueLimit)
@@ -1376,8 +1395,8 @@ static LRESULT CALLBACK windowProc(HWND window, UINT message, WPARAM wParam, LPA
 			}
 		}
 		const int navStart = 104;
-		if (point.x < sidebar && point.y >= navStart && point.y < navStart + 260) {
-			g_page = std::clamp((static_cast<int>(point.y) - navStart) / 52, 0, 4);
+		if (point.x < sidebar && point.y >= navStart && point.y < navStart + 364) {
+			g_page = std::clamp((static_cast<int>(point.y) - navStart) / 52, 0, 6);
 			positionLibraryControls(window);
 			positionOverlayControls(window);
 			if (g_youtubePlayer && g_youtubePlayer->active())
@@ -1461,10 +1480,10 @@ static LRESULT CALLBACK windowProc(HWND window, UINT message, WPARAM wParam, LPA
 	g_sidebarToggle = expanded ? RECT{194, 31, 220, 57} : RECT{78, 31, 104, 57};
 	label(graphics, expanded ? L"\u2039" : L"\u203A", heading,
 		RectF(float(g_sidebarToggle.left), float(g_sidebarToggle.top), 26, 26), secondary, StringAlignmentCenter);
-	const wchar_t *pages[] = {L"Now Playing", L"Queue & Requests", L"Library", L"Overlay Designer", L"Settings"};
-	const wchar_t *icons[] = {L"\u25B6", L"\u2261", L"\u266B", L"\u25C7", L"\u2699"};
+	const wchar_t *pages[] = {L"Now Playing", L"Queue & Requests", L"Library", L"Overlay Designer", L"Settings", L"Accounts", L"Commands"};
+	const wchar_t *icons[] = {L"\u25B6", L"\u2261", L"\u266B", L"\u25C7", L"\u2699", L"@", L"!"};
 	const float navStart = 104.0f;
-	for (int i = 0; i < 5; ++i) {
+	for (int i = 0; i < 7; ++i) {
 		const float y = navStart + i * 52.0f;
 		if (i == g_page) {
 			roundedPanel(graphics, RectF(13, y, float(sidebar - 26), 42), 9, accentSoft);
@@ -1482,7 +1501,7 @@ static LRESULT CALLBACK windowProc(HWND window, UINT message, WPARAM wParam, LPA
 	const float contentX = float(sidebar + 28), contentWidth = float(width - sidebar - 56);
 	const wchar_t *subtitles[] = {L"Your stream soundtrack at a glance", L"Manage what plays next",
 		L"Organise local music and provider playlists", L"Create a design that fits your stream",
-		L"Playback, appearance and accessibility"};
+		L"Playback, appearance and accessibility", L"Connect Twitch identities and choose the chat sender", L"Chat controls at a glance"};
 	label(graphics, pages[g_page], display, RectF(contentX, 22, contentWidth, 44), primary);
 	label(graphics, subtitles[g_page], body, RectF(contentX, 64, contentWidth, 28), secondary);
 
@@ -1789,7 +1808,14 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int)
 				while ((newline = input.find('\n')) != std::string::npos) {
 					std::string line = input.substr(0, newline); input.erase(0, newline + 1); if (!line.empty() && line.back() == '\r') line.pop_back();
 					if (line == "SHUTDOWN") { running = false; break; }
-					if (line.rfind("HUB_IMPORT\t", 0) == 0) {
+					if (line.rfind("AUTH_STATE\t", 0) == 0) {
+						std::vector<std::string> fields; size_t start=11,tab=0; while((tab=line.find('\t',start))!=std::string::npos){fields.push_back(line.substr(start,tab-start));start=tab+1;} fields.push_back(line.substr(start));
+						if(fields.size()>=3){if(fields[0]=="bot"){g_botAuthState=fields[1];g_botLogin=fields[2];}else{g_streamerAuthState=fields[1];g_streamerLogin=fields[2];}if(g_overlayDesigner)g_overlayDesigner->refresh();}
+					} else if (line.rfind("SETUP_STATE\t", 0) == 0) {
+						const size_t tab=line.find('\t',12);if(tab!=std::string::npos){g_captureExists=line.substr(12,tab-12)=="true";g_playerAutoStart=line.substr(tab+1)=="true";if(g_overlayDesigner)g_overlayDesigner->refresh();}
+					} else if (line.rfind("AUTH_SENDER_STATE\t", 0) == 0) {
+						g_authSender=line.substr(18); if(g_overlayDesigner)g_overlayDesigner->refresh();
+					} else if (line.rfind("HUB_IMPORT\t", 0) == 0) {
 						const std::string url = line.substr(11);
 						std::thread([window, url] { auto *result = new HubPlaylistResult(resolveHubPlaylist(url));
 							if (!PostMessageW(window, WM_HUB_PLAYLIST_RESULT, 0, reinterpret_cast<LPARAM>(result))) delete result; }).detach();

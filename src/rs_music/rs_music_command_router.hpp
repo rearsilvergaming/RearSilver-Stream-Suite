@@ -45,7 +45,7 @@ signals:
 
 private:
 	// ---- helpers ----
-	bool isControlAllowed(const RsMusicChatContext &ctx) const;
+	bool isCommandAllowed(const QString &command, const RsMusicChatContext &ctx) const;
 
 	void handleSongRequest(const RsMusicChatContext &ctx, const QString &args);
 

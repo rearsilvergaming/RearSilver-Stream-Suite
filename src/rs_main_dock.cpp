@@ -15,6 +15,7 @@
 #include <QApplication>
 #include <QScrollArea>
 #include <QSettings>
+#include "rs_music/rs_music_local_player.hpp"
 
 #include <obs-frontend-api.h>
 #include "enhancements/rs_auto_start.hpp"
@@ -157,6 +158,27 @@ RsMainDock::RsMainDock(QWidget *parent) : QWidget(parent)
 	// asynchronous reconnect. Otherwise an expired token can fail during
 	// construction and leave the status text permanently on Reconnecting.
 	createUi();
+	connect(m_musicController, &RsMusicController::twitchAuthActionRequested, this,
+		[this](const QString &account, const QString &action) {
+			RsMusicTwitchAuth *auth = account == "bot" ? m_botAuth : m_streamerAuth;
+			if (!auth) return;
+			if (action == "login") auth->beginDeviceAuth();
+			else if (action == "reconnect") auth->reconnect();
+			else if (action == "logout") auth->clearAuth();
+			publishMusicAuthState();
+		});
+	connect(m_musicController, &RsMusicController::twitchSenderPreferenceRequested, this, [this](bool useBot) {
+		const bool effectiveBot = useBot && m_botAuth && m_botAuth->hasValidToken();
+		QSettings("RearSilver", "RearSilver-Stream-Suite").setValue("music/twitch/send_from_bot", effectiveBot);
+		connectMusicChat(); publishMusicAuthState();
+	});
+	connect(m_musicController, &RsMusicController::twitchAuthStatusRequested, this, &RsMainDock::publishMusicAuthState);
+	for (RsMusicTwitchAuth *auth : {m_streamerAuth, m_botAuth}) {
+		connect(auth, &RsMusicTwitchAuth::connecting, this, &RsMainDock::publishMusicAuthState);
+		connect(auth, &RsMusicTwitchAuth::authCompleted, this, &RsMainDock::publishMusicAuthState);
+		connect(auth, &RsMusicTwitchAuth::loggedOut, this, &RsMainDock::publishMusicAuthState);
+		connect(auth, &RsMusicTwitchAuth::authFailed, this, [this](const QString &) { publishMusicAuthState(); });
+	}
 
 	// --------------------------------------------------
 	// Streamer auth → GLOBAL STATUS BAR (CONNECTED)
@@ -707,6 +729,20 @@ void RsMainDock::updateMusicStatusInfo()
 				  : QString("%1 — %2").arg(track.artist, track.title);
 	setStatusText(QString("Music: %1 — %2").arg(status, trackText),
 		      QString("%1\n%2").arg(trackText, source));
+}
+
+void RsMainDock::publishMusicAuthState()
+{
+	auto clean = [](QString value) { return value.replace('\t', ' ').replace('\n', ' '); };
+	auto publish = [&](const QString &account, RsMusicTwitchAuth *auth) {
+		const QString state = auth && auth->hasValidToken() ? "connected" : "disconnected";
+		const QString login = auth ? clean(auth->userLogin()) : QString();
+		RsMusicLocalPlayer::instance().sendUiCommand("AUTH_STATE", account + '\t' + state + '\t' + login);
+	};
+	publish("streamer", m_streamerAuth); publish("bot", m_botAuth);
+	const bool useBot = QSettings("RearSilver", "RearSilver-Stream-Suite").value("music/twitch/send_from_bot", false).toBool() &&
+		m_botAuth && m_botAuth->hasValidToken();
+	RsMusicLocalPlayer::instance().sendUiCommand("AUTH_SENDER_STATE", useBot ? "bot" : "streamer");
 }
 
 

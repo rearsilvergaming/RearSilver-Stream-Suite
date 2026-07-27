@@ -4,6 +4,7 @@
 #include "rs_music_helpers.hpp"
 #include "rs_music_metadata.hpp"
 #include "rs_music_youtube_resolver.hpp"
+#include "enhancements/rs_auto_start.hpp"
 
 #include <QDateTime>
 #include <QFileInfo>
@@ -22,6 +23,33 @@ extern "C" {
 RsMusicController::RsMusicController(RsMusicState *state, QObject *parent) : QObject(parent), m_state(state)
 {
 	connect(&RsMusicLocalPlayer::instance(), &RsMusicLocalPlayer::hostCommandReceived, this, [this](const QString &command) {
+		auto publishSetupState = []() {
+			obs_source_t *capture = obs_get_source_by_name("Music Capture");
+			const bool captureExists = capture != nullptr; if (capture) obs_source_release(capture);
+			const QString player = RsMusicLocalPlayer::instance().executablePath();
+			const bool autoStart = !player.isEmpty() && RsAutoStart::containsProgram(player);
+			RsMusicLocalPlayer::instance().sendUiCommand("SETUP_STATE",
+				QString("%1\t%2").arg(captureExists ? "true" : "false", autoStart ? "true" : "false"));
+		};
+		if (command == "SETUP_STATUS") { publishSetupState(); return; }
+		if (command.startsWith("AUTOSTART\t")) {
+			const QString player = RsMusicLocalPlayer::instance().executablePath();
+			if (!player.isEmpty()) {
+				if (command.section('\t', 1, 1) == "true") RsAutoStart::addProgram(player);
+				else RsAutoStart::removeProgram(player);
+			}
+			publishSetupState(); return;
+		}
+		if (command.startsWith("AUTH_ACTION\t")) {
+			const QStringList parts = command.split('\t');
+			if (parts.size() >= 3) emit twitchAuthActionRequested(parts[1], parts[2]);
+			return;
+		}
+		if (command.startsWith("AUTH_SENDER\t")) {
+			emit twitchSenderPreferenceRequested(command.section('\t', 1, 1) == "bot");
+			return;
+		}
+		if (command == "AUTH_STATUS") { emit twitchAuthStatusRequested(); return; }
 		if (command.startsWith("SETTING\t")) {
 			const QStringList parts = command.split('\t');
 			if (parts.size() < 3) return;
@@ -30,6 +58,11 @@ RsMusicController::RsMusicController(RsMusicState *state, QObject *parent) : QOb
 			else if (key == "queueLimit") rsMusicSetMaxQueueTotal(value.toInt());
 			else if (key == "userLimit") rsMusicSetMaxPerUser(value.toInt());
 			else if (key == "maxTrackMinutes") rsMusicSetMaxTrackLengthSec(value.toInt() * 60);
+			else if (key.startsWith("command.")) {
+				const QStringList bits = key.split('.');
+				if (bits.size() == 3) QSettings("RearSilver", "RearSilver-Stream-Suite").setValue(
+					QString("music/commands/%1/%2").arg(bits[1], bits[2]), value == "true" || value == "1");
+			}
 			return;
 		}
 		if (command.startsWith("REQUEST_ACCEPTED\t")) {
@@ -69,6 +102,7 @@ RsMusicController::RsMusicController(RsMusicState *state, QObject *parent) : QOb
 			if (sceneSource) obs_source_release(sceneSource);
 		}
 		if (source) { obs_frontend_open_source_properties(source); obs_source_release(source); }
+		publishSetupState();
 	});
 	m_youtubeResolver = new RsMusicYouTubeResolver(this);
 	QSettings settings("RearSilver", "RearSilver-Stream-Suite");

@@ -144,6 +144,11 @@ void RsMusicLocalPlayer::sendCommand(const QString &command, const QString &argu
 	m_socket->flush();
 }
 
+void RsMusicLocalPlayer::sendUiCommand(const QString &command, const QString &argument)
+{
+	sendCommand(command, argument);
+}
+
 static QString protocolField(QString value)
 {
 	return value.replace('\t', ' ').replace('\r', ' ').replace('\n', ' ');

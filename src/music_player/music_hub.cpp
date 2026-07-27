@@ -197,6 +197,7 @@ std::string MusicHubModel::trackJson(const HubTrack &track)
 		<< ",\"provider\":" << json(track.provider) << ",\"title\":" << json(track.title) << ",\"artist\":" << json(track.artist)
 		<< ",\"album\":" << json(track.album)
 		<< ",\"artworkUrl\":" << json(track.artworkUrl) << ",\"requestedBy\":" << json(track.requestedBy)
+		<< ",\"requesterId\":" << json(track.requesterId) << ",\"requesterLevel\":" << track.requesterLevel
 		<< ",\"durationSeconds\":" << track.durationSeconds << ",\"request\":" << (track.request ? "true" : "false") << "}";
 	return out.str();
 }

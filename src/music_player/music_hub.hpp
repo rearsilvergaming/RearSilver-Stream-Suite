@@ -15,6 +15,8 @@ struct HubTrack {
 	std::string album;
 	std::string artworkUrl;
 	std::string requestedBy;
+	std::string requesterId;
+	int requesterLevel = 0;
 	int durationSeconds = 0;
 	bool request = false;
 };

@@ -144,8 +144,11 @@ void RsMusicTwitchIrcReader::handleLine(const QString &line)
 	const QString displayName = tagValue(tags, "display-name");
 	const QString userId = tagValue(tags, "user-id");
 
+	const QString badges = tagValue(tags, "badges");
 	const bool isMod = (tagValue(tags, "mod") == "1");
-	const bool isBroadcaster = tagValue(tags, "badges").contains("broadcaster");
+	const bool isBroadcaster = badges.contains("broadcaster");
+	const bool isSubscriber = tagValue(tags, "subscriber") == "1" || badges.contains("subscriber/") || badges.contains("founder/");
+	const bool isVip = badges.contains("vip/");
 
 	// A tagged Twitch IRC line contains an earlier " :" before the sender
 	// prefix as well as the delimiter before the actual chat payload.  The
@@ -160,6 +163,8 @@ void RsMusicTwitchIrcReader::handleLine(const QString &line)
 	msg.userId = userId;
 	msg.displayName = displayName;
 	msg.message = msgText;
+	msg.isSubscriber = isSubscriber;
+	msg.isVip = isVip;
 	msg.isMod = isMod;
 	msg.isBroadcaster = isBroadcaster;
 

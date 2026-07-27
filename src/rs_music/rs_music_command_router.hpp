@@ -24,6 +24,8 @@ class RsMusicController;
 struct RsMusicChatContext {
 	QString userId;
 	QString displayName;
+	bool isSubscriber = false;
+	bool isVip = false;
 	bool isMod = false;
 	bool isBroadcaster = false;
 };

@@ -55,6 +55,11 @@ RsMusicController::RsMusicController(RsMusicState *state, QObject *parent) : QOb
 			emit songRequestRemoveFailed(parts.value(1), parts.mid(2).join(" "));
 			return;
 		}
+		if (command.startsWith("NOW_PLAYING\t")) {
+			const QStringList parts = command.split('\t');
+			emit nowPlayingAnnounced(parts.value(1), parts.value(2), parts.value(3));
+			return;
+		}
 		if (command != "CREATE_CAPTURE") return;
 		obs_source_t *source = obs_get_source_by_name("Music Capture");
 		if (!source) {
@@ -465,11 +470,15 @@ void RsMusicController::playNextLocalTrack()
 }
 
 RsMusicRequestResult RsMusicController::actionSongRequest(const QString &userId, const QString &displayName,
-						   const QString &query, bool isModOrBroadcaster)
+						   const QString &query, int requesterLevel)
 {
-	const RsMusicRequestResult result = rsMusicRequestSong(userId, displayName, query, isModOrBroadcaster);
+	// The companion Media Player owns request admission. Bypass the legacy
+	// dock-side limits here so its persisted role and limit settings are the
+	// single source of truth.
+	const RsMusicRequestResult result = rsMusicRequestSong(userId, displayName, query, true);
 	if (result.accepted)
-		RsMusicLocalPlayer::instance().requestYouTubeTrack(result.trackId, displayName, query.trimmed());
+		RsMusicLocalPlayer::instance().requestYouTubeTrack(result.trackId, userId, displayName, requesterLevel,
+			query.trimmed());
 	return result;
 }
 

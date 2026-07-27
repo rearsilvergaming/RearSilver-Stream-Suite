@@ -48,7 +48,7 @@ public:
 
 	// ---- song requests ----
 	RsMusicRequestResult actionSongRequest(const QString &userId, const QString &displayName, const QString &query,
-					       bool isModOrBroadcaster = false);
+					       int requesterLevel = 0);
 	void actionRemoveRequest(const QString &requestId);
 
 signals:
@@ -59,6 +59,7 @@ signals:
 	void songRequestRejected(const QString &requestId, const QString &message);
 	void songRequestRemoved(const QString &requestId, const QString &title, const QString &artist);
 	void songRequestRemoveFailed(const QString &requestId, const QString &message);
+	void nowPlayingAnnounced(const QString &title, const QString &artist, const QString &requester);
 
 private:
 	void syncQueueFromBackend();

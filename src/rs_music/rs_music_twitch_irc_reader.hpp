@@ -18,6 +18,8 @@ struct RsMusicChatMessage {
 	QString userId;
 	QString displayName;
 	QString message;
+	bool isSubscriber = false;
+	bool isVip = false;
 	bool isMod = false;
 	bool isBroadcaster = false;
 };

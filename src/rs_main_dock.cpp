@@ -132,6 +132,8 @@ RsMainDock::RsMainDock(QWidget *parent) : QWidget(parent)
 			RsMusicChatContext context;
 			context.userId = message.userId;
 			context.displayName = message.displayName;
+			context.isSubscriber = message.isSubscriber;
+			context.isVip = message.isVip;
 			context.isMod = message.isMod;
 			context.isBroadcaster = message.isBroadcaster;
 			m_musicCommandRouter->ingestChatMessage(context, message.message);
@@ -151,14 +153,9 @@ RsMainDock::RsMainDock(QWidget *parent) : QWidget(parent)
 		QTimer::singleShot(0, this, &RsMainDock::connectMusicChat);
 	});
 
-	// Auto-resume if tokens already exist
-	if (m_streamerAuth->hasValidToken())
-		m_streamerAuth->reconnect();
-
-	if (m_botAuth->hasValidToken())
-		m_botAuth->reconnect();
-
-	// Build UI AFTER auth exists
+	// Build the UI and bind every auth-state listener before attempting an
+	// asynchronous reconnect. Otherwise an expired token can fail during
+	// construction and leave the status text permanently on Reconnecting.
 	createUi();
 
 	// --------------------------------------------------
@@ -207,13 +204,15 @@ RsMainDock::RsMainDock(QWidget *parent) : QWidget(parent)
 		// LOGOUT: disconnected
 		connect(m_streamerAuth, &RsMusicTwitchAuth::loggedOut, this, [this]() {
 			RsSetTwitchDot(m_lblStreamerDot, "#FF3B30"); // red
+			m_lblStreamerText->setText("Streamer — Not connected");
 			m_lblStreamerText->setToolTip("Streamer account: Not connected");
 		});
 
 		// FAIL: disconnected (error still maps to red per your rules)
-		connect(m_streamerAuth, &RsMusicTwitchAuth::authFailed, this, [this](const QString &) {
+		connect(m_streamerAuth, &RsMusicTwitchAuth::authFailed, this, [this](const QString &reason) {
 			RsSetTwitchDot(m_lblStreamerDot, "#FF3B30"); // red
-			m_lblStreamerText->setToolTip("Streamer account: Connection error");
+			m_lblStreamerText->setText("Streamer — Not connected");
+			m_lblStreamerText->setToolTip(reason.isEmpty() ? "Streamer account: Connection error" : reason);
 		});
 
 	}
@@ -247,13 +246,15 @@ RsMainDock::RsMainDock(QWidget *parent) : QWidget(parent)
 		// LOGOUT: disconnected
 		connect(m_botAuth, &RsMusicTwitchAuth::loggedOut, this, [this]() {
 			RsSetTwitchDot(m_lblBotDot, "#FF3B30"); // red
+			m_lblBotText->setText("Bot — Not connected");
 			m_lblBotText->setToolTip("Bot account: Not connected");
 		});
 
 		// FAIL: disconnected (error maps to red per your rules)
-		connect(m_botAuth, &RsMusicTwitchAuth::authFailed, this, [this](const QString &) {
+		connect(m_botAuth, &RsMusicTwitchAuth::authFailed, this, [this](const QString &reason) {
 			RsSetTwitchDot(m_lblBotDot, "#FF3B30"); // red
-			m_lblBotText->setToolTip("Bot account: Connection error");
+			m_lblBotText->setText("Bot — Not connected");
+			m_lblBotText->setToolTip(reason.isEmpty() ? "Bot account: Connection error" : reason);
 		});
 	}
 	
@@ -305,6 +306,14 @@ if (m_lblBotDot && m_botAuth && !m_botAuthResolved) {
 
 	updateEffectiveLayout();
 	showControls();
+
+	// Reconnect only after createUi() has connected the Settings page and the
+	// global status labels to loggedOut/authFailed. Invalid saved sessions then
+	// become an ordinary logged-out state with the Login button available.
+	QTimer::singleShot(0, this, [this]() {
+		if (m_streamerAuth->hasValidToken()) m_streamerAuth->reconnect();
+		if (m_botAuth->hasValidToken()) m_botAuth->reconnect();
+	});
 
 }
 

@@ -35,6 +35,11 @@ RsMusicCommandRouter::RsMusicCommandRouter(RsMusicController *controller, QObjec
 		[this](const QString &id, const QString &message) {
 			emit feedbackMessage(QString("Could not remove request #%1: %2").arg(id, message));
 		});
+	connect(m_controller, &RsMusicController::nowPlayingAnnounced, this,
+		[this](const QString &title, const QString &artist, const QString &requester) {
+			emit feedbackMessage(QString("🎵 NOW PLAYING: %1 — %2 — requested by %3.")
+				.arg(title, artist, requester));
+		});
 }
 
 void RsMusicCommandRouter::ingestChatMessage(const RsMusicChatContext &ctx, const QString &messageText)
@@ -98,8 +103,13 @@ void RsMusicCommandRouter::handleSongRequest(const RsMusicChatContext &ctx, cons
 		return;
 	}
 
+	int requesterLevel = 0;
+	if (ctx.isSubscriber) requesterLevel = 1;
+	if (ctx.isVip) requesterLevel = 2;
+	if (ctx.isMod) requesterLevel = 3;
+	if (ctx.isBroadcaster) requesterLevel = 4;
 	const RsMusicRequestResult result =
-		m_controller->actionSongRequest(ctx.userId, ctx.displayName, args, isControlAllowed(ctx));
+		m_controller->actionSongRequest(ctx.userId, ctx.displayName, args, requesterLevel);
 	if (!result.accepted) {
 		emit feedbackMessage(QString("%1: %2").arg(ctx.displayName, result.reason));
 		return;

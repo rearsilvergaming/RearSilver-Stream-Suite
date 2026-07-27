@@ -799,6 +799,7 @@ static std::string playerFallbackArtwork()
 }
 
 static void writeTextOutput(const HubTrack &track);
+static bool musicBool(const wchar_t *name, bool fallback);
 
 static bool startHubTrack(const HubTrack &track, bool record = true)
 {
@@ -817,6 +818,10 @@ static bool startHubTrack(const HubTrack &track, bool record = true)
 	}
 	g_queuePage = 0; syncHubQueueView();
 	writeTextOutput(track);
+	if (musicBool(L"announceTrackChanges", false)) {
+		std::lock_guard<std::mutex> lock(g_hostEventMutex);
+		g_hostEvents.push_back("HOST\tNOW_PLAYING\t" + track.title + "\t" + track.artist + "\t" + track.requestedBy + "\n");
+	}
 	return true;
 }
 
@@ -856,7 +861,9 @@ static void loadHubState()
 			track.provider = value->GetString("provider").ToString(); if (track.provider.empty()) track.provider = "youtube";
 			track.title = value->GetString("title").ToString(); track.artist = value->GetString("artist").ToString();
 			track.album = value->GetString("album").ToString(); track.artworkUrl = value->GetString("artworkUrl").ToString();
-			track.requestedBy = value->GetString("requestedBy").ToString(); track.durationSeconds = value->GetInt("durationSeconds");
+			track.requestedBy = value->GetString("requestedBy").ToString();
+			track.requesterId = value->GetString("requesterId").ToString();
+			track.requesterLevel = value->GetInt("requesterLevel"); track.durationSeconds = value->GetInt("durationSeconds");
 			if (!track.providerId.empty()) tracks.push_back(std::move(track));
 		} return tracks;
 	};
@@ -1038,7 +1045,7 @@ private:
 	void sendLibraryConfig() {
 		if(!m_ready||!m_webView||m_page!=2)return; CefRefPtr<CefDictionaryValue>d=CefDictionaryValue::Create(); d->SetString("url",g_hub.fallbackUrl()); d->SetString("status",wideToUtf8(g_libraryStatus)); d->SetString("label",g_hub.fallbackLabel()); d->SetInt("youtubeCount",int(g_hub.youtubeFallback().size())); d->SetInt("requestCount",int(g_hub.requests().size())); d->SetInt("localCount",int(g_hub.localLibrary().size())); d->SetString("source",g_hub.activeSource()); CefRefPtr<CefValue>root=CefValue::Create();root->SetDictionary(d);const std::wstring script=L"window.rsApplyLibrary("+utf8ToWide(CefWriteJSON(root,JSON_WRITER_DEFAULT).ToString())+L")";m_webView->ExecuteScript(script.c_str(),nullptr);
 	}
-	void sendSettingsConfig(){if(!m_ready||!m_webView||m_page!=4)return;CefRefPtr<CefDictionaryValue>d=CefDictionaryValue::Create();auto b=[&](const char*k,bool f){const auto w=utf8ToWide(k);d->SetBool(k,musicBool(w.c_str(),f));};auto s=[&](const char*k,const wchar_t*f){const auto w=utf8ToWide(k);d->SetString(k,wideToUtf8(musicSetting(w.c_str(),f)));};auto n=[&](const char*k,const wchar_t*stored,int f){d->SetInt(k,_wtoi(musicSetting(stored,std::to_wstring(f).c_str()).c_str()));};b("requestsEnabled",true);b("playlistOnly",false);b("preventDuplicates",true);b("textOutputEnabled",false);s("minimumRole",L"everyone");s("exemptRole",L"moderator");s("nonRequestLabel",L"Stream DJ");s("textOutputFormat",L"{{title}} - {{artist}} - Requested by {{user}}");n("queueLimit",L"maxQueueTotal",50);n("userLimit",L"maxPerUser",2);n("maxTrackMinutes",L"maxTrackLengthMinutes",10);d->SetString("outputPath",wideToUtf8(textOutputPath()));d->SetString("captureStatus","Checks for Music Capture, creates it if missing, then opens its properties.");CefRefPtr<CefValue>root=CefValue::Create();root->SetDictionary(d);m_webView->ExecuteScript((L"window.rsApplySettings("+utf8ToWide(CefWriteJSON(root,JSON_WRITER_DEFAULT).ToString())+L")").c_str(),nullptr);}
+	void sendSettingsConfig(){if(!m_ready||!m_webView||m_page!=4)return;CefRefPtr<CefDictionaryValue>d=CefDictionaryValue::Create();auto b=[&](const char*k,bool f){const auto w=utf8ToWide(k);d->SetBool(k,musicBool(w.c_str(),f));};auto s=[&](const char*k,const wchar_t*f){const auto w=utf8ToWide(k);d->SetString(k,wideToUtf8(musicSetting(w.c_str(),f)));};auto n=[&](const char*k,const wchar_t*stored,int f){d->SetInt(k,_wtoi(musicSetting(stored,std::to_wstring(f).c_str()).c_str()));};b("requestsEnabled",true);b("playlistOnly",false);b("preventDuplicates",true);b("announceTrackChanges",false);b("textOutputEnabled",false);s("minimumRole",L"everyone");s("exemptRole",L"moderator");s("nonRequestLabel",L"Stream DJ");s("textOutputFormat",L"{{title}} - {{artist}} - Requested by {{user}}");n("queueLimit",L"maxQueueTotal",50);n("userLimit",L"maxPerUser",2);n("maxTrackMinutes",L"maxTrackLengthMinutes",10);d->SetString("outputPath",wideToUtf8(textOutputPath()));d->SetString("captureStatus","Checks for Music Capture, creates it if missing, then opens its properties.");CefRefPtr<CefValue>root=CefValue::Create();root->SetDictionary(d);m_webView->ExecuteScript((L"window.rsApplySettings("+utf8ToWide(CefWriteJSON(root,JSON_WRITER_DEFAULT).ToString())+L")").c_str(),nullptr);}
 	HWND m_parent=nullptr; ComPtr<ICoreWebView2Controller> m_controller; ComPtr<ICoreWebView2> m_webView; bool m_ready=false; int m_page=-1;
 };
 
@@ -1240,6 +1247,28 @@ static LRESULT CALLBACK windowProc(HWND window, UINT message, WPARAM wParam, LPA
 	if (message == WM_HUB_REQUEST_RESULT) {
 		std::unique_ptr<HubSearchResult> result(reinterpret_cast<HubSearchResult *>(lParam));
 		if (result && result->error.empty()) {
+			if (!musicBool(L"requestsEnabled", true))
+				result->error = "Song requests are currently disabled.";
+			auto roleLevel = [](const std::wstring &role) {
+				if (role == L"subscriber") return 1; if (role == L"vip") return 2;
+				if (role == L"moderator") return 3; if (role == L"broadcaster") return 4; return 0;
+			};
+			const int minimumLevel = roleLevel(musicSetting(L"minimumRole", L"everyone"));
+			const int exemptLevel = roleLevel(musicSetting(L"exemptRole", L"moderator"));
+			const bool exempt = exemptLevel > 0 && result->track.requesterLevel >= exemptLevel;
+			const auto queuedRequests = g_hub.requests();
+			if (result->error.empty() && result->track.requesterLevel < minimumLevel)
+				result->error = "You do not have the required viewer role to request songs.";
+			const int queueLimit = _wtoi(musicSetting(L"maxQueueTotal", L"50").c_str());
+			if (result->error.empty() && !exempt && queueLimit > 0 && int(queuedRequests.size()) >= queueLimit)
+				result->error = "The request queue is full.";
+			const int userLimit = _wtoi(musicSetting(L"maxPerUser", L"2").c_str());
+			if (result->error.empty() && !exempt && userLimit > 0) {
+				const int userQueued = int(std::count_if(queuedRequests.begin(), queuedRequests.end(), [&](const HubTrack &track) {
+					return !result->track.requesterId.empty() && track.requesterId == result->track.requesterId;
+				}));
+				if (userQueued >= userLimit) result->error = "You already have the maximum number of songs queued.";
+			}
 			const int maxMinutes = _wtoi(musicSetting(L"maxTrackLengthMinutes", L"10").c_str());
 			if (maxMinutes > 0 && result->track.durationSeconds > maxMinutes * 60)
 				result->error = "That track exceeds the maximum request length.";
@@ -1765,13 +1794,15 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int)
 						std::thread([window, url] { auto *result = new HubPlaylistResult(resolveHubPlaylist(url));
 							if (!PostMessageW(window, WM_HUB_PLAYLIST_RESULT, 0, reinterpret_cast<LPARAM>(result))) delete result; }).detach();
 					} else if (line.rfind("HUB_REQUEST\t", 0) == 0) {
-						const size_t first = line.find('\t', 12);
-						const size_t second = first == std::string::npos ? first : line.find('\t', first + 1);
-						const std::string requestId = first == std::string::npos ? std::string{} : line.substr(12, first - 12);
-						const std::string requester = second == std::string::npos ? std::string{} : line.substr(first + 1, second - first - 1);
-						const std::string query = second == std::string::npos ? std::string{} : line.substr(second + 1);
-						std::thread([window, query, requester, requestId] { auto *result = new HubSearchResult(resolveHubSearch(query, requester));
+						std::vector<std::string> fields; size_t start = 12, tab = 0;
+						while ((tab = line.find('\t', start)) != std::string::npos && fields.size() < 4) { fields.push_back(line.substr(start, tab - start)); start = tab + 1; }
+						fields.push_back(line.substr(start));
+						if (fields.size() < 5) continue;
+						const std::string requestId = fields[0], requesterId = fields[1], requester = fields[2], query = fields[4];
+						const int requesterLevel = std::atoi(fields[3].c_str());
+						std::thread([window, query, requesterId, requester, requesterLevel, requestId] { auto *result = new HubSearchResult(resolveHubSearch(query, requester));
 							result->track.id = requestId;
+							result->track.requesterId = requesterId; result->track.requesterLevel = requesterLevel;
 							if (!PostMessageW(window, WM_HUB_REQUEST_RESULT, 0, reinterpret_cast<LPARAM>(result))) delete result; }).detach();
 					} else if (line.rfind("HUB_REMOVE\t", 0) == 0) {
 						const std::string id = line.substr(11); HubTrack removed;

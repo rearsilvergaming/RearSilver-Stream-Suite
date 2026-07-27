@@ -303,15 +303,28 @@ void RsMusicTwitchAuth::reconnect()
 	QNetworkReply *reply = net->get(req);
 	connect(reply, &QNetworkReply::finished, this, [this, reply, net]() {
 		net->deleteLater();
+		const QByteArray responseBody = reply->readAll();
+		const int httpStatus = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
 		reply->deleteLater();
 
 		if (reply->error() != QNetworkReply::NoError) {
-			clearAuth();
-			emit authFailed("Saved Twitch login is no longer valid");
+			const QJsonObject error = QJsonDocument::fromJson(responseBody).object();
+			blog(LOG_WARNING, "[RS Music] Twitch token validation failed (HTTP %d): %s",
+			     httpStatus, error["message"].toString(reply->errorString()).toUtf8().constData());
+			if (httpStatus == 401 && !m_refreshToken.isEmpty()) {
+				refreshAccessToken();
+				return;
+			}
+			if (httpStatus == 401) {
+				clearAuth();
+				emit authFailed("Saved Twitch login expired. Please log in again.");
+			} else {
+				emit authFailed("Could not reach Twitch. Use Reconnect to try again.");
+			}
 			return;
 		}
 
-		const QJsonObject obj = QJsonDocument::fromJson(reply->readAll()).object();
+		const QJsonObject obj = QJsonDocument::fromJson(responseBody).object();
 		if (!hasRequiredChatScopes(obj["scopes"].toArray())) {
 			clearAuth();
 			emit authFailed("Saved Twitch login lacks chat permissions. Please log in again.");
@@ -326,6 +339,55 @@ void RsMusicTwitchAuth::reconnect()
 
 		emit identityResolved(displayName);
 		emit authCompleted();
+	});
+}
+
+void RsMusicTwitchAuth::refreshAccessToken()
+{
+	if (m_refreshToken.isEmpty()) {
+		clearAuth();
+		emit authFailed("Saved Twitch login expired. Please log in again.");
+		return;
+	}
+
+	blog(LOG_INFO, "[RS Music] Refreshing expired Twitch device-code access token.");
+	QNetworkAccessManager *net = new QNetworkAccessManager(this);
+	QUrl url(TOKEN_URL);
+	QUrlQuery query;
+	query.addQueryItem("client_id", TWITCH_CLIENT_ID);
+	query.addQueryItem("grant_type", "refresh_token");
+	query.addQueryItem("refresh_token", m_refreshToken);
+	url.setQuery(query);
+	QNetworkRequest request(url);
+	QNetworkReply *reply = net->post(request, QByteArray());
+	connect(reply, &QNetworkReply::finished, this, [this, reply, net]() {
+		net->deleteLater();
+		const QByteArray responseBody = reply->readAll();
+		const int httpStatus = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+		const QString networkError = reply->errorString();
+		reply->deleteLater();
+		const QJsonObject json = QJsonDocument::fromJson(responseBody).object();
+		if (reply->error() != QNetworkReply::NoError || !json.contains("access_token") ||
+		    !json.contains("refresh_token")) {
+			blog(LOG_WARNING, "[RS Music] Twitch token refresh failed (HTTP %d): %s", httpStatus,
+			     json["message"].toString(networkError).toUtf8().constData());
+			clearAuth();
+			emit authFailed("Saved Twitch login expired. Please log in again.");
+			return;
+		}
+		if (!hasRequiredChatScopes(json["scope"].toArray())) {
+			clearAuth();
+			emit authFailed("Refreshed Twitch login lacks chat permissions. Please log in again.");
+			return;
+		}
+
+		// Twitch device-code refresh tokens are single-use. Persist the newly
+		// rotated pair together before validating the replacement access token.
+		m_accessToken = json["access_token"].toString();
+		m_refreshToken = json["refresh_token"].toString();
+		saveToSettings();
+		blog(LOG_INFO, "[RS Music] Twitch access token refreshed successfully.");
+		reconnect();
 	});
 }
 

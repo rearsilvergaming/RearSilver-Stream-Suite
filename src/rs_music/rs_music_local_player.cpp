@@ -256,9 +256,11 @@ void RsMusicLocalPlayer::stop() { sendCommand("STOP"); emit playbackStopped(); }
 void RsMusicLocalPlayer::restart() { sendCommand("RESTART"); }
 void RsMusicLocalPlayer::seekTo(qint64 positionMs) { sendCommand("SEEK", QString::number(qMax<qint64>(0, positionMs))); }
 
-void RsMusicLocalPlayer::requestYouTubeTrack(const QString &requestId, const QString &requester, const QString &query)
+void RsMusicLocalPlayer::requestYouTubeTrack(const QString &requestId, const QString &requesterId,
+					     const QString &requester, int requesterLevel, const QString &query)
 {
-	sendCommand("HUB_REQUEST", protocolField(requestId) + "\t" + protocolField(requester) + "\t" + protocolField(query));
+	sendCommand("HUB_REQUEST", protocolField(requestId) + "\t" + protocolField(requesterId) + "\t" +
+		protocolField(requester) + "\t" + QString::number(requesterLevel) + "\t" + protocolField(query));
 }
 void RsMusicLocalPlayer::removeRequest(const QString &requestId) { sendCommand("HUB_REMOVE", protocolField(requestId)); }
 void RsMusicLocalPlayer::skip() { sendCommand("SKIP"); }

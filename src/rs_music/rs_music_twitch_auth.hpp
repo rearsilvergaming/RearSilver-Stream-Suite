@@ -62,6 +62,7 @@ private:
 	// OAuth helpers
 	void requestDeviceCode();
 	void requestAccessToken();
+	void refreshAccessToken();
 
 private:
 	// ---- persisted ----

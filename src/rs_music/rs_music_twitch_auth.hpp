@@ -30,6 +30,8 @@ public:
 	void beginDeviceAuth(); // starts device flow
 	void clearAuth();       // forget token
 	void reconnect();       // reuse stored token if possible
+	void adoptSession(const QString &accessToken, const QString &login, const QString &userId);
+	void clearTransientSession();
 
 signals:
 
@@ -80,5 +82,6 @@ private:
 
 	QTimer m_pollTimer;
 	QTimer m_deviceExpiryTimer;
+	QTimer m_validationTimer;
 };
 

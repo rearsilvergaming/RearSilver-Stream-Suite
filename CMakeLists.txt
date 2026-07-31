@@ -47,7 +47,9 @@ if(WIN32)
 		CXX_STANDARD 17 CXX_STANDARD_REQUIRED YES
 		MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 	add_executable(RearSilver-Music-Player WIN32 src/music_player/main.cpp src/music_player/music_hub.cpp
-		src/music_player/youtube_resolver.cpp src/music_player/local_library.cpp src/music_player/app.rc)
+		src/music_player/youtube_resolver.cpp src/music_player/local_library.cpp
+		src/music_player/system_media_provider.cpp src/music_player/spotify_client.cpp
+		src/music_player/twitch_accounts.cpp src/music_player/app.rc)
 	target_include_directories(RearSilver-Music-Player PRIVATE
 		"${CMAKE_CURRENT_SOURCE_DIR}/third_party/miniaudio"
 		"${CMAKE_CURRENT_SOURCE_DIR}/third_party/webview2/include"
@@ -62,7 +64,7 @@ if(WIN32)
 		comctl32.lib gdi32.lib rpcrt4.lib shlwapi.lib ws2_32.lib
 		Advapi32.lib dbghelp.lib Delayimp.lib ntdll.lib OleAut32.lib PowrProf.lib
 		Propsys.lib psapi.lib SetupAPI.lib Shell32.lib Shcore.lib Userenv.lib
-		version.lib wbemuuid.lib WindowsApp.lib winhttp.lib winmm.lib)
+		version.lib wbemuuid.lib WindowsApp.lib winhttp.lib winmm.lib bcrypt.lib crypt32.lib credui.lib)
 	target_compile_definitions(RearSilver-Music-Player PRIVATE CEF_USE_SANDBOX PSAPI_VERSION=1)
 	set_target_properties(RearSilver-Music-Player PROPERTIES
 		CXX_STANDARD 17

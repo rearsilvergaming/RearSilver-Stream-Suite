@@ -121,7 +121,7 @@ private:
 	RsMusicTwitchIrcReader *m_musicIrcReader = nullptr;
 	RsMusicTwitchIrcSender *m_musicIrcSender = nullptr;
 
-// Twitch auth (owned by dock)
+// Transient Twitch sessions supplied and refreshed by the Media Player.
 	RsMusicTwitchAuth *m_streamerAuth = nullptr;
 	RsMusicTwitchAuth *m_botAuth = nullptr;
 	bool m_streamerAuthResolved = false;

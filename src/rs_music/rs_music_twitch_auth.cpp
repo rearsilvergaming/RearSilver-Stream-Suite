@@ -41,7 +41,8 @@ RsMusicTwitchAuth::RsMusicTwitchAuth(const QString &settingsRoot, QObject *paren
 	: QObject(parent),
 	  m_settingsRoot(settingsRoot)
 {
-	loadFromSettings();
+	// OAuth persistence and refresh are owned by the companion Media Player.
+	// The OBS plugin receives only a validated transient access session over IPC.
 
 	connect(&m_pollTimer, &QTimer::timeout, this, &RsMusicTwitchAuth::pollForToken);
 	m_deviceExpiryTimer.setSingleShot(true);
@@ -50,6 +51,8 @@ RsMusicTwitchAuth::RsMusicTwitchAuth(const QString &settingsRoot, QObject *paren
 		m_deviceCode.clear();
 		emit authFailed("Twitch login request expired. Please try again.");
 	});
+	m_validationTimer.setInterval(60 * 60 * 1000);
+	connect(&m_validationTimer, &QTimer::timeout, this, &RsMusicTwitchAuth::reconnect);
 }
 
 
@@ -86,6 +89,7 @@ void RsMusicTwitchAuth::clearAuth()
 {
 	m_pollTimer.stop();
 	m_deviceExpiryTimer.stop();
+	m_validationTimer.stop();
 	clearSettings();
 
 	m_accessToken.clear();
@@ -262,7 +266,7 @@ void RsMusicTwitchAuth::requestAccessToken()
 }
 void RsMusicTwitchAuth::loadFromSettings()
 {
-	QSettings s;
+	QSettings s("RearSilver", "RearSilver-Stream-Suite");
 	m_accessToken = s.value(m_settingsRoot + "/access_token").toString();
 	m_refreshToken = s.value(m_settingsRoot + "/refresh_token").toString();
 	m_userLogin = s.value(m_settingsRoot + "/login").toString();
@@ -271,17 +275,19 @@ void RsMusicTwitchAuth::loadFromSettings()
 
 void RsMusicTwitchAuth::saveToSettings()
 {
-	QSettings s;
+	QSettings s("RearSilver", "RearSilver-Stream-Suite");
 	s.setValue(m_settingsRoot + "/access_token", m_accessToken);
 	s.setValue(m_settingsRoot + "/refresh_token", m_refreshToken);
 	s.setValue(m_settingsRoot + "/login", m_userLogin);
 	s.setValue(m_settingsRoot + "/user_id", m_userId);
+	s.sync();
 }
 
 void RsMusicTwitchAuth::clearSettings()
 {
-	QSettings s;
+	QSettings s("RearSilver", "RearSilver-Stream-Suite");
 	s.remove(m_settingsRoot);
+	s.sync();
 }
 
 void RsMusicTwitchAuth::reconnect()
@@ -305,19 +311,23 @@ void RsMusicTwitchAuth::reconnect()
 		net->deleteLater();
 		const QByteArray responseBody = reply->readAll();
 		const int httpStatus = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+		const QNetworkReply::NetworkError networkError = reply->error();
+		const QString networkErrorText = reply->errorString();
 		reply->deleteLater();
 
-		if (reply->error() != QNetworkReply::NoError) {
+		if (networkError != QNetworkReply::NoError) {
 			const QJsonObject error = QJsonDocument::fromJson(responseBody).object();
 			blog(LOG_WARNING, "[RS Music] Twitch token validation failed (HTTP %d): %s",
-			     httpStatus, error["message"].toString(reply->errorString()).toUtf8().constData());
+			     httpStatus, error["message"].toString(networkErrorText).toUtf8().constData());
 			if (httpStatus == 401 && !m_refreshToken.isEmpty()) {
 				refreshAccessToken();
 				return;
 			}
 			if (httpStatus == 401) {
-				clearAuth();
-				emit authFailed("Saved Twitch login expired. Please log in again.");
+				// Keep the saved identity and token material. A user should only be
+				// logged out explicitly or after Twitch rejects the refresh token;
+				// an access-token validation failure is recoverable.
+				emit authFailed("Saved Twitch login needs reconnecting.");
 			} else {
 				emit authFailed("Could not reach Twitch. Use Reconnect to try again.");
 			}
@@ -342,6 +352,20 @@ void RsMusicTwitchAuth::reconnect()
 	});
 }
 
+void RsMusicTwitchAuth::adoptSession(const QString &accessToken, const QString &login, const QString &userId)
+{
+	m_pollTimer.stop(); m_deviceExpiryTimer.stop(); m_validationTimer.stop();
+	m_accessToken = accessToken; m_refreshToken.clear(); m_userLogin = login; m_userId = userId;
+	emit identityResolved(login); emit authCompleted();
+}
+
+void RsMusicTwitchAuth::clearTransientSession()
+{
+	m_pollTimer.stop(); m_deviceExpiryTimer.stop(); m_validationTimer.stop();
+	m_accessToken.clear(); m_refreshToken.clear(); m_userLogin.clear(); m_userId.clear();
+	emit loggedOut();
+}
+
 void RsMusicTwitchAuth::refreshAccessToken()
 {
 	if (m_refreshToken.isEmpty()) {
@@ -364,15 +388,25 @@ void RsMusicTwitchAuth::refreshAccessToken()
 		net->deleteLater();
 		const QByteArray responseBody = reply->readAll();
 		const int httpStatus = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+		const QNetworkReply::NetworkError replyError = reply->error();
 		const QString networkError = reply->errorString();
 		reply->deleteLater();
 		const QJsonObject json = QJsonDocument::fromJson(responseBody).object();
-		if (reply->error() != QNetworkReply::NoError || !json.contains("access_token") ||
-		    !json.contains("refresh_token")) {
+		if (replyError != QNetworkReply::NoError || !json.contains("access_token")) {
 			blog(LOG_WARNING, "[RS Music] Twitch token refresh failed (HTTP %d): %s", httpStatus,
 			     json["message"].toString(networkError).toUtf8().constData());
-			clearAuth();
-			emit authFailed("Saved Twitch login expired. Please log in again.");
+			const QString oauthError = json["error"].toString();
+			const QString message = json["message"].toString();
+			const bool refreshRejected = httpStatus == 400 || httpStatus == 401 ||
+				oauthError == "invalid_grant" || message.contains("refresh", Qt::CaseInsensitive);
+			if (refreshRejected) {
+				clearAuth();
+				emit authFailed("Saved Twitch login expired. Please log in again.");
+			} else {
+				// Preserve the refresh token across temporary DNS/TLS/server errors.
+				// Reconnect remains available and the next OBS launch retries it.
+				emit authFailed("Could not refresh Twitch right now. Use Reconnect to try again.");
+			}
 			return;
 		}
 		if (!hasRequiredChatScopes(json["scope"].toArray())) {
@@ -384,8 +418,10 @@ void RsMusicTwitchAuth::refreshAccessToken()
 		// Twitch device-code refresh tokens are single-use. Persist the newly
 		// rotated pair together before validating the replacement access token.
 		m_accessToken = json["access_token"].toString();
-		m_refreshToken = json["refresh_token"].toString();
+		const QString rotatedRefreshToken = json["refresh_token"].toString();
+		if (!rotatedRefreshToken.isEmpty()) m_refreshToken = rotatedRefreshToken;
 		saveToSettings();
+		m_validationTimer.start();
 		blog(LOG_INFO, "[RS Music] Twitch access token refreshed successfully.");
 		reconnect();
 	});

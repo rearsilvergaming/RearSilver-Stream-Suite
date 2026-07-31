@@ -50,6 +50,12 @@ RsMusicController::RsMusicController(RsMusicState *state, QObject *parent) : QOb
 			return;
 		}
 		if (command == "AUTH_STATUS") { emit twitchAuthStatusRequested(); return; }
+		if (command.startsWith("AUTH_SESSION\t")) {
+			const QStringList parts = command.split('\t');
+			if (parts.size() >= 5) emit twitchSessionReceived(parts[1], parts[2], parts[3], parts[4]);
+			return;
+		}
+		if (command.startsWith("AUTH_CLEAR\t")) { emit twitchSessionCleared(command.section('\t', 1, 1)); return; }
 		if (command.startsWith("SETTING\t")) {
 			const QStringList parts = command.split('\t');
 			if (parts.size() < 3) return;

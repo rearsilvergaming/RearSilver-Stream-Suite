@@ -158,15 +158,16 @@ RsMainDock::RsMainDock(QWidget *parent) : QWidget(parent)
 	// asynchronous reconnect. Otherwise an expired token can fail during
 	// construction and leave the status text permanently on Reconnecting.
 	createUi();
-	connect(m_musicController, &RsMusicController::twitchAuthActionRequested, this,
-		[this](const QString &account, const QString &action) {
+	connect(m_musicController, &RsMusicController::twitchSessionReceived, this,
+		[this](const QString &account, const QString &token, const QString &login, const QString &userId) {
 			RsMusicTwitchAuth *auth = account == "bot" ? m_botAuth : m_streamerAuth;
-			if (!auth) return;
-			if (action == "login") auth->beginDeviceAuth();
-			else if (action == "reconnect") auth->reconnect();
-			else if (action == "logout") auth->clearAuth();
-			publishMusicAuthState();
+			if (auth) auth->adoptSession(token, login, userId);
+			connectMusicChat(); publishMusicAuthState();
 		});
+	connect(m_musicController, &RsMusicController::twitchSessionCleared, this, [this](const QString &account) {
+		RsMusicTwitchAuth *auth = account == "bot" ? m_botAuth : m_streamerAuth;
+		if (auth) auth->clearTransientSession(); publishMusicAuthState();
+	});
 	connect(m_musicController, &RsMusicController::twitchSenderPreferenceRequested, this, [this](bool useBot) {
 		const bool effectiveBot = useBot && m_botAuth && m_botAuth->hasValidToken();
 		QSettings("RearSilver", "RearSilver-Stream-Suite").setValue("music/twitch/send_from_bot", effectiveBot);
@@ -332,10 +333,7 @@ if (m_lblBotDot && m_botAuth && !m_botAuthResolved) {
 	// Reconnect only after createUi() has connected the Settings page and the
 	// global status labels to loggedOut/authFailed. Invalid saved sessions then
 	// become an ordinary logged-out state with the Login button available.
-	QTimer::singleShot(0, this, [this]() {
-		if (m_streamerAuth->hasValidToken()) m_streamerAuth->reconnect();
-		if (m_botAuth->hasValidToken()) m_botAuth->reconnect();
-	});
+	// The Media Player publishes validated transient sessions when its IPC pipe connects.
 
 }
 

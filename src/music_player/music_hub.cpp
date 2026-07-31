@@ -34,9 +34,9 @@ void MusicHubModel::clearLocalLibrary()
 void MusicHubModel::activateSource(std::string source)
 {
 	std::lock_guard<std::mutex> lock(m_mutex);
-	if (source != "local") source = "youtube";
+	if (source != "local" && source != "external") source = "youtube";
 	m_activeSource = std::move(source);
-	m_fallback = m_activeSource == "local" ? m_localLibrary : m_youtubeFallback;
+	m_fallback = m_activeSource == "local" ? m_localLibrary : (m_activeSource == "youtube" ? m_youtubeFallback : std::vector<HubTrack>{});
 	m_cursor = 0; m_replayNext.clear(); m_history.clear(); m_hasCurrent = false; m_current = {};
 }
 

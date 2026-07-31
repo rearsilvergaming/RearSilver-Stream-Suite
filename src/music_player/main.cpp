@@ -28,6 +28,9 @@
 #include "music_hub.hpp"
 #include "local_library.hpp"
 #include "youtube_resolver.hpp"
+#include "system_media_provider.hpp"
+#include "spotify_client.hpp"
+#include "twitch_accounts.hpp"
 
 #define MINIAUDIO_IMPLEMENTATION
 #include "miniaudio.h"
@@ -72,7 +75,7 @@ static constexpr UINT WM_HUB_PLAYLIST_RESULT = WM_APP + 40;
 static constexpr UINT WM_HUB_REQUEST_RESULT = WM_APP + 41;
 static constexpr int ID_IMPORT_PLAYLIST = 4101;
 static constexpr int ID_ADD_LOCAL_FILES = 4102, ID_ADD_LOCAL_FOLDER = 4103, ID_USE_LOCAL = 4104,
-	ID_USE_YOUTUBE = 4105, ID_CLEAR_LOCAL = 4106;
+	ID_USE_YOUTUBE = 4105, ID_CLEAR_LOCAL = 4106, ID_USE_EXTERNAL = 4107;
 static constexpr int ID_OVERLAY_CUSTOM_TEXT = 4110;
 static constexpr int ID_OVERLAY_FONT = 4120;
 static constexpr int ID_OVERLAY_TITLE_SIZE = 4121, ID_OVERLAY_BODY_SIZE = 4122,
@@ -117,6 +120,22 @@ static std::string wideToUtf8(const std::wstring &value)
 	std::string result(size_t(count), '\0');
 	WideCharToMultiByte(CP_UTF8, 0, value.data(), int(value.size()), result.data(), count, nullptr, nullptr);
 	return result;
+}
+
+static bool copyTextToClipboard(HWND owner, const std::wstring &text)
+{
+	if (!OpenClipboard(owner)) return false;
+	EmptyClipboard();
+	const SIZE_T bytes = (text.size() + 1) * sizeof(wchar_t);
+	HGLOBAL memory = GlobalAlloc(GMEM_MOVEABLE, bytes);
+	if (!memory) { CloseClipboard(); return false; }
+	void *destination = GlobalLock(memory);
+	if (!destination) { GlobalFree(memory); CloseClipboard(); return false; }
+	memcpy(destination, text.c_str(), bytes);
+	GlobalUnlock(memory);
+	if (!SetClipboardData(CF_UNICODETEXT, memory)) { GlobalFree(memory); CloseClipboard(); return false; }
+	CloseClipboard();
+	return true;
 }
 
 static std::wstring executableAssetPath(const wchar_t *name)
@@ -776,11 +795,21 @@ private:
 
 static Player *g_player = nullptr;
 static CefRefPtr<CefYouTubePlayer> g_youtubePlayer;
+static SystemMediaProvider g_systemMedia;
+static SystemMediaState g_externalState;
+static int64_t g_externalPositionAnchorMs = 0;
+static ULONGLONG g_externalPositionAnchorTick = 0;
+static ULONGLONG g_externalCommandGraceUntilTick = 0;
+static std::string g_externalPositionTrack;
+static SpotifyClient g_spotify;
+static TwitchAccount g_streamerTwitch("streamer"), g_botTwitch("bot");
 static bool g_closeRequested = false;
 static int g_page = 0;
 static std::string g_streamerAuthState = "disconnected", g_streamerLogin;
 static std::string g_botAuthState = "disconnected", g_botLogin, g_authSender = "streamer";
-static bool g_captureExists = false, g_playerAutoStart = false;
+static bool g_captureExists = false, g_playerAutoStart = false, g_hostPipeConnected = false;
+static std::atomic<uint64_t> g_accountsRevision{0};
+static bool externalActive();
 
 static void syncHubQueueView()
 {
@@ -792,9 +821,18 @@ static void syncHubQueueView()
 	for (const HubTrack &track : g_hub.playbackOrder())
 		g_queue.push_back({utf8ToWide(track.title), utf8ToWide(track.artist),
 			track.request ? L"Request" : (track.provider == "local" ? L"Local library" : L"Fallback playlist"), track.durationSeconds, false});
+	if (externalActive()) {
+		const SpotifyClientState spotify = g_spotify.state();
+		if (spotify.connected) {
+			g_queue.clear();
+			if (!spotify.current.title.empty()) g_queue.push_back({utf8ToWide(spotify.current.title), utf8ToWide(spotify.current.artist), L"Now playing via Spotify", int(spotify.current.durationMs / 1000), true});
+			for (const SpotifyQueueTrack &track : spotify.queue) g_queue.push_back({utf8ToWide(track.title), utf8ToWide(track.artist), L"Spotify queue", int(track.durationMs / 1000), false});
+		}
+	}
 }
 
 static void saveHubState();
+static std::wstring musicSetting(const wchar_t *name, const wchar_t *fallback);
 
 static std::string playerFallbackArtwork()
 {
@@ -803,6 +841,68 @@ static std::string playerFallbackArtwork()
 
 static void writeTextOutput(const HubTrack &track);
 static bool musicBool(const wchar_t *name, bool fallback);
+
+static bool externalActive() { return g_hub.activeSource() == "external"; }
+static int64_t currentExternalPositionMs()
+{
+	int64_t position = g_externalPositionAnchorMs;
+	if (g_externalState.playing && g_externalPositionAnchorTick != 0)
+		position += int64_t(GetTickCount64() - g_externalPositionAnchorTick);
+	if (g_externalState.durationMs > 0) position = std::min(position, g_externalState.durationMs);
+	return std::max<int64_t>(0, position);
+}
+static float currentPosition()
+{
+	return externalActive() ? float(currentExternalPositionMs()) / 1000.0f : (g_player ? g_player->position() : 0.0f);
+}
+static float currentDuration()
+{
+	return externalActive() ? float(g_externalState.durationMs) / 1000.0f : (g_player ? g_player->duration() : 0.0f);
+}
+static bool currentPlaying()
+{
+	return externalActive() ? g_externalState.playing : (g_player && g_player->state() == L"playing");
+}
+static std::wstring currentState()
+{
+	if (externalActive()) return !g_externalState.available ? L"stopped" : (g_externalState.playing ? L"playing" : L"paused");
+	return g_player ? g_player->state() : L"stopped";
+}
+
+static void commandExternalPlayer(SystemMediaProvider::Action action, int64_t positionMs = 0)
+{
+	// GSMTC accepts transport commands quickly, but some applications publish
+	// their updated playback state on the following media-session sample. Give
+	// the UI immediate, reversible feedback while that authoritative sample is
+	// pending so controls never appear unresponsive.
+	const int64_t position = currentExternalPositionMs();
+	// The Windows media session can briefly return the sample from before a
+	// transport command. Keep the optimistic state long enough for Spotify to
+	// publish its confirmed state instead of visibly undoing the click.
+	g_externalCommandGraceUntilTick = GetTickCount64() + 1500;
+	if (action == SystemMediaProvider::Action::Play) {
+		g_externalState.playing = true;
+		g_externalPositionAnchorMs = position;
+		g_externalPositionAnchorTick = GetTickCount64();
+	} else if (action == SystemMediaProvider::Action::Pause) {
+		g_externalState.playing = false;
+		g_externalPositionAnchorMs = position;
+		g_externalPositionAnchorTick = GetTickCount64();
+	} else if (action == SystemMediaProvider::Action::Restart) {
+		g_externalState.positionMs = 0;
+		g_externalPositionAnchorMs = 0;
+		g_externalPositionAnchorTick = GetTickCount64();
+	} else if (action == SystemMediaProvider::Action::Next || action == SystemMediaProvider::Action::Previous) {
+		g_externalState.positionMs = 0;
+		g_externalPositionAnchorMs = 0;
+		g_externalPositionAnchorTick = GetTickCount64();
+	} else if (action == SystemMediaProvider::Action::Seek) {
+		g_externalState.positionMs = positionMs;
+		g_externalPositionAnchorMs = positionMs;
+		g_externalPositionAnchorTick = GetTickCount64();
+	}
+	g_systemMedia.command(action, positionMs);
+}
 
 static bool startHubTrack(const HubTrack &track, bool record = true)
 {
@@ -833,6 +933,52 @@ static bool playHubNext()
 	HubTrack track;
 	if (!g_hub.takeNext(track)) { g_hub.clearCurrent(); syncHubQueueView(); return false; }
 	const bool started = startHubTrack(track); saveHubState(); return started;
+}
+
+static void refreshExternalPlayer(HWND window)
+{
+	if (g_hub.activeSource() != "external") return;
+	SystemMediaState state = g_systemMedia.state();
+	const std::string trackKey = state.sourceAppId + "\n" + state.title + "\n" + state.artist;
+	const bool trackChanged = trackKey != g_externalPositionTrack;
+	const ULONGLONG now = GetTickCount64();
+	const bool commandPending = now < g_externalCommandGraceUntilTick;
+	if (commandPending && !trackChanged)
+		state.playing = g_externalState.playing;
+	const bool playbackChanged = state.playing != g_externalState.playing;
+	const int64_t projectedPosition = currentExternalPositionMs();
+	const int64_t drift = state.positionMs - projectedPosition;
+	// GSMTC positions are snapshots rather than a continuously advancing
+	// clock. Correct meaningful seeks/desync, but never redraw around routine
+	// sub-second sampling jitter.
+	const int64_t driftTolerance = state.playing ? 2500 : 750;
+	const bool meaningfulDrift = !commandPending && std::llabs(drift) > driftTolerance;
+	if (trackChanged || (!commandPending && playbackChanged) || meaningfulDrift || g_externalPositionAnchorTick == 0) {
+		g_externalPositionAnchorMs = state.positionMs;
+		g_externalPositionAnchorTick = now;
+		g_externalPositionTrack = trackKey;
+	}
+	g_externalState = state;
+	if (!state.available || state.title.empty()) return;
+	HubTrack track;
+	track.id = "external:" + state.sourceAppId + ":" + state.title + ":" + state.artist;
+	track.providerId = state.sourceAppId; track.provider = "external";
+	track.title = state.title; track.artist = state.artist; track.album = state.album;
+	track.artworkUrl = state.artworkPath.empty() ? playerFallbackArtwork() : state.artworkPath;
+	track.requestedBy = wideToUtf8(musicSetting(L"nonRequestLabel", L"Stream DJ"));
+	track.durationSeconds = int(state.durationMs / 1000);
+	const bool changed = !g_hub.hasCurrent() || g_hub.current().id != track.id;
+	if (changed) {
+		g_hub.recordStarted(track); syncHubQueueView();
+		if (g_player) g_player->setMetadata(track.title + "\t" + track.artist + "\t" + track.album + "\t" + track.artworkUrl);
+		writeTextOutput(track);
+		if (musicBool(L"announceTrackChanges", false)) {
+			std::lock_guard<std::mutex> lock(g_hostEventMutex);
+			g_hostEvents.push_back("HOST\tNOW_PLAYING\t" + track.title + "\t" + track.artist + "\t" + track.requestedBy + "\n");
+		}
+		saveHubState();
+	}
+	InvalidateRect(window, nullptr, FALSE);
 }
 
 static std::wstring hubStatePath()
@@ -998,17 +1144,20 @@ public:
 							Callback<ICoreWebView2WebMessageReceivedEventHandler>([this](ICoreWebView2 *, ICoreWebView2WebMessageReceivedEventArgs *args) -> HRESULT {
 								wchar_t *raw = nullptr; if (FAILED(args->TryGetWebMessageAsString(&raw)) || !raw) return S_OK;
 								const std::string message = wideToUtf8(raw); CoTaskMemFree(raw);
-								if (message == "ready") { m_ready = true; sendConfig(); return S_OK; }
-								if (message == "library-ready") { m_ready = true; sendLibraryConfig(); return S_OK; }
-								if (message == "settings-ready") { m_ready = true; sendSettingsConfig(); return S_OK; }
-								if (message == "commands-ready") { m_ready = true; sendCommandsConfig(); return S_OK; }
-								if (message == "accounts-ready") { m_ready = true; sendAccountsConfig(); std::lock_guard<std::mutex> lock(g_hostEventMutex); g_hostEvents.push_back("HOST\tAUTH_STATUS\n"); return S_OK; }
+								// A message from the document being replaced may arrive after the next
+								// page has been selected. Never let that stale message mark the new page
+								// ready or it can remain stuck showing its default/disconnected state.
+								if (message == "ready") { if (m_page == 3) { m_ready = true; sendConfig(); } return S_OK; }
+								if (message == "library-ready") { if (m_page == 2) { m_ready = true; sendLibraryConfig(); } return S_OK; }
+								if (message == "settings-ready") { if (m_page == 4) { m_ready = true; sendSettingsConfig(); } return S_OK; }
+								if (message == "commands-ready") { if (m_page == 6) { m_ready = true; sendCommandsConfig(); } return S_OK; }
+								if (message == "accounts-ready") { if (m_page == 5) { m_ready = true; sendAccountsConfig(); } return S_OK; }
 								CefRefPtr<CefValue> parsed = CefParseJSON(message, JSON_PARSER_RFC); if (!parsed || parsed->GetType() != VTYPE_DICTIONARY) return S_OK;
 								CefRefPtr<CefDictionaryValue> object = parsed->GetDictionary();
 								if (object->GetString("page").ToString() == "library") {
 									const std::string action = object->GetString("action").ToString();
 									if (action == "import") { const std::wstring value=utf8ToWide(object->GetString("value").ToString()); SetWindowTextW(g_playlistEdit,value.c_str()); SendMessageW(m_parent,WM_COMMAND,MAKEWPARAM(ID_IMPORT_PLAYLIST,BN_CLICKED),reinterpret_cast<LPARAM>(g_importPlaylistButton)); }
-									else { int id=action=="addFiles"?ID_ADD_LOCAL_FILES:action=="addFolder"?ID_ADD_LOCAL_FOLDER:action=="useLocal"?ID_USE_LOCAL:action=="useYouTube"?ID_USE_YOUTUBE:action=="clearLocal"?ID_CLEAR_LOCAL:0; if(id) SendMessageW(m_parent,WM_COMMAND,MAKEWPARAM(id,BN_CLICKED),0); }
+									else { int id=action=="addFiles"?ID_ADD_LOCAL_FILES:action=="addFolder"?ID_ADD_LOCAL_FOLDER:action=="useLocal"?ID_USE_LOCAL:action=="useYouTube"?ID_USE_YOUTUBE:action=="useExternal"?ID_USE_EXTERNAL:action=="clearLocal"?ID_CLEAR_LOCAL:0; if(id) SendMessageW(m_parent,WM_COMMAND,MAKEWPARAM(id,BN_CLICKED),0); }
 									sendLibraryConfig(); return S_OK;
 								}
 								if(object->GetString("page").ToString()=="settings"){
@@ -1021,9 +1170,25 @@ public:
 									sendSettingsConfig();return S_OK;
 								}
 								if(object->GetString("page").ToString()=="accounts"){
-									const std::string action=object->GetString("action").ToString(); std::lock_guard<std::mutex>lock(g_hostEventMutex);
-									if(action=="sender")g_hostEvents.push_back("HOST\tAUTH_SENDER\t"+object->GetString("value").ToString()+"\n");
-									else g_hostEvents.push_back("HOST\tAUTH_ACTION\t"+object->GetString("account").ToString()+"\t"+action+"\n"); return S_OK;
+									const std::string action=object->GetString("action").ToString(),account=object->GetString("account").ToString();
+									if(action=="copyDiagnostics"){
+										const TwitchAccountState streamer=g_streamerTwitch.state(),bot=g_botTwitch.state();
+										const std::string diagnostics="IPC: "+std::string(g_hostPipeConnected?"connected":"waiting")+
+											"\nStreamer state: "+(streamer.connected?"connected":"disconnected")+" ("+(streamer.login.empty()?"no login":streamer.login)+")"+
+											"\nBot state: "+(bot.connected?"connected":"disconnected")+" ("+(bot.login.empty()?"no login":bot.login)+")\n\n"+
+											g_spotify.diagnostics()+"\n"+g_streamerTwitch.diagnostics()+"\n"+g_botTwitch.diagnostics();
+										copyTextToClipboard(m_parent,utf8ToWide(diagnostics)); return S_OK;
+									}
+									if(account=="spotify"){
+										if(action=="saveClientId")g_spotify.setClientIdAsync(object->GetString("value").ToString());
+										else if(action=="login")g_spotify.beginLogin();
+										else if(action=="refresh")g_spotify.refreshQueueAsync();
+										else if(action=="logout")g_spotify.logoutAsync();
+										else if(action=="openSetup")ShellExecuteW(m_parent,L"open",L"https://developer.spotify.com/dashboard",nullptr,nullptr,SW_SHOWNORMAL);
+										return S_OK;
+									}
+									if(action=="sender"){g_authSender=object->GetString("value").ToString();std::lock_guard<std::mutex>lock(g_hostEventMutex);g_hostEvents.push_back("HOST\tAUTH_SENDER\t"+g_authSender+"\n");}
+									else {TwitchAccount &auth=account=="bot"?g_botTwitch:g_streamerTwitch;if(action=="login")auth.beginLogin();else if(action=="reconnect")auth.reconnect();else if(action=="logout")auth.logout();} sendAccountsConfig();return S_OK;
 								}
 								if (object->GetString("action").ToString() == "reset") { RegDeleteTreeW(HKEY_CURRENT_USER, kOverlayRegistry); sendConfig(); return S_OK; }
 								const std::string key = object->GetString("key").ToString(), type = object->GetString("type").ToString();
@@ -1039,13 +1204,46 @@ public:
 					}).Get());
 			}).Get());
 	}
-	void showPage(int page) { const bool visible=page>=2&&page<=6; if (visible && page!=m_page && m_webView) { m_page=page; m_ready=false; injectPage(page==2?L"library.html":page==3?L"overlay-designer.html":page==4?L"settings.html":page==5?L"accounts.html":L"commands.html"); } if (m_controller) { resize(); m_controller->put_IsVisible(visible?TRUE:FALSE); } if (visible && m_ready) { if(page==2) sendLibraryConfig(); else if(page==3)sendConfig();else if(page==4)sendSettingsConfig();else if(page==5)sendAccountsConfig();else if(page==6)sendCommandsConfig(); } }
-	void refresh() { if(m_page==2) sendLibraryConfig(); else if(m_page==3) sendConfig(); else if(m_page==4)sendSettingsConfig(); else if(m_page==5)sendAccountsConfig(); }
+	void showPage(int page) {
+		const bool visible = page >= 2 && page <= 6;
+		if (visible && page != m_page && m_webView) {
+			m_page = page;
+			m_ready = false;
+			injectPage(page == 2 ? L"library.html" : page == 3 ? L"overlay-designer.html" :
+				page == 4 ? L"settings.html" : page == 5 ? L"accounts.html" : L"commands.html");
+		}
+		if (m_controller) { resize(); m_controller->put_IsVisible(visible ? TRUE : FALSE); }
+		if (visible) refresh();
+	}
+	void refresh() {
+		if (!m_webView || m_page < 2 || m_page > 6) return;
+		if (!m_ready) { probePageReady(); return; }
+		if (m_page == 2) sendLibraryConfig();
+		else if (m_page == 3) sendConfig();
+		else if (m_page == 4) sendSettingsConfig();
+		else if (m_page == 5) sendAccountsConfig();
+		else if (m_page == 6) sendCommandsConfig();
+	}
 	void resize() { if (!m_controller || !m_parent) return; RECT client{}; GetClientRect(m_parent, &client); const int sidebar = sidebarWidthFor(client.right); RECT bounds{sidebar + 16, 100, std::max(sidebar + 17, int(client.right) - 16), std::max(101, int(client.bottom) - 112)}; m_controller->put_Bounds(bounds); }
 private:
 	static bool validColour(const std::wstring &value) { return value.size() == 7 && value[0] == L'#' && std::all_of(value.begin() + 1, value.end(), [](wchar_t c) { return iswxdigit(c) != 0; }); }
 	void injectPage(const wchar_t *name) {
-		if(!m_webView)return; std::ifstream input(executableAssetPath(name),std::ios::binary); if(!input){m_webView->Navigate((std::wstring(L"https://rearsilver.local/")+name).c_str());return;} const std::string html((std::istreambuf_iterator<char>(input)),{}); CefRefPtr<CefValue> value=CefValue::Create(); value->SetString(html); const std::wstring literal=utf8ToWide(CefWriteJSON(value,JSON_WRITER_DEFAULT).ToString()); const std::wstring script=L"document.open();document.write("+literal+L");document.close();"; m_webView->ExecuteScript(script.c_str(),nullptr);
+		if (!m_webView) return;
+		std::ifstream input(executableAssetPath(name), std::ios::binary);
+		if (!input) { m_webView->Navigate((std::wstring(L"https://rearsilver.local/") + name).c_str()); return; }
+		const std::string html((std::istreambuf_iterator<char>(input)), {});
+		// NavigateToString gives each injected page a real document lifecycle.
+		// document.write/close could leave queued messages from the previous page.
+		m_webView->NavigateToString(utf8ToWide(html).c_str());
+	}
+	void probePageReady() {
+		const wchar_t *functionName = m_page == 2 ? L"rsApplyLibrary" : m_page == 3 ? L"rsApplyConfig" :
+			m_page == 4 ? L"rsApplySettings" : m_page == 5 ? L"rsApplyAccounts" : L"rsApplyCommands";
+		const wchar_t *readyMessage = m_page == 2 ? L"library-ready" : m_page == 3 ? L"ready" :
+			m_page == 4 ? L"settings-ready" : m_page == 5 ? L"accounts-ready" : L"commands-ready";
+		const std::wstring script = L"if(typeof window." + std::wstring(functionName) +
+			L"==='function') window.chrome.webview.postMessage('" + readyMessage + L"');";
+		m_webView->ExecuteScript(script.c_str(), nullptr);
 	}
 	void sendConfig() {
 		if (!m_ready || !m_webView) return; CefRefPtr<CefDictionaryValue> d = CefDictionaryValue::Create();
@@ -1059,7 +1257,7 @@ private:
 		if(!m_ready||!m_webView||m_page!=2)return; CefRefPtr<CefDictionaryValue>d=CefDictionaryValue::Create(); d->SetString("url",g_hub.fallbackUrl()); d->SetString("status",wideToUtf8(g_libraryStatus)); d->SetString("label",g_hub.fallbackLabel()); d->SetInt("youtubeCount",int(g_hub.youtubeFallback().size())); d->SetInt("requestCount",int(g_hub.requests().size())); d->SetInt("localCount",int(g_hub.localLibrary().size())); d->SetString("source",g_hub.activeSource()); CefRefPtr<CefValue>root=CefValue::Create();root->SetDictionary(d);const std::wstring script=L"window.rsApplyLibrary("+utf8ToWide(CefWriteJSON(root,JSON_WRITER_DEFAULT).ToString())+L")";m_webView->ExecuteScript(script.c_str(),nullptr);
 	}
 	void sendSettingsConfig(){if(!m_ready||!m_webView||m_page!=4)return;CefRefPtr<CefDictionaryValue>d=CefDictionaryValue::Create();auto b=[&](const char*k,bool f){const auto w=utf8ToWide(k);d->SetBool(k,musicBool(w.c_str(),f));};auto s=[&](const char*k,const wchar_t*f){const auto w=utf8ToWide(k);d->SetString(k,wideToUtf8(musicSetting(w.c_str(),f)));};auto n=[&](const char*k,const wchar_t*stored,int f){d->SetInt(k,_wtoi(musicSetting(stored,std::to_wstring(f).c_str()).c_str()));};b("requestsEnabled",true);b("playlistOnly",false);b("preventDuplicates",true);b("announceTrackChanges",false);b("textOutputEnabled",false);s("minimumRole",L"everyone");const std::wstring legacy=musicSetting(L"exemptRole",L"moderator");d->SetBool("exemptSubscriber",musicBool(L"exemptSubscriber",legacy==L"subscriber"));d->SetBool("exemptVip",musicBool(L"exemptVip",legacy==L"subscriber"||legacy==L"vip"));d->SetBool("exemptModerator",musicBool(L"exemptModerator",legacy!=L"none"&&legacy!=L"broadcaster"));d->SetBool("exemptBroadcaster",musicBool(L"exemptBroadcaster",legacy!=L"none"));for(const char*cmd:{"sr","play","pause","skip","restart","previous","remove"})for(const char*role:{"everyone","subscriber","vip","moderator"}){const std::string key=std::string("command.")+cmd+"."+role;const bool fallback=std::string(cmd)=="sr"?std::string(role)=="everyone":std::string(role)=="moderator";b(key.c_str(),fallback);}s("nonRequestLabel",L"Stream DJ");s("textOutputFormat",L"{{title}} - {{artist}} - Requested by {{user}}");n("queueLimit",L"maxQueueTotal",50);n("userLimit",L"maxPerUser",2);n("maxTrackMinutes",L"maxTrackLengthMinutes",10);d->SetString("outputPath",wideToUtf8(textOutputPath()));d->SetBool("captureExists",g_captureExists);d->SetBool("autoStart",g_playerAutoStart);d->SetString("captureStatus",g_captureExists?"Music Capture exists. Use the button to review or change the captured application.":"Music Capture has not been created yet.");CefRefPtr<CefValue>root=CefValue::Create();root->SetDictionary(d);m_webView->ExecuteScript((L"window.rsApplySettings("+utf8ToWide(CefWriteJSON(root,JSON_WRITER_DEFAULT).ToString())+L")").c_str(),nullptr);}
-	void sendAccountsConfig(){if(!m_ready||!m_webView||m_page!=5)return;CefRefPtr<CefDictionaryValue>d=CefDictionaryValue::Create();d->SetString("streamerState",g_streamerAuthState);d->SetString("streamerLogin",g_streamerLogin);d->SetString("botState",g_botAuthState);d->SetString("botLogin",g_botLogin);d->SetString("sender",g_authSender);CefRefPtr<CefValue>root=CefValue::Create();root->SetDictionary(d);m_webView->ExecuteScript((L"window.rsApplyAccounts("+utf8ToWide(CefWriteJSON(root,JSON_WRITER_DEFAULT).ToString())+L")").c_str(),nullptr);}
+	void sendAccountsConfig(){if(!m_ready||!m_webView||m_page!=5)return;const SpotifyClientState spotify=g_spotify.state();const TwitchAccountState streamer=g_streamerTwitch.state(),bot=g_botTwitch.state();CefRefPtr<CefDictionaryValue>d=CefDictionaryValue::Create();d->SetDouble("revision",double(++g_accountsRevision));d->SetString("streamerState",streamer.busy?"connecting":streamer.connected?"connected":"disconnected");d->SetString("streamerLogin",streamer.login);d->SetString("botState",bot.busy?"connecting":bot.connected?"connected":"disconnected");d->SetString("botLogin",bot.login);d->SetString("sender",g_authSender);d->SetBool("ipcConnected",g_hostPipeConnected);d->SetString("spotifyClientId",spotify.clientId);d->SetBool("spotifyAuthorized",spotify.authorized);d->SetBool("spotifyConnected",spotify.connected);d->SetBool("spotifyBusy",spotify.busy);d->SetBool("spotifyQueueChecked",spotify.queueChecked);d->SetBool("spotifyPlaybackAvailable",spotify.playbackAvailable);d->SetString("spotifyDisplayName",spotify.displayName);d->SetString("spotifyError",spotify.error);d->SetString("spotifyDiagnostics",g_spotify.diagnostics()+"\n"+g_streamerTwitch.diagnostics());d->SetInt("spotifyQueueCount",int(spotify.queue.size()));CefRefPtr<CefValue>root=CefValue::Create();root->SetDictionary(d);m_webView->ExecuteScript((L"window.rsApplyAccounts("+utf8ToWide(CefWriteJSON(root,JSON_WRITER_DEFAULT).ToString())+L")").c_str(),nullptr);}
 	HWND m_parent=nullptr; ComPtr<ICoreWebView2Controller> m_controller; ComPtr<ICoreWebView2> m_webView; bool m_ready=false; int m_page=-1;
 };
 
@@ -1156,11 +1354,13 @@ static LRESULT CALLBACK legacyWindowProc(HWND window, UINT message, WPARAM wPara
 		if (!album.empty()) { textRect.Y += 26; graphics.DrawString(album.c_str(), -1, &smallFont, textRect, nullptr, &muted); }
 		const float barY = float(client.bottom - 62), barX = 24, barWidth = float(width - 48);
 		SolidBrush track(Color(255, 55, 55, 68)); graphics.FillRectangle(&track, barX, barY, barWidth, 6.0f);
-		const float progress = g_player && g_player->duration() > 0 ? std::min(1.0f, g_player->position() / g_player->duration()) : 0;
+		const float duration = currentDuration(), position = currentPosition();
+		const float progress = duration > 0 ? std::min(1.0f, position / duration) : 0;
 		graphics.FillRectangle(&accent, barX, barY, barWidth * progress, 6.0f);
-		const std::wstring timing = (g_player ? clockText(g_player->position()) : L"0:00") + L" / " + (g_player ? clockText(g_player->duration()) : L"0:00");
+		const std::wstring timing = clockText(position) + L" / " + clockText(duration);
 		graphics.DrawString(timing.c_str(), -1, &smallFont, PointF(24, barY + 13), &muted);
-		if (g_player) graphics.DrawString(g_player->state().c_str(), -1, &smallFont, PointF(float(width - 90), barY + 13), &muted);
+		const std::wstring state = currentState();
+		graphics.DrawString(state.c_str(), -1, &smallFont, PointF(float(width - 90), barY + 13), &muted);
 		graphics.Flush();
 		SetViewportOrgEx(bufferDc, 0, 0, nullptr);
 		BitBlt(dc, paint.rcPaint.left, paint.rcPaint.top, dirtyWidth, dirtyHeight, bufferDc, 0, 0, SRCCOPY);
@@ -1199,19 +1399,19 @@ static LRESULT CALLBACK windowProc(HWND window, UINT message, WPARAM wParam, LPA
 		}
 		InvalidateRect(window,nullptr,FALSE); return 0;
 	}
-	if (message == WM_COMMAND && HIWORD(wParam) == BN_CLICKED && LOWORD(wParam) >= ID_ADD_LOCAL_FILES && LOWORD(wParam) <= ID_CLEAR_LOCAL) {
+	if (message == WM_COMMAND && HIWORD(wParam) == BN_CLICKED && LOWORD(wParam) >= ID_ADD_LOCAL_FILES && LOWORD(wParam) <= ID_USE_EXTERNAL) {
 		const int action = LOWORD(wParam);
 		if (action == ID_CLEAR_LOCAL) {
 			if (g_hub.activeSource() == "local") { if (g_player) g_player->command("STOP"); g_hub.clearCurrent(); }
 			g_hub.clearLocalLibrary(); g_libraryStatus = L"Local library cleared.";
-		} else if (action == ID_USE_LOCAL || action == ID_USE_YOUTUBE) {
-			const std::string source = action == ID_USE_LOCAL ? "local" : "youtube";
+		} else if (action == ID_USE_LOCAL || action == ID_USE_YOUTUBE || action == ID_USE_EXTERNAL) {
+			const std::string source = action == ID_USE_LOCAL ? "local" : (action == ID_USE_EXTERNAL ? "external" : "youtube");
 			if (source == "local" && g_hub.localLibrary().empty()) g_libraryStatus = L"Add local files or a folder before selecting Local files.";
 			else if (source == "youtube" && g_hub.youtubeFallback().empty()) g_libraryStatus = L"Import a YouTube fallback playlist before selecting YouTube.";
 			else {
 				if (g_player) g_player->command("STOP"); if (g_youtubePlayer) { g_youtubePlayer->command("STOP"); g_youtubePlayer->hide(); }
-				g_hub.activateSource(source); syncHubQueueView(); playHubNext();
-				g_libraryStatus = source == "local" ? L"Local files are now the active music source. Chat requests are unavailable." : L"YouTube is now the active music source.";
+				g_hub.activateSource(source); syncHubQueueView(); if (source != "external") playHubNext();
+				g_libraryStatus = source == "local" ? L"Local files are now the active music source. Chat requests are unavailable." : (source == "external" ? L"External player selected. Start Spotify or another compatible desktop player." : L"YouTube is now the active music source.");
 			}
 		} else {
 			std::vector<HubTrack> imported;
@@ -1340,10 +1540,15 @@ static LRESULT CALLBACK windowProc(HWND window, UINT message, WPARAM wParam, LPA
 		for (int i = 0; i < 5; ++i) {
 			if (!PtInRect(&g_transportButtons[i], point)) continue;
 			const bool youtubeActive = g_youtubePlayer && g_youtubePlayer->active();
-			const bool currentlyPlaying = youtubeActive ? g_youtubePlayer->playing() :
-				(g_player && g_player->state() == L"playing");
+			const bool currentlyPlaying = youtubeActive ? g_youtubePlayer->playing() : currentPlaying();
 			const char *command = i == 0 ? "PREVIOUS" : (i == 1 ? "RESTART" :
 				(i == 3 ? "SKIP" : (i == 4 ? "STOP" : (currentlyPlaying ? "PAUSE" : "PLAY"))));
+			if (externalActive()) {
+				const SystemMediaProvider::Action action = i == 0 ? SystemMediaProvider::Action::Previous :
+					(i == 1 ? SystemMediaProvider::Action::Restart : (i == 3 ? SystemMediaProvider::Action::Next :
+					(i == 4 || currentlyPlaying ? SystemMediaProvider::Action::Pause : SystemMediaProvider::Action::Play)));
+				commandExternalPlayer(action); InvalidateRect(window, nullptr, FALSE); return 0;
+			}
 			if (i == 2 && !youtubeActive && (!g_player || g_player->state() == L"stopped") && g_hub.hasCurrent() == false)
 				playHubNext();
 			else if (i == 0) { HubTrack previous; if (g_hub.takePrevious(previous)) startHubTrack(previous, false); }
@@ -1365,7 +1570,7 @@ static LRESULT CALLBACK windowProc(HWND window, UINT message, WPARAM wParam, LPA
 		if (g_page == 1 && PtInRect(&g_queuePreviousPage, point)) { g_queuePage = std::max(0, g_queuePage - 1); InvalidateRect(window, nullptr, FALSE); return 0; }
 		if (g_page == 1 && PtInRect(&g_queueNextPage, point)) { ++g_queuePage; InvalidateRect(window, nullptr, FALSE); return 0; }
 		if (g_page == 1 && PtInRect(&g_queueShuffle, point)) {
-			g_hub.shuffleFallback(); g_queuePage = 0; syncHubQueueView(); saveHubState();
+			if(externalActive()&&g_spotify.state().authorized)g_spotify.toggleShuffle();else {g_hub.shuffleFallback();saveHubState();} g_queuePage = 0; syncHubQueueView();
 			InvalidateRect(window, nullptr, FALSE); return 0;
 		}
 		if (g_page == 3) {
@@ -1636,13 +1841,17 @@ static LRESULT CALLBACK windowProc(HWND window, UINT message, WPARAM wParam, LPA
 	const bool youtubeActive = g_youtubePlayer && g_youtubePlayer->active();
 	const std::wstring transportTitle = youtubeActive ? g_youtubePlayer->title() :
 		(g_player ? g_player->title() : L"No track playing");
-	const float playbackPosition = youtubeActive ? g_youtubePlayer->position() : (g_player ? g_player->position() : 0.0f);
-	const float playbackDuration = youtubeActive ? g_youtubePlayer->duration() : (g_player ? g_player->duration() : 0.0f);
-	const bool playbackPlaying = youtubeActive ? g_youtubePlayer->playing() :
-		(g_player && g_player->state() == L"playing");
-	label(graphics, transportTitle, bodyBold,
-		RectF(float(sidebar + 34), float(transportTop + 12), 260, 28), primary);
+	const float playbackPosition = youtubeActive ? g_youtubePlayer->position() : currentPosition();
+	const float playbackDuration = youtubeActive ? g_youtubePlayer->duration() : currentDuration();
+	const bool playbackPlaying = youtubeActive ? g_youtubePlayer->playing() : currentPlaying();
 	const int controlX = width / 2 - 129;
+	// Keep the title in its own responsive column. A fixed 260px title box
+	// crossed underneath Previous and Restart in a restored/smaller window.
+	const float titleX = float(sidebar + 34);
+	const float titleWidth = std::max(0.0f, float(controlX) - titleX - 12.0f);
+	if (titleWidth >= 40.0f)
+		label(graphics, transportTitle, bodyBold,
+			RectF(titleX, float(transportTop + 12), titleWidth, 28), primary);
 	const int buttonX[] = {controlX, controlX + 52, controlX + 104, controlX + 166, controlX + 218};
 	const wchar_t *buttonLabels[] = {L"|\u25C0", L"\u21BA", playbackPlaying ? L"II" : L"\u25B6", L"\u25B6|", L"\u25A0"};
 	for (int i = 0; i < 5; ++i) {
@@ -1686,6 +1895,15 @@ static LRESULT CALLBACK splashWindowProc(HWND window, UINT message, WPARAM wPara
 
 int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int)
 {
+	// CEF still resolves a small number of packaged runtime files relative to
+	// the process working directory. Explorer, OBS and autostart can each give
+	// us a different directory, so normalise it before *any* CEF process runs.
+	std::wstring executableDirectory = executableAssetPath(L"");
+	if (!executableDirectory.empty() &&
+		(executableDirectory.back() == L'\\' || executableDirectory.back() == L'/'))
+		executableDirectory.pop_back();
+	if (!executableDirectory.empty()) SetCurrentDirectoryW(executableDirectory.c_str());
+
 	PROCESS_POWER_THROTTLING_STATE powerState{};
 	powerState.Version = PROCESS_POWER_THROTTLING_CURRENT_VERSION;
 	powerState.ControlMask = PROCESS_POWER_THROTTLING_EXECUTION_SPEED |
@@ -1694,9 +1912,30 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int)
 	SetProcessInformation(GetCurrentProcess(), ProcessPowerThrottling, &powerState, sizeof(powerState));
 	CefMainArgs cefMainArgs(instance);
 	CefRefPtr<SuiteCefApp> cefApp = new SuiteCefApp();
-	CefScopedSandboxInfo sandboxInfo;
-	const int subprocessExit = CefExecuteProcess(cefMainArgs, cefApp, sandboxInfo.sandbox_info());
+	// The packaged player uses the same executable for CEF child processes.
+	// Keep this identical to the proven PCM player bootstrap: enabling CEF's
+	// sandbox here caused child processes launched outside OBS to re-enter as a
+	// second browser instance and trip a libcef process-singleton assertion.
+	const int subprocessExit = CefExecuteProcess(cefMainArgs, cefApp, nullptr);
 	if (subprocessExit >= 0) return subprocessExit;
+
+	// OBS autostart and a manual launch can arrive almost simultaneously. A
+	// second browser process would own a separate in-memory account state while
+	// still displaying persisted queue data from the first player.
+	HANDLE singleInstance = CreateMutexW(nullptr, TRUE, L"Local\\RearSilverStreamSuiteMediaPlayer");
+	if (!singleInstance) return 4;
+	if (GetLastError() == ERROR_ALREADY_EXISTS) {
+		for (int attempt = 0; attempt < 30; ++attempt) {
+			if (HWND existing = FindWindowW(L"RearSilverMusicPlayerWindow", nullptr)) {
+				ShowWindow(existing, SW_RESTORE);
+				SetForegroundWindow(existing);
+				break;
+			}
+			Sleep(100);
+		}
+		CloseHandle(singleInstance);
+		return 0;
+	}
 	CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
 	GdiplusStartupInput gdiplusInput; ULONG_PTR gdiplusToken = 0; GdiplusStartup(&gdiplusToken, &gdiplusInput, nullptr);
 	const std::wstring soraPath = executableAssetPath(L"Sora-Variable.ttf");
@@ -1714,11 +1953,30 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int)
 	const ULONGLONG splashShownAt = GetTickCount64();
 	if (splash) { ShowWindow(splash, SW_SHOW); UpdateWindow(splash); }
 	CefSettings cefSettings;
+	cefSettings.no_sandbox = true;
 	cefSettings.multi_threaded_message_loop = true;
 	cefSettings.windowless_rendering_enabled = true;
 	cefSettings.log_severity = LOGSEVERITY_WARNING;
 	CefString(&cefSettings.locale) = "en-GB";
-	if (!CefInitialize(cefMainArgs, cefSettings, cefApp, sandboxInfo.sandbox_info())) {
+	if (!executableDirectory.empty()) {
+		CefString(&cefSettings.browser_subprocess_path) = executableDirectory + L"\\RearSilver-Music-Player.exe";
+		CefString(&cefSettings.resources_dir_path) = executableDirectory;
+		CefString(&cefSettings.locales_dir_path) = executableDirectory + L"\\locales";
+	}
+	wchar_t localAppData[MAX_PATH]{};
+	if (GetEnvironmentVariableW(L"LOCALAPPDATA", localAppData, MAX_PATH) > 0) {
+		const std::wstring suiteData = std::wstring(localAppData) + L"\\RearSilver Stream Suite";
+		CreateDirectoryW(suiteData.c_str(), nullptr);
+		const std::wstring cefData = suiteData + L"\\CEF";
+		CreateDirectoryW(cefData.c_str(), nullptr);
+		CefString(&cefSettings.root_cache_path) = cefData;
+		CefString(&cefSettings.cache_path) = cefData;
+		// CEF defaults to writing debug.log beside the executable. Installed
+		// builds live under Program Files, where a normal user cannot create the
+		// file; Chromium then terminates on LOG_TO_FILE with an empty path.
+		CefString(&cefSettings.log_file) = cefData + L"\\cef.log";
+	}
+	if (!CefInitialize(cefMainArgs, cefSettings, cefApp, nullptr)) {
 		if (splash) DestroyWindow(splash); RemoveFontResourceExW(soraPath.c_str(), FR_PRIVATE, nullptr);
 		GdiplusShutdown(gdiplusToken); CoUninitialize(); return 1;
 	}
@@ -1783,6 +2041,9 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int)
 		SendMessageW(control, WM_SETFONT, reinterpret_cast<WPARAM>(uiFont), TRUE);
 	loadHubState();
 	g_hub.setNonRequestLabel(wideToUtf8(musicSetting(L"nonRequestLabel", L"Stream DJ")));
+	g_systemMedia.start("spotify");
+	g_spotify.start();
+	g_streamerTwitch.start(); g_botTwitch.start();
 	g_overlayDesigner = std::make_unique<OverlayDesignerSurface>();
 	g_overlayDesigner->initialise(window);
 	positionLibraryControls(window);
@@ -1792,14 +2053,24 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int)
 	HANDLE pipe = CreateNamedPipeW(L"\\\\.\\pipe\\RearSilverStreamSuiteMusicPlayer", PIPE_ACCESS_DUPLEX,
 		PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_NOWAIT, 1, 1024 * 1024, 1024 * 1024, 0, nullptr);
 	if (pipe == INVALID_HANDLE_VALUE) return 3;
-	bool connected = false, running = true; std::string input; ULONGLONG lastStatus = 0, lastHubStatus = 0, lastYouTubePoll = 0;
+	bool connected = false, running = true; std::string input, lastSpotifyQueueSignature; ULONGLONG lastStatus = 0, lastHubStatus = 0, lastYouTubePoll = 0, lastExternalPoll = 0, lastSpotifyUiRefresh = 0, lastTwitchValidation=GetTickCount64(); uint64_t lastStreamerRevision=0,lastBotRevision=0;
 	while (running) {
 		MSG message{}; while (PeekMessageW(&message, nullptr, 0, 0, PM_REMOVE)) { TranslateMessage(&message); DispatchMessageW(&message); }
 		if (g_closeRequested) { running = false; continue; }
 		if (g_youtubePlayer->active() && GetTickCount64() - lastYouTubePoll >= 250) {
 			g_youtubePlayer->pollStatus(); lastYouTubePoll = GetTickCount64();
 		}
-		if (!connected) { connected = ConnectNamedPipe(pipe, nullptr) || GetLastError() == ERROR_PIPE_CONNECTED; if (connected) send(pipe, player.status()); }
+		if (externalActive() && GetTickCount64() - lastExternalPoll >= 500) {
+			refreshExternalPlayer(window);const SpotifyClientState spotify=g_spotify.state();std::string signature=spotify.current.uri+'|'+std::to_string(spotify.queue.size());for(const auto&track:spotify.queue)signature+='|'+track.uri;if(signature!=lastSpotifyQueueSignature){lastSpotifyQueueSignature=std::move(signature);syncHubQueueView();if(g_page==1)InvalidateRect(window,nullptr,FALSE);}lastExternalPoll = GetTickCount64();
+		}
+		// Keep every WebView-backed page self-healing. This also retries the
+		// page-ready handshake if a document's first message was lost in a rapid
+		// Library/Accounts navigation or source switch.
+		if(g_page>=2&&g_page<=6&&g_overlayDesigner&&GetTickCount64()-lastSpotifyUiRefresh>=250){g_overlayDesigner->refresh();lastSpotifyUiRefresh=GetTickCount64();}
+		if(GetTickCount64()-lastTwitchValidation>=3600000){g_streamerTwitch.reconnect();g_botTwitch.reconnect();lastTwitchValidation=GetTickCount64();}
+		auto publishTwitch=[&](const char*name,TwitchAccount &auth,uint64_t &seen){const uint64_t revision=auth.revision();if(!connected||revision==seen)return;seen=revision;const auto state=auth.state();std::lock_guard<std::mutex>lock(g_hostEventMutex);if(state.connected)g_hostEvents.push_back(std::string("HOST\tAUTH_SESSION\t")+name+'\t'+auth.accessToken()+'\t'+state.login+'\t'+state.userId+"\n");else g_hostEvents.push_back(std::string("HOST\tAUTH_CLEAR\t")+name+"\n");};
+		if (!connected) { connected = ConnectNamedPipe(pipe, nullptr) || GetLastError() == ERROR_PIPE_CONNECTED; g_hostPipeConnected=connected; if (connected) { send(pipe, player.status()); lastStreamerRevision=lastBotRevision=0; } }
+		publishTwitch("streamer",g_streamerTwitch,lastStreamerRevision);publishTwitch("bot",g_botTwitch,lastBotRevision);
 		if (connected) {
 			{ std::lock_guard<std::mutex> lock(g_hostEventMutex); for(const auto &event:g_hostEvents)send(pipe,event); g_hostEvents.clear(); }
 			char buffer[4096]; DWORD read = 0;
@@ -1826,6 +2097,10 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int)
 						if (fields.size() < 5) continue;
 						const std::string requestId = fields[0], requesterId = fields[1], requester = fields[2], query = fields[4];
 						const int requesterLevel = std::atoi(fields[3].c_str());
+						if(query.rfind("spotify:track:",0)==0||query.find("open.spotify.com/track/")!=std::string::npos){
+							std::string uri=query;if(uri.rfind("spotify:track:",0)!=0){const auto p=uri.find("/track/");std::string id=uri.substr(p+7);const auto end=id.find_first_of("?& ");if(end!=std::string::npos)id.resize(end);uri="spotify:track:"+id;}
+							std::thread([requestId,requester,uri]{if(g_spotify.addToQueue(uri)){g_spotify.refreshQueue();const auto state=g_spotify.state();std::string title="Spotify track",artist="Spotify";int position=1;for(size_t i=0;i<state.queue.size();++i)if(state.queue[i].uri==uri){title=state.queue[i].title;artist=state.queue[i].artist;position=int(i+1);break;}std::lock_guard<std::mutex>lock(g_hostEventMutex);g_hostEvents.push_back("HOST\tREQUEST_ACCEPTED\t"+requestId+'\t'+title+'\t'+artist+'\t'+requester+'\t'+std::to_string(position)+"\n");}else{std::lock_guard<std::mutex>lock(g_hostEventMutex);g_hostEvents.push_back("HOST\tREQUEST_REJECTED\t"+requestId+"\tSpotify could not add that track. Check playback is active and Spotify is connected.\n");}}).detach();continue;
+						}
 						std::thread([window, query, requesterId, requester, requesterLevel, requestId] { auto *result = new HubSearchResult(resolveHubSearch(query, requester));
 							result->track.id = requestId;
 							result->track.requesterId = requesterId; result->track.requesterLevel = requesterLevel;
@@ -1848,7 +2123,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int)
 							g_hostEvents.push_back("HOST\tREQUEST_REMOVE_FAILED\t" + id + "\tThat request is not waiting in the queue.\n");
 						}
 					} else if (line == "HUB_SHUFFLE") {
-						g_hub.shuffleFallback(); g_queuePage = 0; syncHubQueueView(); saveHubState(); InvalidateRect(window, nullptr, FALSE);
+						if(externalActive()&&g_spotify.state().authorized)g_spotify.toggleShuffle();else {g_hub.shuffleFallback();saveHubState();} g_queuePage = 0; syncHubQueueView(); InvalidateRect(window, nullptr, FALSE);
 					} else if (line.rfind("META\t", 0) == 0) {
 						player.setMetadata(line.substr(5));
 						InvalidateRect(window, nullptr, FALSE);
@@ -1856,7 +2131,15 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int)
 						const size_t tab = line.find('\t');
 						const std::string action = line.substr(0, tab);
 						const std::string argument = tab == std::string::npos ? std::string{} : line.substr(tab + 1);
-						if (action == "YOUTUBE") {
+						if (externalActive() && (action == "PLAY" || action == "PAUSE" || action == "SKIP" ||
+							action == "PREVIOUS" || action == "RESTART" || action == "STOP" || action == "SEEK")) {
+							if (action == "PLAY") commandExternalPlayer(SystemMediaProvider::Action::Play);
+							else if (action == "PAUSE" || action == "STOP") commandExternalPlayer(SystemMediaProvider::Action::Pause);
+							else if (action == "SKIP") commandExternalPlayer(SystemMediaProvider::Action::Next);
+							else if (action == "PREVIOUS") commandExternalPlayer(SystemMediaProvider::Action::Previous);
+							else if (action == "RESTART") commandExternalPlayer(SystemMediaProvider::Action::Restart);
+							else commandExternalPlayer(SystemMediaProvider::Action::Seek, std::strtoll(argument.c_str(), nullptr, 10));
+						} else if (action == "YOUTUBE") {
 							player.suspend();
 							g_youtubePlayer->load(argument);
 						} else if (action == "LOAD") {
@@ -1877,12 +2160,12 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int)
 						}
 					}
 				}
-			} else if (GetLastError() == ERROR_BROKEN_PIPE) { DisconnectNamedPipe(pipe); connected = false; input.clear(); }
+			} else {const DWORD error=GetLastError();if(error==ERROR_BROKEN_PIPE||error==ERROR_PIPE_NOT_CONNECTED){DisconnectNamedPipe(pipe);connected=false;g_hostPipeConnected=false;input.clear();}}
 			if (connected && GetTickCount64() - lastHubStatus >= 500) {
-				const std::string hubStatus = g_youtubePlayer->active() ?
-					(g_youtubePlayer->playing() ? "playing" : "paused") : wideToUtf8(player.state());
-				const int64_t hubPosition = int64_t((g_youtubePlayer->active() ? g_youtubePlayer->position() : player.position()) * 1000.0f);
-				const int64_t hubDuration = int64_t((g_youtubePlayer->active() ? g_youtubePlayer->duration() : player.duration()) * 1000.0f);
+				const std::string hubStatus = externalActive() ? wideToUtf8(currentState()) : (g_youtubePlayer->active() ?
+					(g_youtubePlayer->playing() ? "playing" : "paused") : wideToUtf8(player.state()));
+				const int64_t hubPosition = externalActive() ? currentExternalPositionMs() : int64_t((g_youtubePlayer->active() ? g_youtubePlayer->position() : player.position()) * 1000.0f);
+				const int64_t hubDuration = externalActive() ? g_externalState.durationMs : int64_t((g_youtubePlayer->active() ? g_youtubePlayer->duration() : player.duration()) * 1000.0f);
 				send(pipe, "HUB_STATE\t" + g_hub.snapshotJson(hubStatus, hubPosition, hubDuration, false) + "\n");
 				lastHubStatus = GetTickCount64();
 			}
@@ -1893,15 +2176,15 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int)
 			if (connected) send(pipe, event);
 		}
 		if (GetTickCount64() - lastStatus >= 100) {
-			const std::string status = player.status(); if (connected && !g_youtubePlayer->active()) send(pipe, status);
+			const std::string status = player.status(); if (connected && !g_youtubePlayer->active() && !externalActive()) send(pipe, status);
 			lastStatus = GetTickCount64(); RECT client{}; GetClientRect(window, &client);
 			RECT playbackRegion{0, std::max(0L, client.bottom - 106), client.right, client.bottom};
 			InvalidateRect(window, &playbackRegion, FALSE);
 		}
 		Sleep(10);
 	}
-	CloseHandle(pipe); g_overlayDesigner.reset(); g_youtubePlayer->shutdown(); g_youtubePlayer = nullptr; DestroyWindow(window); g_player = nullptr;
+	g_streamerTwitch.stop();g_botTwitch.stop();g_spotify.stop(); g_systemMedia.stop(); CloseHandle(pipe); g_overlayDesigner.reset(); g_youtubePlayer->shutdown(); g_youtubePlayer = nullptr; DestroyWindow(window); g_player = nullptr;
 	if (g_controlFont) { DeleteObject(g_controlFont); g_controlFont = nullptr; } if (g_controlBackgroundBrush) { DeleteObject(g_controlBackgroundBrush); g_controlBackgroundBrush = nullptr; }
 	g_splashImage.reset(); g_brandHeaderImage.reset(); g_brandIconImage.reset(); RemoveFontResourceExW(soraPath.c_str(), FR_PRIVATE, nullptr);
-	GdiplusShutdown(gdiplusToken); CoUninitialize(); CefShutdown(); return 0;
+	GdiplusShutdown(gdiplusToken); CoUninitialize(); CefShutdown(); ReleaseMutex(singleInstance); CloseHandle(singleInstance); return 0;
 }

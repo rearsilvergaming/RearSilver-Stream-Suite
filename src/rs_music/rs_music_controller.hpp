@@ -63,6 +63,9 @@ signals:
 	void twitchAuthActionRequested(const QString &account, const QString &action);
 	void twitchSenderPreferenceRequested(bool useBot);
 	void twitchAuthStatusRequested();
+	void twitchSessionReceived(const QString &account, const QString &accessToken, const QString &login,
+				  const QString &userId);
+	void twitchSessionCleared(const QString &account);
 
 private:
 	void syncQueueFromBackend();

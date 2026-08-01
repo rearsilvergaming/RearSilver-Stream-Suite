@@ -15,6 +15,11 @@
 #include <QToolButton>
 #include <QInputDialog>
 #include <QScrollArea>
+#include <QSettings>
+#include <QPointer>
+#include <QUuid>
+#include <QTimer>
+#include <QVector>
 
 #include <obs-frontend-api.h>
 #include <obs.h>
@@ -22,11 +27,36 @@
 
 namespace {
 
-static std::string lastQuickTextName = "";
-static QFont chosenFont("Arial", 120);
+static QFont chosenFont("Sora", 120);
 static uint32_t chosenColor = 0xFFFFFFFF;
-static QLabel *color_preview = nullptr;
-static QLabel *text_preview = nullptr;
+static QPointer<QLabel> color_preview;
+static QPointer<QLabel> text_preview;
+static QPointer<QLabel> text_preview_scale;
+
+static QStringList saved_presets()
+{
+	QSettings settings("RearSilver", "RearSilver Stream Suite");
+	return settings.value("quickText/presets", QStringList{"BRB", "Coffee Break", "Back Soon"})
+		.toStringList();
+}
+
+static void save_presets(const QVBoxLayout *layout)
+{
+	QStringList presets;
+	for (int i = 0; i < layout->count(); ++i) {
+		if (auto *row = layout->itemAt(i)->widget()) {
+			const auto buttons = row->findChildren<QPushButton *>();
+			for (auto *button : buttons) {
+				if (button->property("quickTextPreset").toBool()) {
+					presets.push_back(button->text());
+					break;
+				}
+			}
+		}
+	}
+	QSettings settings("RearSilver", "RearSilver Stream Suite");
+	settings.setValue("quickText/presets", presets);
+}
 
 // --- Helpers ---
 void set_color_preview(uint32_t color)
@@ -42,12 +72,30 @@ void set_color_preview(uint32_t color)
 			.arg(c.alphaF()));
 }
 
-void set_font_preview()
+void update_text_preview()
 {
 	if (!text_preview)
 		return;
-	text_preview->setFont(chosenFont);
-	text_preview->setFixedHeight(qBound(40, QFontMetrics(chosenFont).height() + 10, 80));
+	QColor c((chosenColor >> 16) & 0xFF, (chosenColor >> 8) & 0xFF, chosenColor & 0xFF,
+		 (chosenColor >> 24) & 0xFF);
+	// Keep the preview stage fixed and scale the text inside it. The dock's global
+	// stylesheet sets label fonts, so the preview size must be explicit CSS rather
+	// than relying on QLabel::setFont alone.
+	const int outputSize = qMax(1, chosenFont.pointSize());
+	const double sliderPosition = qBound(0.0, (outputSize - 20.0) / 180.0, 1.0);
+	const int previewPixels = qRound(12.0 + sliderPosition * 50.0);
+	QString family = chosenFont.family();
+	family.replace('"', "\\\"");
+	text_preview->setStyleSheet(
+		QString("color: rgba(%1,%2,%3,%4); background:#222; border-radius:4px; "
+			"border:1px solid #444; padding:4px; font-family:\"%5\"; "
+			"font-size:%6px; font-weight:%7; font-style:%8;")
+			.arg(c.red()).arg(c.green()).arg(c.blue()).arg(c.alphaF())
+			.arg(family).arg(previewPixels).arg(chosenFont.weight())
+			.arg(chosenFont.italic() ? "italic" : "normal"));
+	text_preview->setFixedHeight(96);
+	if (text_preview_scale)
+		text_preview_scale->setText(QString("Fixed preview stage • OBS output: %1 pt").arg(outputSize));
 }
 
 uint32_t swap_rb_bytes(uint32_t rgb)
@@ -74,12 +122,16 @@ static obs_sceneitem_t *ensure_group(obs_scene_t *scene)
 	return found ? found : obs_scene_add_group(scene, "Quick Text");
 }
 
-void clean_quicktext_group()
+static int clean_quicktext_group()
 {
 	obs_source_t *sceneSrc = obs_frontend_get_current_scene();
 	if (!sceneSrc)
-		return;
+		return 0;
 	obs_scene_t *scene = obs_scene_from_source(sceneSrc);
+	if (!scene) {
+		obs_source_release(sceneSrc);
+		return 0;
+	}
 	obs_sceneitem_t *groupItem = nullptr;
 	obs_scene_enum_items(
 		scene,
@@ -95,23 +147,53 @@ void clean_quicktext_group()
 
 	if (groupItem) {
 		obs_scene_t *groupScene = obs_group_or_scene_from_source(obs_sceneitem_get_source(groupItem));
-		if (groupScene)
+		if (groupScene) {
+			QVector<obs_sceneitem_t *> items;
 			obs_scene_enum_items(
 				groupScene,
-				[](obs_scene_t *, obs_sceneitem_t *i, void *) {
-					obs_sceneitem_remove(i);
+				[](obs_scene_t *, obs_sceneitem_t *i, void *data) {
+					auto *items = static_cast<QVector<obs_sceneitem_t *> *>(data);
+					obs_sceneitem_addref(i);
+					items->push_back(i);
 					return true;
 				},
-				nullptr);
+				&items);
+			for (auto *item : items) {
+				obs_sceneitem_remove(item);
+				obs_sceneitem_release(item);
+			}
+			const int removed = items.size();
+			obs_source_release(sceneSrc);
+			return removed;
+		}
 	}
-	lastQuickTextName.clear();
 	obs_source_release(sceneSrc);
+	return 0;
 }
 
-static void drop_text_into_scene(const QString &text, int fontSize, uint32_t color, bool replaceExisting)
+static bool drop_text_into_scene(const QString &text, int fontSize, uint32_t color, bool replaceExisting,
+				 QString *error = nullptr)
 {
-	if (text.isEmpty())
-		return;
+	if (text.trimmed().isEmpty()) {
+		if (error)
+			*error = "Enter some text first.";
+		return false;
+	}
+
+	obs_source_t *sceneSrc = obs_frontend_get_current_scene();
+	if (!sceneSrc) {
+		if (error)
+			*error = "No active OBS scene is available.";
+		return false;
+	}
+	obs_scene_t *scene = obs_scene_from_source(sceneSrc);
+	if (!scene) {
+		obs_source_release(sceneSrc);
+		if (error)
+			*error = "The active OBS source is not a scene.";
+		return false;
+	}
+
 	obs_data_t *settings = obs_data_create();
 	obs_data_set_string(settings, "text", text.toUtf8().constData());
 	obs_data_set_bool(settings, "custom_color", true);
@@ -121,29 +203,59 @@ static void drop_text_into_scene(const QString &text, int fontSize, uint32_t col
 	obs_data_set_int(font, "size", fontSize);
 	obs_data_set_obj(settings, "font", font);
 
-	obs_source_t *sceneSrc = obs_frontend_get_current_scene();
-	obs_scene_t *scene = obs_scene_from_source(sceneSrc);
 	obs_sceneitem_t *groupItem = ensure_group(scene);
+	if (!groupItem) {
+		obs_data_release(font);
+		obs_data_release(settings);
+		obs_source_release(sceneSrc);
+		if (error)
+			*error = "OBS could not create the Quick Text group.";
+		return false;
+	}
+	// Quick Text is an action, not just an editor. If the user hid the group
+	// after its previous use, pressing a preset or Drop Text must show it again.
+	obs_sceneitem_set_visible(groupItem, true);
 	obs_scene_t *groupScene = obs_group_or_scene_from_source(obs_sceneitem_get_source(groupItem));
+	if (!groupScene) {
+		obs_data_release(font);
+		obs_data_release(settings);
+		obs_source_release(sceneSrc);
+		if (error)
+			*error = "OBS could not open the Quick Text group.";
+		return false;
+	}
+	const QString sceneName = QString::fromUtf8(obs_source_get_name(sceneSrc));
+	const QString activeName = QString("Quick Text - %1 - Active").arg(sceneName);
 
-	if (replaceExisting && !lastQuickTextName.empty()) {
-		obs_sceneitem_t *existing = obs_scene_find_source(groupScene, lastQuickTextName.c_str());
+	if (replaceExisting) {
+		obs_sceneitem_t *existing = obs_scene_find_source(groupScene, activeName.toUtf8().constData());
 		if (existing) {
 			obs_source_update(obs_sceneitem_get_source(existing), settings);
+			// The item itself may have been hidden independently of its group.
+			obs_sceneitem_set_visible(existing, true);
 			goto cleanup;
 		}
 	}
 
 	{
+		const QString sourceName = replaceExisting
+					   ? activeName
+					   : QString("Quick Text - %1").arg(QUuid::createUuid().toString(QUuid::Id128));
 		obs_source_t *textSrc = obs_source_create(
 #ifdef _WIN32
 			"text_gdiplus",
 #else
 			"text_ft2_source",
 #endif
-			text.toUtf8().constData(), settings, nullptr);
-		obs_scene_add(groupScene, textSrc);
-		lastQuickTextName = obs_source_get_name(textSrc);
+			sourceName.toUtf8().constData(), settings, nullptr);
+		if (!textSrc) {
+			if (error)
+				*error = "OBS could not create a text source.";
+			goto failed;
+		}
+		obs_sceneitem_t *textItem = obs_scene_add(groupScene, textSrc);
+		if (textItem)
+			obs_sceneitem_set_visible(textItem, true);
 		obs_source_release(textSrc);
 	}
 
@@ -151,10 +263,17 @@ cleanup:
 	obs_data_release(font);
 	obs_data_release(settings);
 	obs_source_release(sceneSrc);
+	return true;
+
+failed:
+	obs_data_release(font);
+	obs_data_release(settings);
+	obs_source_release(sceneSrc);
+	return false;
 }
 
 static void add_preset_row(QWidget *page, QVBoxLayout *presetsLayout, const QString &label, QSlider *fontSize,
-			   QCheckBox *chkReplace)
+			   QCheckBox *chkReplace, QLabel *status)
 {
 	QWidget *row = new QWidget(page);
 	auto *layout = new QHBoxLayout(row);
@@ -163,6 +282,7 @@ static void add_preset_row(QWidget *page, QVBoxLayout *presetsLayout, const QStr
 
 	QPushButton *btn = new QPushButton(label);
 	btn->setObjectName("rs-secondary-button");
+	btn->setProperty("quickTextPreset", true);
 	btn->setMinimumHeight(32); // Explicit height to help calculate scroll area
 
 	QToolButton *btnEdit = new QToolButton();
@@ -179,15 +299,23 @@ static void add_preset_row(QWidget *page, QVBoxLayout *presetsLayout, const QStr
 	presetsLayout->addWidget(row);
 
 	QObject::connect(btn, &QPushButton::clicked, page, [=]() {
-		drop_text_into_scene(btn->text(), fontSize->value(), chosenColor, chkReplace->isChecked());
+		QString error;
+		const bool ok = drop_text_into_scene(btn->text(), fontSize->value(), chosenColor,
+						     chkReplace->isChecked(), &error);
+		status->setText(ok ? QString("Added \"%1\" to the current scene.").arg(btn->text()) : error);
 	});
 	QObject::connect(btnEdit, &QToolButton::clicked, page, [=]() {
 		bool ok;
 		QString t = QInputDialog::getText(page, "Edit", "Text:", QLineEdit::Normal, btn->text(), &ok);
-		if (ok && !t.trimmed().isEmpty())
+		if (ok && !t.trimmed().isEmpty()) {
 			btn->setText(t.trimmed());
+			save_presets(presetsLayout);
+		}
 	});
-	QObject::connect(btnDel, &QToolButton::clicked, row, &QWidget::deleteLater);
+	QObject::connect(btnDel, &QToolButton::clicked, row, [=]() {
+		row->deleteLater();
+		QTimer::singleShot(0, page, [=]() { save_presets(presetsLayout); });
+	});
 }
 
 } // namespace
@@ -198,6 +326,14 @@ static void add_preset_row(QWidget *page, QVBoxLayout *presetsLayout, const QStr
 // ────────────────────────────────────────────────────────────────
 QWidget *RsQuickText::createPage(RsMainDock *, QWidget *parent)
 {
+	QSettings settings("RearSilver", "RearSilver Stream Suite");
+	chosenFont = QFont(settings.value("quickText/fontFamily", "Sora").toString(),
+			   settings.value("quickText/fontSize", 120).toInt());
+	chosenColor = settings.value("quickText/color", static_cast<qulonglong>(0xFFFFFFFF)).toULongLong();
+	auto *status = new QLabel();
+	status->setWordWrap(true);
+	status->setProperty("muted", true);
+
 	// Outer scroll wrapper (matches System pages behaviour)
 	auto *scroll = new QScrollArea(parent);
 	scroll->setFrameShape(QFrame::NoFrame);
@@ -237,6 +373,7 @@ QWidget *RsQuickText::createPage(RsMainDock *, QWidget *parent)
 	topLayout->addWidget(desc);
 
 	QCheckBox *chkReplace = new QCheckBox("Replace last instead of stacking");
+	chkReplace->setChecked(settings.value("quickText/replace", true).toBool());
 	topLayout->addWidget(chkReplace);
 
 	root->addWidget(topSection);
@@ -301,13 +438,17 @@ QWidget *RsQuickText::createPage(RsMainDock *, QWidget *parent)
 
 	text_preview = new QLabel("(Preview)");
 	text_preview->setAlignment(Qt::AlignCenter);
-	text_preview->setStyleSheet("background:#222; border-radius:4px; border:1px solid #444;");
-	set_font_preview();
+	update_text_preview();
 	bottomLayout->addWidget(text_preview);
+	text_preview_scale = new QLabel();
+	text_preview_scale->setAlignment(Qt::AlignCenter);
+	text_preview_scale->setStyleSheet("color:#8fa6c4; font-size:10px;");
+	bottomLayout->addWidget(text_preview_scale);
+	update_text_preview();
 
 	QSlider *fontSize = new QSlider(Qt::Horizontal);
 	fontSize->setRange(20, 200);
-	fontSize->setValue(120);
+	fontSize->setValue(qBound(20, chosenFont.pointSize(), 200));
 	auto *sizeRow = new QHBoxLayout();
 	sizeRow->addWidget(new QLabel("Size:"));
 	sizeRow->addWidget(fontSize);
@@ -334,28 +475,39 @@ QWidget *RsQuickText::createPage(RsMainDock *, QWidget *parent)
 	actionRow->addWidget(btnDrop);
 	actionRow->addWidget(btnClean);
 	bottomLayout->addLayout(actionRow);
+	bottomLayout->addWidget(status);
 
 	root->addWidget(bottomSection);
 	bottomSection->setFixedHeight(kControlsSectionHeight);
 
 	// --- Logic ---
-	add_preset_row(page, listLayout, "BRB", fontSize, chkReplace);
-	add_preset_row(page, listLayout, "Coffee Break", fontSize, chkReplace);
-	add_preset_row(page, listLayout, "Back Soon", fontSize, chkReplace);
+	for (const auto &preset : saved_presets())
+		add_preset_row(page, listLayout, preset, fontSize, chkReplace, status);
 
-	QObject::connect(txtInput, &QLineEdit::textChanged, page,
-			 [=](const QString &t) { text_preview->setText(t.isEmpty() ? "(Preview)" : t); });
+	QObject::connect(txtInput, &QLineEdit::textChanged, page, [=](const QString &t) {
+		text_preview->setText(t.isEmpty() ? "(Preview)" : t);
+		update_text_preview();
+	});
 
 	QObject::connect(fontSize, &QSlider::valueChanged, page, [=](int v) {
 		chosenFont.setPointSize(v);
-		set_font_preview();
+		update_text_preview();
+		QSettings settings("RearSilver", "RearSilver Stream Suite");
+		settings.setValue("quickText/fontSize", v);
+	});
+	QObject::connect(chkReplace, &QCheckBox::toggled, page, [](bool checked) {
+		QSettings settings("RearSilver", "RearSilver Stream Suite");
+		settings.setValue("quickText/replace", checked);
 	});
 
 	QObject::connect(btnAdd, &QToolButton::clicked, page, [=]() {
 		bool ok;
 		QString l = QInputDialog::getText(page, "New Preset", "Text:", QLineEdit::Normal, "", &ok);
-		if (ok && !l.trimmed().isEmpty())
-			add_preset_row(page, listLayout, l.trimmed(), fontSize, chkReplace);
+		if (ok && !l.trimmed().isEmpty()) {
+			add_preset_row(page, listLayout, l.trimmed(), fontSize, chkReplace, status);
+			save_presets(listLayout);
+			status->setText(QString("Saved preset \"%1\".").arg(l.trimmed()));
+		}
 	});
 
 	QObject::connect(btnColor, &QPushButton::clicked, page, [=]() {
@@ -363,6 +515,9 @@ QWidget *RsQuickText::createPage(RsMainDock *, QWidget *parent)
 		if (c.isValid()) {
 			chosenColor = (c.alpha() << 24) | (c.red() << 16) | (c.green() << 8) | c.blue();
 			set_color_preview(chosenColor);
+			update_text_preview();
+			QSettings settings("RearSilver", "RearSilver Stream Suite");
+			settings.setValue("quickText/color", static_cast<qulonglong>(chosenColor));
 		}
 	});
 
@@ -372,15 +527,24 @@ QWidget *RsQuickText::createPage(RsMainDock *, QWidget *parent)
 		if (ok) {
 			chosenFont = f;
 			fontSize->setValue(f.pointSize());
-			set_font_preview();
+			update_text_preview();
+			QSettings settings("RearSilver", "RearSilver Stream Suite");
+			settings.setValue("quickText/fontFamily", f.family());
 		}
 	});
 
 	QObject::connect(btnDrop, &QPushButton::clicked, page, [=]() {
-		drop_text_into_scene(txtInput->text(), fontSize->value(), chosenColor, chkReplace->isChecked());
+		QString error;
+		const bool ok = drop_text_into_scene(txtInput->text(), fontSize->value(), chosenColor,
+						     chkReplace->isChecked(), &error);
+		status->setText(ok ? "Quick Text added to the current scene." : error);
 	});
 
-	QObject::connect(btnClean, &QPushButton::clicked, page, clean_quicktext_group);
+	QObject::connect(btnClean, &QPushButton::clicked, page, [=]() {
+		const int removed = clean_quicktext_group();
+		status->setText(removed > 0 ? QString("Cleared %1 Quick Text source(s).").arg(removed)
+						    : "There are no Quick Text sources in the current scene.");
+	});
 
-return scroll;
+	return scroll;
 }

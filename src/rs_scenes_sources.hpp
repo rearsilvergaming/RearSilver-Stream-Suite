@@ -8,6 +8,7 @@ class QTabWidget;
 class QLabel;
 class QDockWidget;
 class QAction;
+class QPushButton;
 
 class RsScenesSourcesPage : public QWidget {
 	Q_OBJECT
@@ -18,6 +19,7 @@ public:
 
 private slots:
 	void tryEmbedNativeDocks();
+	void toggleNativeDocks();
 
 private:
 	// ✅ OBS frontend callback (MUST be a real function)
@@ -29,6 +31,7 @@ private:
 	// UI
 	QTabWidget *m_tabs = nullptr;
 	QLabel *m_status = nullptr;
+	QPushButton *m_toggleButton = nullptr;
 
 	int m_retryCount = 0;
 
@@ -44,9 +47,11 @@ private:
 
 	bool m_prevScenesDockVisible = false;
 	bool m_prevSourcesDockVisible = false;
+	bool m_embedded = false;
+	int m_lastTabIndex = 0;
 
 	void buildUi();
 	void setStatus(const QString &text);
-	void adoptDockActions(QDockWidget *dock, QWidget *targetHost);
-	void restoreNativeDocks();
+	void showPlaceholders();
+	void restoreNativeDocks(bool makeVisible = false);
 };

@@ -19,6 +19,7 @@
 #include <QGroupBox>
 #include <QCheckBox>
 #include <QScrollArea>
+#include <QSettings>
 
 extern "C" {
 #include <obs.h>
@@ -114,7 +115,59 @@ struct TimerState {
 	bool shadowEnabled = true;
 
 	bool bgEnabled = false;
+	QString bgColor = "#000000";
+	int bgOpacity = 70;
+	int bgRadius = 48;
+	bool hideWhenFinished = false;
 };
+
+static QSettings timerSettings()
+{
+	return QSettings("RearSilver", "RearSilver-Stream-Suite");
+}
+
+static void loadTimerSettings(TimerState &s)
+{
+	auto settings = timerSettings();
+	settings.beginGroup("enhancements/timer");
+	s.label = settings.value("label", s.label).toString();
+	s.mode = settings.value("mode", static_cast<int>(s.mode)).toInt() == static_cast<int>(TimerMode::Stopwatch)
+			 ? TimerMode::Stopwatch
+			 : TimerMode::Countdown;
+	s.totalSeconds = qMax(0, settings.value("duration_seconds", s.totalSeconds).toInt());
+	s.remainingSeconds = s.mode == TimerMode::Countdown ? s.totalSeconds : 0;
+	s.elapsedSeconds = 0;
+	s.textColor = settings.value("text_colour", s.textColor).toString();
+	s.labelFontSize = settings.value("label_size", s.labelFontSize).toInt();
+	s.timeFontSize = settings.value("time_size", s.timeFontSize).toInt();
+	s.shadowEnabled = settings.value("shadow", s.shadowEnabled).toBool();
+	s.bgEnabled = settings.value("background", s.bgEnabled).toBool();
+	s.bgColor = settings.value("background_colour", s.bgColor).toString();
+	s.bgOpacity = qBound(0, settings.value("background_opacity", s.bgOpacity).toInt(), 100);
+	s.bgRadius = qBound(0, settings.value("background_radius", s.bgRadius).toInt(), 100);
+	s.hideWhenFinished = settings.value("hide_when_finished", s.hideWhenFinished).toBool();
+	settings.endGroup();
+}
+
+static void saveTimerSettings(const TimerState &s)
+{
+	auto settings = timerSettings();
+	settings.beginGroup("enhancements/timer");
+	settings.setValue("label", s.label);
+	settings.setValue("mode", static_cast<int>(s.mode));
+	settings.setValue("duration_seconds", s.totalSeconds);
+	settings.setValue("text_colour", s.textColor);
+	settings.setValue("label_size", s.labelFontSize);
+	settings.setValue("time_size", s.timeFontSize);
+	settings.setValue("shadow", s.shadowEnabled);
+	settings.setValue("background", s.bgEnabled);
+	settings.setValue("background_colour", s.bgColor);
+	settings.setValue("background_opacity", s.bgOpacity);
+	settings.setValue("background_radius", s.bgRadius);
+	settings.setValue("hide_when_finished", s.hideWhenFinished);
+	settings.endGroup();
+	settings.sync();
+}
 
 
 static QString modeToString(TimerMode m)
@@ -165,10 +218,19 @@ static void ensureOverlayFilesExist()
             width: 100%;
             height: 100%;
             display: flex;
-            flex-direction: column;
             justify-content: center;
             align-items: center;
-            text-shadow: 0 2px 10px rgba(0,0,0,0.55);
+            box-sizing: border-box;
+        }
+
+		.pill {
+			display: inline-flex;
+			flex-direction: column;
+			justify-content: center;
+			align-items: center;
+			box-sizing: border-box;
+			text-align: center;
+			min-width: 1px;
         }
 
         .label {
@@ -188,8 +250,10 @@ static void ensureOverlayFilesExist()
 
 <body>
     <div class="wrap">
-        <div id="label" class="label">Timer</div>
-        <div id="time" class="time">00:00</div>
+		<div id="pill" class="pill">
+			<div id="label" class="label">Timer</div>
+			<div id="time" class="time">00:00</div>
+		</div>
     </div>
 
     <script>
@@ -211,6 +275,9 @@ const labelSize = parseInt(params.get("labelSize") || "28", 10);
 const timeSize  = parseInt(params.get("timeSize") || "84", 10);
 const shadow    = params.get("shadow") === "1";
 const bg        = params.get("bg") === "1";
+const bgColor   = params.get("bgColor") || "#000000";
+const bgOpacity = Math.max(0, Math.min(100, parseInt(params.get("bgOpacity") || "70", 10))) / 100;
+const bgRadius  = Math.max(0, parseInt(params.get("bgRadius") || "48", 10));
 
 labelEl.style.color = textColor;
 timeEl.style.color = textColor;
@@ -222,14 +289,19 @@ const shadowValue = shadow ? "0 2px 10px rgba(0,0,0,0.55)" : "none";
 labelEl.style.textShadow = shadowValue;
 timeEl.style.textShadow  = shadowValue;
 
-const wrap = document.querySelector(".wrap");
+const pill = document.getElementById("pill");
 if (bg) {
-	wrap.style.background = "rgba(0,0,0,0.55)";
-	wrap.style.padding = "12px";
-	wrap.style.borderRadius = "10px";
+	const hex = bgColor.replace("#", "");
+	const full = hex.length === 3 ? hex.split("").map(c => c + c).join("") : hex;
+	const r = parseInt(full.substring(0,2), 16) || 0;
+	const g = parseInt(full.substring(2,4), 16) || 0;
+	const b = parseInt(full.substring(4,6), 16) || 0;
+	pill.style.background = `rgba(${r},${g},${b},${bgOpacity})`;
+	pill.style.padding = "14px 34px";
+	pill.style.borderRadius = bgRadius + "px";
 } else {
-	wrap.style.background = "transparent";
-	wrap.style.padding = "0";
+	pill.style.background = "transparent";
+	pill.style.padding = "0";
 }
 
 
@@ -318,6 +390,9 @@ static void updateTimerBrowserUrl(const TimerState &s)
 	q.addQueryItem("timeSize", QString::number(s.timeFontSize));
 	q.addQueryItem("shadow", s.shadowEnabled ? "1" : "0");
 	q.addQueryItem("bg", s.bgEnabled ? "1" : "0");
+	q.addQueryItem("bgColor", s.bgColor);
+	q.addQueryItem("bgOpacity", QString::number(s.bgOpacity));
+	q.addQueryItem("bgRadius", QString::number(s.bgRadius));
 
 
 	url.setQuery(q);
@@ -373,6 +448,13 @@ static void ensureTimerBrowserSource(const TimerState &initialState)
 
 	obs_source_t *existing = obs_get_source_by_name(kTimerSourceName);
 	if (existing) {
+		obs_source_t *sceneSrc = obs_frontend_get_current_scene();
+		if (sceneSrc) {
+			obs_scene_t *scene = obs_scene_from_source(sceneSrc);
+			if (scene && !obs_scene_find_source(scene, kTimerSourceName))
+				obs_scene_add(scene, existing);
+			obs_source_release(sceneSrc);
+		}
 		obs_source_release(existing);
 		updateTimerBrowserUrl(initialState);
 		return;
@@ -471,17 +553,14 @@ QWidget *RsTimer::createPage(RsMainDock *dock, QWidget *parent)
 
 	// State
 	auto *state = new TimerState();
-	state->label = "Timer";
-	state->mode = TimerMode::Countdown;
-	state->totalSeconds = 300;
-	state->remainingSeconds = 300;
-	state->elapsedSeconds = 0;
+	loadTimerSettings(*state);
 	state->running = false;
 	state->paused = false;
 	state->lastTickMs = QDateTime::currentMSecsSinceEpoch();
 
-	// Ensure browser source exists immediately
-	ensureTimerBrowserSource(*state);
+	// Prepare the overlay file, but respect an intentionally deleted source.
+	// Creation only happens through Add/repair or when the user starts a timer.
+	ensureOverlayFilesExist();
 	updateTimerBrowserUrl(*state);
 
 	// Sync visibility state from OBS (OBS remembers this between launches)
@@ -502,6 +581,7 @@ QWidget *RsTimer::createPage(RsMainDock *dock, QWidget *parent)
 
 		QObject::connect(labelEdit, &QLineEdit::textChanged, page, [=](const QString &t) {
 			state->label = t.trimmed().isEmpty() ? "Timer" : t.trimmed();
+			saveTimerSettings(*state);
 			updateTimerBrowserUrl(*state);
 		});
 	}
@@ -517,6 +597,7 @@ QWidget *RsTimer::createPage(RsMainDock *dock, QWidget *parent)
 		modeCombo = new QComboBox();
 		modeCombo->addItem("Countdown", (int)TimerMode::Countdown);
 		modeCombo->addItem("Stopwatch", (int)TimerMode::Stopwatch);
+		modeCombo->setCurrentIndex(state->mode == TimerMode::Stopwatch ? 1 : 0);
 
 		root->addWidget(lbl);
 		root->addWidget(modeCombo);
@@ -532,12 +613,12 @@ QWidget *RsTimer::createPage(RsMainDock *dock, QWidget *parent)
 
 		mins = new QSpinBox();
 		mins->setRange(0, 999);
-		mins->setValue(5);
+		mins->setValue(state->totalSeconds / 60);
 		mins->setSuffix(" min");
 
 		secs = new QSpinBox();
 		secs->setRange(0, 59);
-		secs->setValue(0);
+		secs->setValue(state->totalSeconds % 60);
 		secs->setSuffix(" sec");
 
 		row->addWidget(mins);
@@ -595,6 +676,29 @@ QWidget *RsTimer::createPage(RsMainDock *dock, QWidget *parent)
 		bgToggle->setChecked(state->bgEnabled);
 		grid->addWidget(bgToggle, row++, 0, 1, 2);
 
+		grid->addWidget(new QLabel("Pill colour (hex):"), row, 0);
+		auto *bgColour = new QLineEdit(state->bgColor);
+		bgColour->setPlaceholderText("#000000");
+		grid->addWidget(bgColour, row++, 1);
+
+		grid->addWidget(new QLabel("Pill opacity:"), row, 0);
+		auto *bgOpacity = new QSpinBox();
+		bgOpacity->setRange(0, 100);
+		bgOpacity->setSuffix("%");
+		bgOpacity->setValue(state->bgOpacity);
+		grid->addWidget(bgOpacity, row++, 1);
+
+		grid->addWidget(new QLabel("Pill roundness:"), row, 0);
+		auto *bgRadius = new QSpinBox();
+		bgRadius->setRange(0, 100);
+		bgRadius->setSuffix(" px");
+		bgRadius->setValue(state->bgRadius);
+		grid->addWidget(bgRadius, row++, 1);
+
+		auto *finishToggle = new QCheckBox("Hide timer source when countdown finishes");
+		finishToggle->setChecked(state->hideWhenFinished);
+		grid->addWidget(finishToggle, row++, 0, 1, 2);
+
 		root->addWidget(box);
 
 		// ---- Connections ----
@@ -608,28 +712,61 @@ QWidget *RsTimer::createPage(RsMainDock *dock, QWidget *parent)
 			}
 
 			state->textColor = c;
+			saveTimerSettings(*state);
 			updateTimerBrowserUrl(*state);
 		});
 
 
 		QObject::connect(labelSize, QOverload<int>::of(&QSpinBox::valueChanged), page, [=](int v) {
 			state->labelFontSize = v;
+			saveTimerSettings(*state);
 			updateTimerBrowserUrl(*state);
 		});
 
 		QObject::connect(timeSize, QOverload<int>::of(&QSpinBox::valueChanged), page, [=](int v) {
 			state->timeFontSize = v;
+			saveTimerSettings(*state);
 			updateTimerBrowserUrl(*state);
 		});
 
 		QObject::connect(shadowToggle, &QCheckBox::toggled, page, [=](bool on) {
 			state->shadowEnabled = on;
+			saveTimerSettings(*state);
 			updateTimerBrowserUrl(*state);
 		});
 
 		QObject::connect(bgToggle, &QCheckBox::toggled, page, [=](bool on) {
 			state->bgEnabled = on;
+			saveTimerSettings(*state);
 			updateTimerBrowserUrl(*state);
+		});
+
+		QObject::connect(bgColour, &QLineEdit::editingFinished, page, [=]() {
+			QString c = bgColour->text().trimmed();
+			if (!c.startsWith("#") || (c.length() != 7 && c.length() != 4)) {
+				c = "#000000";
+				bgColour->setText(c);
+			}
+			state->bgColor = c;
+			saveTimerSettings(*state);
+			updateTimerBrowserUrl(*state);
+		});
+
+		QObject::connect(bgOpacity, QOverload<int>::of(&QSpinBox::valueChanged), page, [=](int v) {
+			state->bgOpacity = v;
+			saveTimerSettings(*state);
+			updateTimerBrowserUrl(*state);
+		});
+
+		QObject::connect(bgRadius, QOverload<int>::of(&QSpinBox::valueChanged), page, [=](int v) {
+			state->bgRadius = v;
+			saveTimerSettings(*state);
+			updateTimerBrowserUrl(*state);
+		});
+
+		QObject::connect(finishToggle, &QCheckBox::toggled, page, [=](bool on) {
+			state->hideWhenFinished = on;
+			saveTimerSettings(*state);
 		});
 	}
 
@@ -653,8 +790,11 @@ QWidget *RsTimer::createPage(RsMainDock *dock, QWidget *parent)
 	QPushButton *btnStart = new QPushButton("Start");
 	QPushButton *btnPause = new QPushButton("Pause");
 	QPushButton *btnReset = new QPushButton("Reset");
-	QPushButton *btnEnsure = new QPushButton("Ensure Browser Source");
+	QPushButton *btnEnsure = new QPushButton("Add / repair timer source in current scene");
 	QPushButton *btnVisibility = new QPushButton("Hide from Stream");
+	auto *status = new QLabel();
+	status->setWordWrap(true);
+	status->setObjectName("rs-muted-label");
 
 	btnStart->setObjectName("rs-primary-button");
 
@@ -675,6 +815,8 @@ QWidget *RsTimer::createPage(RsMainDock *dock, QWidget *parent)
 		setTimerSourceVisible(state->visibleOnStream);
 
 		btnVisibility->setText(state->visibleOnStream ? "Hide from Stream" : "Show on Stream");
+		status->setText(state->visibleOnStream ? "Timer source is visible in the current scene."
+						       : "Timer source is hidden in the current scene.");
 	});
 
 
@@ -697,6 +839,7 @@ QWidget *RsTimer::createPage(RsMainDock *dock, QWidget *parent)
 		grid->addWidget(btnEnsure, 2, 0, 1, 2);
 
 		root->addLayout(grid);
+		root->addWidget(status);
 	}
 
 
@@ -728,6 +871,7 @@ QWidget *RsTimer::createPage(RsMainDock *dock, QWidget *parent)
 		state->totalSeconds = t;
 		state->remainingSeconds = t;
 		state->elapsedSeconds = 0;
+		saveTimerSettings(*state);
 
 		updateTimerBrowserUrl(*state);
 		updatePreview();
@@ -747,6 +891,7 @@ QWidget *RsTimer::createPage(RsMainDock *dock, QWidget *parent)
 		state->running = false;
 		state->paused = false;
 		state->lastTickMs = QDateTime::currentMSecsSinceEpoch();
+		saveTimerSettings(*state);
 
 		if (state->mode == TimerMode::Countdown) {
 			// countdown resets to the current duration setting
@@ -774,6 +919,9 @@ QWidget *RsTimer::createPage(RsMainDock *dock, QWidget *parent)
 		ensureTimerBrowserSource(*state);
 		updateTimerBrowserUrl(*state);
 		updatePreview();
+		state->visibleOnStream = isTimerSourceVisible();
+		btnVisibility->setText(state->visibleOnStream ? "Hide from Stream" : "Show on Stream");
+		status->setText("Timer source is ready in the current scene.");
 	});
 
 	QObject::connect(btnStart, &QPushButton::clicked, page, [=]() {
@@ -862,6 +1010,14 @@ QWidget *RsTimer::createPage(RsMainDock *dock, QWidget *parent)
 
 				// Countdown completion is a transition -> update overlay once
 				updateTimerBrowserUrl(*state);
+				if (state->hideWhenFinished) {
+					setTimerSourceVisible(false);
+					state->visibleOnStream = false;
+					btnVisibility->setText("Show on Stream");
+					status->setText("Countdown finished; timer source was hidden.");
+				} else {
+					status->setText("Countdown finished.");
+				}
 				refreshUiEnabled();
 			}
 		}
@@ -874,6 +1030,8 @@ QWidget *RsTimer::createPage(RsMainDock *dock, QWidget *parent)
 	updatePreview();
 
 	btnVisibility->setText(state->visibleOnStream ? "Hide from Stream" : "Show on Stream");
+	status->setText(state->visibleOnStream ? "Timer source is visible in the current scene."
+					       : "Timer source is hidden or is not in the current scene.");
 
 
 	root->addStretch(1);

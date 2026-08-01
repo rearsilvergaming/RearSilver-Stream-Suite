@@ -41,6 +41,8 @@ static const char *kReplayBgImageKey = "RSInstantReplayBgImage";
 static QString s_lastReplayFile;
 static qint64 s_lastReplayRequestTime = 0;
 static qint64 s_replayBufferStartTime = 0;
+static bool s_waitingForRequestedReplay = false;
+static QString s_visibleReplaySceneName;
 
 // ------------------------------------------------------------
 // Hotkey
@@ -320,6 +322,40 @@ static void centreItemInGroup(obs_sceneitem_t *item)
 	obs_sceneitem_set_bounds_type(item, OBS_BOUNDS_NONE);
 }
 
+static void fitReplayInsideBackground(obs_scene_t *groupScene)
+{
+	if (!groupScene)
+		return;
+	obs_sceneitem_t *replay = obs_scene_find_source(groupScene, kReplaySourceName);
+	obs_sceneitem_t *background = obs_scene_find_source(groupScene, kReplayBgSourceName);
+	if (!replay || !background)
+		return;
+
+	obs_source_t *backgroundSource = obs_sceneitem_get_source(background);
+	const uint32_t width = backgroundSource ? obs_source_get_width(backgroundSource) : 0;
+	const uint32_t height = backgroundSource ? obs_source_get_height(backgroundSource) : 0;
+	if (!width || !height)
+		return;
+
+	// Use one deterministic top-left coordinate system for both children. Centre
+	// anchoring both at (0,0) lets OBS recalculate the group around their negative
+	// extents and is what separated the replay from its frame.
+	obs_sceneitem_set_alignment(background, OBS_ALIGN_LEFT | OBS_ALIGN_TOP);
+	obs_sceneitem_set_bounds_type(background, OBS_BOUNDS_NONE);
+	vec2 backgroundPos = {0.0f, 0.0f};
+	obs_sceneitem_set_pos(background, &backgroundPos);
+
+	// The supplied frame reserves a title strip and border. Keep the replay in
+	// its inner aperture while preserving the recorded video's aspect ratio.
+	vec2 bounds = {static_cast<float>(width) * 0.86f, static_cast<float>(height) * 0.76f};
+	obs_sceneitem_set_alignment(replay, OBS_ALIGN_LEFT | OBS_ALIGN_TOP);
+	obs_sceneitem_set_bounds_alignment(replay, OBS_ALIGN_CENTER);
+	obs_sceneitem_set_bounds_type(replay, OBS_BOUNDS_SCALE_INNER);
+	obs_sceneitem_set_bounds(replay, &bounds);
+	vec2 pos = {static_cast<float>(width) * 0.07f, static_cast<float>(height) * 0.14f};
+	obs_sceneitem_set_pos(replay, &pos);
+}
+
 
 // ------------------------------------------------------------
 // Helpers: Replay Buffer configuration (best-effort)
@@ -559,6 +595,8 @@ void RsInstantReplay::playReplay(const QString &filePath)
 	// Show source
 	obs_source_t *sceneSrc = obs_frontend_get_current_scene();
 	if (sceneSrc) {
+		const char *sceneName = obs_source_get_name(sceneSrc);
+		s_visibleReplaySceneName = sceneName ? QString::fromUtf8(sceneName) : QString();
 		obs_scene_t *scene = obs_scene_from_source(sceneSrc);
 		if (scene) {
 
@@ -583,6 +621,7 @@ obs_sceneitem_t *group = findOrCreateReplayGroup(scene);
 							obs_scene_find_source(groupScene, kReplaySourceName);
 						if (replay)
 							obs_sceneitem_set_visible(replay, true);
+						fitReplayInsideBackground(groupScene);
 					}
 				}
 			}
@@ -611,7 +650,9 @@ obs_sceneitem_t *group = findOrCreateReplayGroup(scene);
 // ------------------------------------------------------------
 void RsInstantReplay::hideReplaySource()
 {
-	obs_source_t *sceneSrc = obs_frontend_get_current_scene();
+	obs_source_t *sceneSrc = s_visibleReplaySceneName.isEmpty()
+				 ? obs_frontend_get_current_scene()
+				 : obs_get_source_by_name(s_visibleReplaySceneName.toUtf8().constData());
 	if (!sceneSrc)
 		return;
 
@@ -621,11 +662,13 @@ void RsInstantReplay::hideReplaySource()
 		return;
 	}
 
-	obs_sceneitem_t *group = findOrCreateReplayGroup(scene);
+	// Hiding must never create replay sources in a different scene.
+	obs_sceneitem_t *group = findReplayGroup(scene);
 	if (group)
 		obs_sceneitem_set_visible(group, false);
 
 	obs_source_release(sceneSrc);
+	s_visibleReplaySceneName.clear();
 }
 
 
@@ -651,9 +694,29 @@ static QString findReplayAfterRequest(const QString &folder)
 
 static void playReplayAfterRename(int attempt)
 {
+	// OBS knows the exact final replay path, including any profile folder and
+	// filename formatting. Prefer it over guessing from a configured directory.
+	char *lastReplay = obs_frontend_get_last_replay();
+	if (lastReplay && *lastReplay) {
+		const QString exactPath = QString::fromUtf8(lastReplay);
+		bfree(lastReplay);
+		if (QFileInfo::exists(exactPath)) {
+			s_lastReplayFile = exactPath;
+			RsInstantReplay::playReplay(exactPath);
+			return;
+		}
+	} else if (lastReplay) {
+		bfree(lastReplay);
+	}
+
 	const QString folder = RsInstantReplay::replayFolderOverride();
-	if (folder.isEmpty())
+	if (folder.isEmpty()) {
+		if (attempt < 40)
+			QTimer::singleShot(250, [attempt]() { playReplayAfterRename(attempt + 1); });
+		else
+			blog(LOG_WARNING, "[RS Instant Replay] OBS did not report a saved replay path");
 		return;
+	}
 
 	QString file = findReplayAfterRequest(folder);
 
@@ -681,6 +744,10 @@ static void onFrontendEvent(enum obs_frontend_event event, void *)
 {
 	if (event != OBS_FRONTEND_EVENT_REPLAY_BUFFER_SAVED)
 		return;
+	if (!s_waitingForRequestedReplay)
+		return;
+
+	s_waitingForRequestedReplay = false;
 
 	// ALWAYS ensure the group & sources exist immediately
 	RsInstantReplay::ensureReplayBgSource();
@@ -748,8 +815,17 @@ void RsInstantReplay::triggerReplay()
 	s_lastReplayFile.clear();
 
 	// Ensure Replay Buffer is running
-	if (!obs_frontend_replay_buffer_active())
+	if (!obs_frontend_replay_buffer_active()) {
 		obs_frontend_replay_buffer_start();
+		s_replayBufferStartTime = QDateTime::currentMSecsSinceEpoch();
+	}
+
+	s_waitingForRequestedReplay = true;
+	const qint64 requestTime = s_lastReplayRequestTime;
+	QTimer::singleShot(45000, [requestTime]() {
+		if (s_lastReplayRequestTime == requestTime)
+			s_waitingForRequestedReplay = false;
+	});
 
 	// Ask OBS to save the replay buffer
 	qint64 now = QDateTime::currentMSecsSinceEpoch();

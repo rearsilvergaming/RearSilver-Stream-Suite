@@ -1,7 +1,7 @@
 ﻿// ---------------------------------------------------------------
 // src/enhancements/rs_browser_refresh.cpp
-// OBS 32–compatible browser refresh tool (SAFE)
-// Refresh method: scene item visibility toggle (NO settings/URL writes)
+// OBS 32-compatible browser refresh tool.
+// Refresh method: invoke obs-browser's native refresh procedure.
 // ---------------------------------------------------------------
 
 #include "rs_browser_refresh.hpp"
@@ -15,19 +15,17 @@
 #include <QPlainTextEdit>
 #include <QFrame>
 #include <QTime>
-#include <QTimer>
 #include <QScrollArea>
 
 #include <vector>
 #include <unordered_set>
-#include <cstdint>
 
 #include <obs-frontend-api.h>
 #include <obs.h>
 
 namespace {
 
-static constexpr const char *kBuildMarker = "SAFE_VIS_TOGGLE_v1";
+static constexpr const char *kBuildMarker = "SAFE_BROWSER_RELOAD_v3";
 
 // ---------------------------------------------------------------
 // Logging helper
@@ -52,26 +50,54 @@ static inline bool is_browser_source(obs_source_t *src)
 	return (id && strcmp(id, "browser_source") == 0);
 }
 
-struct ItemRef {
-	obs_sceneitem_t *item = nullptr;
-	bool wasVisible = false;
+struct SourceRef {
+	obs_source_t *source = nullptr;
 	QString sourceName;
 };
 
+static QString browser_url(obs_source_t *source)
+{
+	if (!source)
+		return {};
+	obs_data_t *settings = obs_source_get_settings(source);
+	const QString url = settings ? QString::fromUtf8(obs_data_get_string(settings, "url")) : QString();
+	if (settings)
+		obs_data_release(settings);
+	return url;
+}
+
+static bool requires_session_safe_reload(obs_source_t *source)
+{
+	const QString url = browser_url(source).toLower();
+	// OBS exposes refreshnocache, not a normal cached reload. For services that
+	// use anti-bot/session challenges, invoking it can replace a working widget
+	// with a verification page that cannot be completed inside source preview.
+	return url.contains("ko-fi.com") || url.contains("kofi.com") ||
+	       url.contains("throne.com") || url.contains("twitch.tv");
+}
+
 // ---------------------------------------------------------------
-// Collect browser scene-items recursively (handles groups + nested scenes)
-// NOTE: We collect the *scene items*, not just sources, so we can toggle
-// visibility without touching source settings.
+// Collect browser sources recursively (handles groups + nested scenes).
+// Each unique source receives one retained reference so it remains valid after
+// the frontend scene list is released.
 // ---------------------------------------------------------------
-static void collect_browser_items_recursive(obs_scene_t *scene, std::vector<ItemRef> &out)
+static void collect_browser_sources_recursive(obs_scene_t *scene, std::vector<SourceRef> &out,
+					      std::unordered_set<obs_source_t *> &seen)
 {
 	if (!scene)
 		return;
 
+	struct CollectContext {
+		std::vector<SourceRef> &out;
+		std::unordered_set<obs_source_t *> &seen;
+	} context{out, seen};
+
 	obs_scene_enum_items(
 		scene,
 		[](obs_scene_t *, obs_sceneitem_t *item, void *param) {
-			auto *out = static_cast<std::vector<ItemRef> *>(param);
+			auto &context = *static_cast<CollectContext *>(param);
+			auto &out = context.out;
+			auto &seen = context.seen;
 			if (!item)
 				return true;
 
@@ -83,18 +109,19 @@ static void collect_browser_items_recursive(obs_scene_t *scene, std::vector<Item
 
 			// Browser source item
 			if (id && strcmp(id, "browser_source") == 0) {
-				ItemRef r;
-				r.item = item;
-				r.wasVisible = obs_sceneitem_visible(item);
-				r.sourceName = obs_source_get_name(src);
-				out->push_back(r);
+				if (seen.insert(src).second) {
+					SourceRef ref;
+					ref.source = obs_source_get_ref(src);
+					ref.sourceName = QString::fromUtf8(obs_source_get_name(src));
+					out.push_back(std::move(ref));
+				}
 				return true;
 			}
 
 			// Group: recurse into the group's scene
 			if (id && strcmp(id, "group") == 0) {
 				if (obs_scene_t *grp = obs_group_from_source(src)) {
-					collect_browser_items_recursive(grp, *out);
+					collect_browser_sources_recursive(grp, out, seen);
 				}
 				return true;
 			}
@@ -102,29 +129,30 @@ static void collect_browser_items_recursive(obs_scene_t *scene, std::vector<Item
 			// Nested scene source: recurse into that scene
 			if (id && strcmp(id, "scene") == 0) {
 				if (obs_scene_t *nested = obs_scene_from_source(src)) {
-					collect_browser_items_recursive(nested, *out);
+					collect_browser_sources_recursive(nested, out, seen);
 				}
 				return true;
 			}
 
 			return true;
 		},
-		&out);
+		&context);
 }
 
 // ---------------------------------------------------------------
-// Current Scene items
+// Current scene sources
 // ---------------------------------------------------------------
-static std::vector<ItemRef> get_current_scene_browser_items()
+static std::vector<SourceRef> get_current_scene_browser_sources()
 {
-	std::vector<ItemRef> out;
+	std::vector<SourceRef> out;
+	std::unordered_set<obs_source_t *> seen;
 
 	obs_source_t *sceneSrc = obs_frontend_get_current_scene();
 	if (!sceneSrc)
 		return out;
 
 	if (obs_scene_t *scene = obs_scene_from_source(sceneSrc)) {
-		collect_browser_items_recursive(scene, out);
+		collect_browser_sources_recursive(scene, out, seen);
 	}
 
 	obs_source_release(sceneSrc);
@@ -132,12 +160,13 @@ static std::vector<ItemRef> get_current_scene_browser_items()
 }
 
 // ---------------------------------------------------------------
-// All Scenes items
+// All scene sources
 // Uses obs_frontend_get_scenes() and walks each scene.
 // ---------------------------------------------------------------
-static std::vector<ItemRef> get_all_scenes_browser_items()
+static std::vector<SourceRef> get_all_scenes_browser_sources()
 {
-	std::vector<ItemRef> out;
+	std::vector<SourceRef> out;
+	std::unordered_set<obs_source_t *> seen;
 
 	obs_frontend_source_list scenes = {};
 	obs_frontend_get_scenes(&scenes);
@@ -153,7 +182,7 @@ static std::vector<ItemRef> get_all_scenes_browser_items()
 			continue;
 
 		if (obs_scene_t *scene = obs_scene_from_source(scene_src)) {
-			collect_browser_items_recursive(scene, out);
+			collect_browser_sources_recursive(scene, out, seen);
 		}
 	}
 
@@ -162,53 +191,46 @@ static std::vector<ItemRef> get_all_scenes_browser_items()
 }
 
 // ---------------------------------------------------------------
-// Refresh: toggle visible items off then back on next tick
-// Dedupe by sceneitem pointer to avoid double-toggling.
+// Reload each unique browser source through obs-browser's native property
+// callback. OBS's own Browser Toolbar uses the refreshnocache button this way;
+// browser sources do not expose a proc-handler procedure named "refresh".
 // ---------------------------------------------------------------
-static int refresh_items(std::vector<ItemRef> items, QPlainTextEdit *log)
+static int refresh_sources(std::vector<SourceRef> sources, QPlainTextEdit *log)
 {
-	if (items.empty())
+	if (sources.empty())
 		return 0;
 
-	std::unordered_set<std::uintptr_t> seen;
-	std::vector<ItemRef> toggled;
-	toggled.reserve(items.size());
-
-	// Step 1: hide anything that is currently visible
-	for (auto &it : items) {
-		if (!it.item)
+	int refreshed = 0;
+	for (auto &ref : sources) {
+		if (!ref.source)
 			continue;
 
-		const std::uintptr_t key = (std::uintptr_t)it.item;
-		if (seen.find(key) != seen.end())
-			continue;
-		seen.insert(key);
-
-		if (!it.wasVisible) {
-			// Not visible -> nothing to toggle
+		if (requires_session_safe_reload(ref.source)) {
+			append_log(log, "🛡️", QString("Skipped protected source '%1' (a forced no-cache reload can trigger account verification)")
+						 .arg(ref.sourceName));
+			obs_source_release(ref.source);
+			ref.source = nullptr;
 			continue;
 		}
 
-		obs_sceneitem_set_visible(it.item, false);
-		toggled.push_back(it);
+		obs_properties_t *properties = obs_source_properties(ref.source);
+		obs_property_t *refresh = properties ? obs_properties_get(properties, "refreshnocache") : nullptr;
+		const bool ok = refresh && obs_property_get_type(refresh) == OBS_PROPERTY_BUTTON;
+		if (ok)
+			obs_property_button_clicked(refresh, ref.source);
+		if (properties)
+			obs_properties_destroy(properties);
+		append_log(log, ok ? "🔄" : "⚠️",
+			   ok ? QString("Reloaded '%1'").arg(ref.sourceName)
+			      : QString("'%1' did not accept a reload request").arg(ref.sourceName));
+		if (ok)
+			++refreshed;
+
+		obs_source_release(ref.source);
+		ref.source = nullptr;
 	}
 
-	if (toggled.empty()) {
-		append_log(log, "ℹ️", "No visible browser sources to refresh (nothing toggled).");
-		return 0;
-	}
-
-	// Step 2: restore on next tick (a little longer than 1 frame for safety)
-	QTimer::singleShot(50, [toggled, log]() mutable {
-		for (auto &it : toggled) {
-			if (it.item) {
-				obs_sceneitem_set_visible(it.item, true);
-				append_log(log, "🔄", QString("Refreshed '%1'").arg(it.sourceName));
-			}
-		}
-	});
-
-	return (int)toggled.size();
+	return refreshed;
 }
 
 // ---------------------------------------------------------------
@@ -216,14 +238,14 @@ static int refresh_items(std::vector<ItemRef> items, QPlainTextEdit *log)
 // ---------------------------------------------------------------
 static int refresh_current_scene(QPlainTextEdit *log)
 {
-	auto items = get_current_scene_browser_items();
+	auto sources = get_current_scene_browser_sources();
 
-	if (items.empty()) {
+	if (sources.empty()) {
 		append_log(log, "ℹ️", "No browser sources found in current scene.");
 		return 0;
 	}
 
-	const int refreshed = refresh_items(std::move(items), log);
+	const int refreshed = refresh_sources(std::move(sources), log);
 	append_log(log, "📊",
 		   QString("Refreshed %1 browser source%2 in current scene.")
 			   .arg(refreshed)
@@ -233,14 +255,14 @@ static int refresh_current_scene(QPlainTextEdit *log)
 
 static int refresh_all_scenes(QPlainTextEdit *log)
 {
-	auto items = get_all_scenes_browser_items();
+	auto sources = get_all_scenes_browser_sources();
 
-	if (items.empty()) {
+	if (sources.empty()) {
 		append_log(log, "ℹ️", "No browser sources found across scenes.");
 		return 0;
 	}
 
-	const int refreshed = refresh_items(std::move(items), log);
+	const int refreshed = refresh_sources(std::move(sources), log);
 	append_log(log, "📊",
 		   QString("Refreshed %1 browser source%2 across all scenes.")
 			   .arg(refreshed)

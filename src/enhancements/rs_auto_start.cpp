@@ -24,6 +24,7 @@
 #include <QAbstractItemView>
 #include <QScrollArea>
 #include <QPointer>
+#include <QFileInfo>
 
 #include <vector>
 #include <algorithm>
@@ -160,7 +161,9 @@ static bool launch_process(const QString &path, QString &errorOut, DWORD &pidOut
 	si.cb = sizeof(si);
 
 	PROCESS_INFORMATION pi{};
-	BOOL ok = CreateProcessW(exe.c_str(), nullptr, nullptr, nullptr, FALSE, 0, nullptr, nullptr, &si, &pi);
+	const std::wstring workingDir = QFileInfo(path).absolutePath().toStdWString();
+	BOOL ok = CreateProcessW(exe.c_str(), nullptr, nullptr, nullptr, FALSE, 0, nullptr,
+				 workingDir.empty() ? nullptr : workingDir.c_str(), &si, &pi);
 
 	if (!ok) {
 		DWORD err = GetLastError();
@@ -400,17 +403,9 @@ void RsAutoStart::ensureObsEventHook()
 	obs_frontend_add_event_callback(on_obs_event, nullptr);
 	g_event_hooked = true;
 
-	// -------------------------------------------------
-	// 🔁 SAFETY NET:
-	// If OBS is already fully initialised (main window exists),
-	// manually trigger auto-launch once.
-	// -------------------------------------------------
-	if (obs_frontend_get_main_window() != nullptr) {
-		const bool autoLaunch = cfg_load_bool(kCfgAutoLaunch, false);
-		if (autoLaunch) {
-			do_launch_paths(cfg_load_programs(), nullptr);
-		}
-	}
+	// Registering Auto-Start is configuration only. Programs launch exclusively
+	// from OBS_FRONTEND_EVENT_FINISHED_LOADING, never merely because this page or
+	// another feature registered the event hook after OBS was already running.
 }
 
 void RsAutoStart::shutdown()

@@ -8,6 +8,8 @@
 #include <QTimer>
 #include <QAction>
 #include <QSizePolicy>
+#include <QPushButton>
+#include <QHBoxLayout>
 
 // OBS
 #include <obs-frontend-api.h>
@@ -47,7 +49,7 @@ void RsScenesSourcesPage::onFrontendEvent(obs_frontend_event event)
 {
 	if (event == OBS_FRONTEND_EVENT_EXIT && !m_restored) {
 		m_restored = true;
-		restoreNativeDocks();
+		restoreNativeDocks(false);
 	}
 }
 
@@ -70,9 +72,23 @@ void RsScenesSourcesPage::buildUi()
 
 	root->addWidget(m_tabs);
 
-	m_status = new QLabel("Connecting to OBS native docks…", this);
+	auto *footer = new QHBoxLayout();
+	footer->setContentsMargins(0, 0, 0, 0);
+	footer->setSpacing(8);
+
+	m_status = new QLabel("Connecting to OBS scene and source panels…", this);
 	m_status->setWordWrap(true);
-	root->addWidget(m_status);
+	m_status->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
+	footer->addWidget(m_status, 1);
+
+	m_toggleButton = new QPushButton("Retry connection", this);
+	m_toggleButton->setToolTip(
+		"Move OBS's native Scenes and Sources panels into or out of the Suite.");
+	connect(m_toggleButton, &QPushButton::clicked, this,
+		&RsScenesSourcesPage::toggleNativeDocks);
+	footer->addWidget(m_toggleButton);
+
+	root->addLayout(footer);
 }
 
 void RsScenesSourcesPage::setStatus(const QString &text)
@@ -88,12 +104,19 @@ void RsScenesSourcesPage::setStatus(const QString &text)
 // ------------------------------------------------------------
 void RsScenesSourcesPage::tryEmbedNativeDocks()
 {
-	if (m_nativeScenesWidget && m_nativeSourcesWidget)
+	if (m_embedded && m_nativeScenesWidget && m_nativeSourcesWidget)
 		return;
 
 	auto scheduleRetry = [this]() {
-		if (++m_retryCount <= 20)
+		if (++m_retryCount <= 20) {
 			QTimer::singleShot(250, this, &RsScenesSourcesPage::tryEmbedNativeDocks);
+		} else {
+			setStatus("OBS's Scenes and Sources panels were not found. They remain in their normal OBS docks.");
+			if (m_toggleButton) {
+				m_toggleButton->setText("Retry connection");
+				m_toggleButton->setEnabled(true);
+			}
+		}
 	};
 
 	auto *mw = qobject_cast<QMainWindow *>(reinterpret_cast<QWidget *>(obs_frontend_get_main_window()));
@@ -132,33 +155,93 @@ void RsScenesSourcesPage::tryEmbedNativeDocks()
 	m_nativeScenesWidget->setParent(nullptr);
 	m_nativeSourcesWidget->setParent(nullptr);
 
-	m_tabs->clear();
+	// QTabWidget::clear() removes pages but does not delete them. Dispose only
+	// our empty placeholder pages; native OBS widgets belong to their docks.
+	while (m_tabs->count() > 0) {
+		QWidget *page = m_tabs->widget(0);
+		m_tabs->removeTab(0);
+		if (page && page != m_nativeScenesWidget && page != m_nativeSourcesWidget)
+			page->deleteLater();
+	}
 	m_tabs->addTab(m_nativeScenesWidget, "Scenes");
 	m_tabs->addTab(m_nativeSourcesWidget, "Sources");
+	m_tabs->setCurrentIndex(qBound(0, m_lastTabIndex, m_tabs->count() - 1));
 
-	// 🔒 Force single-column scenes
-	//m_nativeScenesWidget->setMinimumWidth(220);
-	//m_nativeScenesWidget->setMaximumWidth(220);
-	m_nativeScenesWidget->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Expanding);
+	// Let both native panels use all available dock width. A fixed horizontal
+	// policy made the Scenes list clip when the Suite was resized narrowly.
+	m_nativeScenesWidget->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+	m_nativeSourcesWidget->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
 
+	m_embedded = true;
+	m_retryCount = 0;
 	m_status->setVisible(false);
+	if (m_toggleButton) {
+		m_toggleButton->setText("Return panels to OBS");
+		m_toggleButton->setEnabled(true);
+	}
+}
+
+void RsScenesSourcesPage::toggleNativeDocks()
+{
+	if (m_embedded) {
+		m_lastTabIndex = m_tabs ? m_tabs->currentIndex() : 0;
+		restoreNativeDocks(true);
+		showPlaceholders();
+		setStatus("Scenes and Sources are available in their normal OBS docks.");
+		if (m_toggleButton)
+			m_toggleButton->setText("Bring panels into Suite");
+		return;
+	}
+
+	m_retryCount = 0;
+	setStatus("Connecting to OBS scene and source panels…");
+	if (m_toggleButton) {
+		m_toggleButton->setText("Connecting…");
+		m_toggleButton->setEnabled(false);
+	}
+	tryEmbedNativeDocks();
+}
+
+void RsScenesSourcesPage::showPlaceholders()
+{
+	if (!m_tabs)
+		return;
+
+	// QTabWidget::clear() removes pages but does not delete them. Dispose only
+	// our empty placeholder pages; the native OBS widgets are owned by their
+	// original docks and must never be deleted here.
+	while (m_tabs->count() > 0) {
+		QWidget *page = m_tabs->widget(0);
+		m_tabs->removeTab(0);
+		if (page && page != m_nativeScenesWidget && page != m_nativeSourcesWidget)
+			page->deleteLater();
+	}
+	auto *scenesStub = new QWidget(m_tabs);
+	auto *sourcesStub = new QWidget(m_tabs);
+	m_tabs->addTab(scenesStub, "Scenes");
+	m_tabs->addTab(sourcesStub, "Sources");
+	m_tabs->setCurrentIndex(qBound(0, m_lastTabIndex, m_tabs->count() - 1));
 }
 
 // ------------------------------------------------------------
 // SAFE RESTORE
 // ------------------------------------------------------------
-void RsScenesSourcesPage::restoreNativeDocks()
+void RsScenesSourcesPage::restoreNativeDocks(bool makeVisible)
 {
 	if (!m_nativeScenesDock || !m_nativeSourcesDock)
 		return;
+
+	if (m_tabs)
+		m_tabs->clear();
 
 	if (m_nativeScenesWidget)
 		m_nativeScenesDock->setWidget(m_nativeScenesWidget);
 	if (m_nativeSourcesWidget)
 		m_nativeSourcesDock->setWidget(m_nativeSourcesWidget);
 
-	m_nativeScenesDock->setVisible(m_prevScenesDockVisible);
-	m_nativeSourcesDock->setVisible(m_prevSourcesDockVisible);
+	m_nativeScenesDock->setVisible(makeVisible || m_prevScenesDockVisible);
+	m_nativeSourcesDock->setVisible(makeVisible || m_prevSourcesDockVisible);
+	m_embedded = false;
 
 	m_nativeScenesDock.clear();
 	m_nativeSourcesDock.clear();

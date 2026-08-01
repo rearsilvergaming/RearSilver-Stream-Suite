@@ -172,6 +172,10 @@ bool obs_module_load(void)
 	rs_music_tls_probe();
 	rsMusicPcmRegisterSource();
 
+	// Auto-Start must subscribe before OBS emits FINISHED_LOADING.  Registering
+	// it from the dock constructor is too late because the dock itself is
+	// created in response to that event.
+	RsAutoStart::ensureObsEventHook();
 	obs_frontend_add_event_callback(frontend_event_callback, nullptr);
 
 	LOG_INFO_MSG("plugin load finished");

@@ -94,7 +94,7 @@ void RsMainDock::createSidebarMenus()
 
 	// --- ENHANCEMENTS menu buttons ---
 	m_btnBrowserRefresh =
-		makeButton("Browser Refresh", "Refresh browser sources (placeholder)", "view-refresh", "🔄");
+		makeButton("Browser Refresh", "Reload browser sources without hiding them", "view-refresh", "🔄");
 	m_btnQuickText = makeButton("Quick Text", "Drop BRB / Coffee / custom text", "insert-text", "💬");
 	m_btnInstantReplay =
 		makeButton("Instant Replay", "Replay the last moments on stream", "rs-instant-replay", "🎥");

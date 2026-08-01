@@ -45,6 +45,7 @@ public:
 	void logout();
 	void refreshQueue();
 	void refreshQueueAsync();
+	bool searchTrack(const std::string &query, SpotifyQueueTrack &track);
 	bool addToQueue(const std::string &uri);
 	bool toggleShuffle();
 	void setClientId(const std::string &clientId);

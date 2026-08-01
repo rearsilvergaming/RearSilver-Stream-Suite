@@ -66,6 +66,7 @@ signals:
 	void twitchSessionReceived(const QString &account, const QString &accessToken, const QString &login,
 				  const QString &userId);
 	void twitchSessionCleared(const QString &account);
+	void twitchAccountStateReceived(const QString &account, bool connected, const QString &login);
 
 private:
 	void syncQueueFromBackend();

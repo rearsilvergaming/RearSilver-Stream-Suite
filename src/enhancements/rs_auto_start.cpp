@@ -429,6 +429,11 @@ bool RsAutoStart::containsProgram(const QString &path)
 	return false;
 }
 
+bool RsAutoStart::autoLaunchEnabled()
+{
+	return cfg_load_bool(kCfgAutoLaunch, false);
+}
+
 void RsAutoStart::addProgram(const QString &path)
 {
 	QStringList programs=cfg_load_programs();

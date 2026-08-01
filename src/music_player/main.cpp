@@ -31,6 +31,7 @@
 #include "system_media_provider.hpp"
 #include "spotify_client.hpp"
 #include "twitch_accounts.hpp"
+#include "twitch_chat_service.hpp"
 
 #define MINIAUDIO_IMPLEMENTATION
 #include "miniaudio.h"
@@ -47,6 +48,8 @@
 #include <mutex>
 #include <string>
 #include <thread>
+#include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 using namespace Gdiplus;
@@ -73,6 +76,7 @@ static int g_overlaySection = 0;
 static std::wstring g_libraryStatus = L"Paste a YouTube or YouTube Music playlist URL to import it into the Suite Media Player.";
 static constexpr UINT WM_HUB_PLAYLIST_RESULT = WM_APP + 40;
 static constexpr UINT WM_HUB_REQUEST_RESULT = WM_APP + 41;
+static constexpr UINT WM_TWITCH_CHAT = WM_APP + 42;
 static constexpr int ID_IMPORT_PLAYLIST = 4101;
 static constexpr int ID_ADD_LOCAL_FILES = 4102, ID_ADD_LOCAL_FOLDER = 4103, ID_USE_LOCAL = 4104,
 	ID_USE_YOUTUBE = 4105, ID_CLEAR_LOCAL = 4106, ID_USE_EXTERNAL = 4107;
@@ -802,7 +806,11 @@ static ULONGLONG g_externalPositionAnchorTick = 0;
 static ULONGLONG g_externalCommandGraceUntilTick = 0;
 static std::string g_externalPositionTrack;
 static SpotifyClient g_spotify;
+static std::mutex g_recentSpotifyRequestMutex;
+static std::unordered_map<std::string, ULONGLONG> g_recentSpotifyRequests;
+static constexpr ULONGLONG kSpotifyRequestPropagationGraceMs = 15000;
 static TwitchAccount g_streamerTwitch("streamer"), g_botTwitch("bot");
+static TwitchChatService g_twitchReader, g_twitchSender;
 static bool g_closeRequested = false;
 static int g_page = 0;
 static std::string g_streamerAuthState = "disconnected", g_streamerLogin;
@@ -810,6 +818,11 @@ static std::string g_botAuthState = "disconnected", g_botLogin, g_authSender = "
 static bool g_captureExists = false, g_playerAutoStart = false, g_hostPipeConnected = false;
 static std::atomic<uint64_t> g_accountsRevision{0};
 static bool externalActive();
+static void sendTwitchMessage(const std::string &message)
+{
+	if (g_authSender == "bot" && g_twitchSender.connected()) g_twitchSender.sendMessage(message);
+	else g_twitchReader.sendMessage(message);
+}
 
 static void syncHubQueueView()
 {
@@ -826,7 +839,13 @@ static void syncHubQueueView()
 		if (spotify.connected) {
 			g_queue.clear();
 			if (!spotify.current.title.empty()) g_queue.push_back({utf8ToWide(spotify.current.title), utf8ToWide(spotify.current.artist), L"Now playing via Spotify", int(spotify.current.durationMs / 1000), true});
-			for (const SpotifyQueueTrack &track : spotify.queue) g_queue.push_back({utf8ToWide(track.title), utf8ToWide(track.artist), L"Spotify queue", int(track.durationMs / 1000), false});
+			const auto requests = g_hub.requests();
+			for (const SpotifyQueueTrack &track : spotify.queue) {
+				std::wstring source = L"Spotify queue";
+				for (const HubTrack &request : requests)
+					if (request.provider == "spotify" && request.providerId == track.uri) { source = request.cancelled ? L"Removed — auto-skip" : L"Request #" + utf8ToWide(request.id); break; }
+				g_queue.push_back({utf8ToWide(track.title), utf8ToWide(track.artist), std::move(source), int(track.durationMs / 1000), false});
+			}
 		}
 	}
 }
@@ -922,6 +941,7 @@ static bool startHubTrack(const HubTrack &track, bool record = true)
 	g_queuePage = 0; syncHubQueueView();
 	writeTextOutput(track);
 	if (musicBool(L"announceTrackChanges", false)) {
+		sendTwitchMessage("NOW PLAYING: " + track.title + " - " + track.artist + " - requested by " + track.requestedBy + ".");
 		std::lock_guard<std::mutex> lock(g_hostEventMutex);
 		g_hostEvents.push_back("HOST\tNOW_PLAYING\t" + track.title + "\t" + track.artist + "\t" + track.requestedBy + "\n");
 	}
@@ -973,6 +993,7 @@ static void refreshExternalPlayer(HWND window)
 		if (g_player) g_player->setMetadata(track.title + "\t" + track.artist + "\t" + track.album + "\t" + track.artworkUrl);
 		writeTextOutput(track);
 		if (musicBool(L"announceTrackChanges", false)) {
+			sendTwitchMessage("NOW PLAYING: " + track.title + " - " + track.artist + " - requested by " + track.requestedBy + ".");
 			std::lock_guard<std::mutex> lock(g_hostEventMutex);
 			g_hostEvents.push_back("HOST\tNOW_PLAYING\t" + track.title + "\t" + track.artist + "\t" + track.requestedBy + "\n");
 		}
@@ -1002,17 +1023,20 @@ static void loadHubState()
 	CefRefPtr<CefValue> root = CefParseJSON(json, JSON_PARSER_RFC);
 	if (!root || root->GetType() != VTYPE_DICTIONARY) return;
 	CefRefPtr<CefDictionaryValue> object = root->GetDictionary();
-	auto readTracks = [](CefRefPtr<CefListValue> list) {
+	auto readTrack = [](CefRefPtr<CefDictionaryValue> value) {
+		HubTrack track; if (!value) return track;
+		track.id = value->GetString("id").ToString(); track.providerId = value->GetString("providerId").ToString();
+		track.provider = value->GetString("provider").ToString(); if (track.provider.empty()) track.provider = "youtube";
+		track.title = value->GetString("title").ToString(); track.artist = value->GetString("artist").ToString();
+		track.album = value->GetString("album").ToString(); track.artworkUrl = value->GetString("artworkUrl").ToString();
+		track.requestedBy = value->GetString("requestedBy").ToString(); track.requesterId = value->GetString("requesterId").ToString();
+		track.requesterLevel = value->GetInt("requesterLevel"); track.durationSeconds = value->GetInt("durationSeconds");
+		track.cancelled = value->GetBool("cancelled"); return track;
+	};
+	auto readTracks = [&readTrack](CefRefPtr<CefListValue> list) {
 		std::vector<HubTrack> tracks; if (!list) return tracks;
 		for (size_t i = 0; i < list->GetSize(); ++i) {
-			CefRefPtr<CefDictionaryValue> value = list->GetDictionary(i); if (!value) continue;
-			HubTrack track; track.id = value->GetString("id").ToString(); track.providerId = value->GetString("providerId").ToString();
-			track.provider = value->GetString("provider").ToString(); if (track.provider.empty()) track.provider = "youtube";
-			track.title = value->GetString("title").ToString(); track.artist = value->GetString("artist").ToString();
-			track.album = value->GetString("album").ToString(); track.artworkUrl = value->GetString("artworkUrl").ToString();
-			track.requestedBy = value->GetString("requestedBy").ToString();
-			track.requesterId = value->GetString("requesterId").ToString();
-			track.requesterLevel = value->GetInt("requesterLevel"); track.durationSeconds = value->GetInt("durationSeconds");
+			HubTrack track = readTrack(list->GetDictionary(i));
 			if (!track.providerId.empty()) tracks.push_back(std::move(track));
 		} return tracks;
 	};
@@ -1022,7 +1046,14 @@ static void loadHubState()
 	}
 	g_hub.replaceFallback(std::move(youtube), object->GetString("fallbackLabel").ToString(), object->GetString("fallbackUrl").ToString());
 	g_hub.replaceLocalLibrary(readTracks(object->GetList("localLibrary")));
+	g_hub.replaceRequests(readTracks(object->GetList("requests")));
 	g_hub.activateSource(object->GetString("activeSource").ToString());
+	HubTrack current = readTrack(object->GetDictionary("current"));
+	if (!current.providerId.empty()) {
+		g_hub.recordStarted(current);
+		if (g_player) g_player->setMetadata(current.title + "\t" + current.artist + "\t" + current.album + "\t" +
+			(current.artworkUrl.empty() ? playerFallbackArtwork() : current.artworkUrl));
+	}
 	syncHubQueueView(); g_libraryStatus = L"Restored the saved YouTube and local libraries.";
 }
 
@@ -1176,7 +1207,8 @@ public:
 										const std::string diagnostics="IPC: "+std::string(g_hostPipeConnected?"connected":"waiting")+
 											"\nStreamer state: "+(streamer.connected?"connected":"disconnected")+" ("+(streamer.login.empty()?"no login":streamer.login)+")"+
 											"\nBot state: "+(bot.connected?"connected":"disconnected")+" ("+(bot.login.empty()?"no login":bot.login)+")\n\n"+
-											g_spotify.diagnostics()+"\n"+g_streamerTwitch.diagnostics()+"\n"+g_botTwitch.diagnostics();
+											g_spotify.diagnostics()+"\n"+g_streamerTwitch.diagnostics()+"\n"+g_botTwitch.diagnostics()+
+											"\nTwitch chat reader:\n"+g_twitchReader.diagnostics()+"\nTwitch chat sender:\n"+g_twitchSender.diagnostics();
 										copyTextToClipboard(m_parent,utf8ToWide(diagnostics)); return S_OK;
 									}
 									if(account=="spotify"){
@@ -1187,7 +1219,7 @@ public:
 										else if(action=="openSetup")ShellExecuteW(m_parent,L"open",L"https://developer.spotify.com/dashboard",nullptr,nullptr,SW_SHOWNORMAL);
 										return S_OK;
 									}
-									if(action=="sender"){g_authSender=object->GetString("value").ToString();std::lock_guard<std::mutex>lock(g_hostEventMutex);g_hostEvents.push_back("HOST\tAUTH_SENDER\t"+g_authSender+"\n");}
+									if(action=="sender"){g_authSender=object->GetString("value").ToString();setMusicSetting(L"authSender",utf8ToWide(g_authSender));}
 									else {TwitchAccount &auth=account=="bot"?g_botTwitch:g_streamerTwitch;if(action=="login")auth.beginLogin();else if(action=="reconnect")auth.reconnect();else if(action=="logout")auth.logout();} sendAccountsConfig();return S_OK;
 								}
 								if (object->GetString("action").ToString() == "reset") { RegDeleteTreeW(HKEY_CURRENT_USER, kOverlayRegistry); sendConfig(); return S_OK; }
@@ -1257,7 +1289,7 @@ private:
 		if(!m_ready||!m_webView||m_page!=2)return; CefRefPtr<CefDictionaryValue>d=CefDictionaryValue::Create(); d->SetString("url",g_hub.fallbackUrl()); d->SetString("status",wideToUtf8(g_libraryStatus)); d->SetString("label",g_hub.fallbackLabel()); d->SetInt("youtubeCount",int(g_hub.youtubeFallback().size())); d->SetInt("requestCount",int(g_hub.requests().size())); d->SetInt("localCount",int(g_hub.localLibrary().size())); d->SetString("source",g_hub.activeSource()); CefRefPtr<CefValue>root=CefValue::Create();root->SetDictionary(d);const std::wstring script=L"window.rsApplyLibrary("+utf8ToWide(CefWriteJSON(root,JSON_WRITER_DEFAULT).ToString())+L")";m_webView->ExecuteScript(script.c_str(),nullptr);
 	}
 	void sendSettingsConfig(){if(!m_ready||!m_webView||m_page!=4)return;CefRefPtr<CefDictionaryValue>d=CefDictionaryValue::Create();auto b=[&](const char*k,bool f){const auto w=utf8ToWide(k);d->SetBool(k,musicBool(w.c_str(),f));};auto s=[&](const char*k,const wchar_t*f){const auto w=utf8ToWide(k);d->SetString(k,wideToUtf8(musicSetting(w.c_str(),f)));};auto n=[&](const char*k,const wchar_t*stored,int f){d->SetInt(k,_wtoi(musicSetting(stored,std::to_wstring(f).c_str()).c_str()));};b("requestsEnabled",true);b("playlistOnly",false);b("preventDuplicates",true);b("announceTrackChanges",false);b("textOutputEnabled",false);s("minimumRole",L"everyone");const std::wstring legacy=musicSetting(L"exemptRole",L"moderator");d->SetBool("exemptSubscriber",musicBool(L"exemptSubscriber",legacy==L"subscriber"));d->SetBool("exemptVip",musicBool(L"exemptVip",legacy==L"subscriber"||legacy==L"vip"));d->SetBool("exemptModerator",musicBool(L"exemptModerator",legacy!=L"none"&&legacy!=L"broadcaster"));d->SetBool("exemptBroadcaster",musicBool(L"exemptBroadcaster",legacy!=L"none"));for(const char*cmd:{"sr","play","pause","skip","restart","previous","remove"})for(const char*role:{"everyone","subscriber","vip","moderator"}){const std::string key=std::string("command.")+cmd+"."+role;const bool fallback=std::string(cmd)=="sr"?std::string(role)=="everyone":std::string(role)=="moderator";b(key.c_str(),fallback);}s("nonRequestLabel",L"Stream DJ");s("textOutputFormat",L"{{title}} - {{artist}} - Requested by {{user}}");n("queueLimit",L"maxQueueTotal",50);n("userLimit",L"maxPerUser",2);n("maxTrackMinutes",L"maxTrackLengthMinutes",10);d->SetString("outputPath",wideToUtf8(textOutputPath()));d->SetBool("captureExists",g_captureExists);d->SetBool("autoStart",g_playerAutoStart);d->SetString("captureStatus",g_captureExists?"Music Capture exists. Use the button to review or change the captured application.":"Music Capture has not been created yet.");CefRefPtr<CefValue>root=CefValue::Create();root->SetDictionary(d);m_webView->ExecuteScript((L"window.rsApplySettings("+utf8ToWide(CefWriteJSON(root,JSON_WRITER_DEFAULT).ToString())+L")").c_str(),nullptr);}
-	void sendAccountsConfig(){if(!m_ready||!m_webView||m_page!=5)return;const SpotifyClientState spotify=g_spotify.state();const TwitchAccountState streamer=g_streamerTwitch.state(),bot=g_botTwitch.state();CefRefPtr<CefDictionaryValue>d=CefDictionaryValue::Create();d->SetDouble("revision",double(++g_accountsRevision));d->SetString("streamerState",streamer.busy?"connecting":streamer.connected?"connected":"disconnected");d->SetString("streamerLogin",streamer.login);d->SetString("botState",bot.busy?"connecting":bot.connected?"connected":"disconnected");d->SetString("botLogin",bot.login);d->SetString("sender",g_authSender);d->SetBool("ipcConnected",g_hostPipeConnected);d->SetString("spotifyClientId",spotify.clientId);d->SetBool("spotifyAuthorized",spotify.authorized);d->SetBool("spotifyConnected",spotify.connected);d->SetBool("spotifyBusy",spotify.busy);d->SetBool("spotifyQueueChecked",spotify.queueChecked);d->SetBool("spotifyPlaybackAvailable",spotify.playbackAvailable);d->SetString("spotifyDisplayName",spotify.displayName);d->SetString("spotifyError",spotify.error);d->SetString("spotifyDiagnostics",g_spotify.diagnostics()+"\n"+g_streamerTwitch.diagnostics());d->SetInt("spotifyQueueCount",int(spotify.queue.size()));CefRefPtr<CefValue>root=CefValue::Create();root->SetDictionary(d);m_webView->ExecuteScript((L"window.rsApplyAccounts("+utf8ToWide(CefWriteJSON(root,JSON_WRITER_DEFAULT).ToString())+L")").c_str(),nullptr);}
+	void sendAccountsConfig(){if(!m_ready||!m_webView||m_page!=5)return;const SpotifyClientState spotify=g_spotify.state();const TwitchAccountState streamer=g_streamerTwitch.state(),bot=g_botTwitch.state();CefRefPtr<CefDictionaryValue>d=CefDictionaryValue::Create();d->SetDouble("revision",double(++g_accountsRevision));d->SetString("streamerState",streamer.busy?"connecting":streamer.connected?"connected":"disconnected");d->SetString("streamerLogin",streamer.login);d->SetString("streamerError",streamer.error);d->SetString("botState",bot.busy?"connecting":bot.connected?"connected":"disconnected");d->SetString("botLogin",bot.login);d->SetString("botError",bot.error);d->SetString("sender",g_authSender);d->SetBool("ipcConnected",g_hostPipeConnected);d->SetString("spotifyClientId",spotify.clientId);d->SetBool("spotifyAuthorized",spotify.authorized);d->SetBool("spotifyConnected",spotify.connected);d->SetBool("spotifyBusy",spotify.busy);d->SetBool("spotifyQueueChecked",spotify.queueChecked);d->SetBool("spotifyPlaybackAvailable",spotify.playbackAvailable);d->SetString("spotifyDisplayName",spotify.displayName);d->SetString("spotifyError",spotify.error);d->SetString("spotifyDiagnostics",g_spotify.diagnostics()+"\n"+g_streamerTwitch.diagnostics());d->SetInt("spotifyQueueCount",int(spotify.queue.size()));CefRefPtr<CefValue>root=CefValue::Create();root->SetDictionary(d);m_webView->ExecuteScript((L"window.rsApplyAccounts("+utf8ToWide(CefWriteJSON(root,JSON_WRITER_DEFAULT).ToString())+L")").c_str(),nullptr);}
 	HWND m_parent=nullptr; ComPtr<ICoreWebView2Controller> m_controller; ComPtr<ICoreWebView2> m_webView; bool m_ready=false; int m_page=-1;
 };
 
@@ -1370,8 +1402,61 @@ static LRESULT CALLBACK legacyWindowProc(HWND window, UINT message, WPARAM wPara
 	return DefWindowProcW(window, message, wParam, lParam);
 }
 
+static bool chatCommandAllowed(const char *command, const TwitchChatMessage &m)
+{
+	if (m.broadcaster) return true;
+	const std::string base = std::string("command.") + command + ".";
+	const bool request = std::string(command) == "sr";
+	auto enabled=[&](const char *role,bool fallback){const std::wstring key=utf8ToWide(base+role);return musicBool(key.c_str(),fallback);};
+	if (enabled("everyone", request)) return true;
+	return (m.subscriber && enabled("subscriber", false)) || (m.vip && enabled("vip", false)) ||
+		(m.moderator && enabled("moderator", !request));
+}
+
+static std::string nextChatRequestId()
+{
+	unsigned long long next = _wcstoui64(musicSetting(L"nextRequestNumber", L"1").c_str(), nullptr, 10);
+	if (!next) next = 1;
+	setMusicSetting(L"nextRequestNumber", std::to_wstring(next + 1));
+	return "R" + std::to_string(next);
+}
+
+static void runChatTransport(const std::string &action)
+{
+	if (externalActive()) {
+		if(action=="PLAY")commandExternalPlayer(SystemMediaProvider::Action::Play);
+		else if(action=="PAUSE")commandExternalPlayer(SystemMediaProvider::Action::Pause);
+		else if(action=="SKIP")commandExternalPlayer(SystemMediaProvider::Action::Next);
+		else if(action=="PREVIOUS")commandExternalPlayer(SystemMediaProvider::Action::Previous);
+		else if(action=="RESTART")commandExternalPlayer(SystemMediaProvider::Action::Restart);
+	} else if (action == "SKIP") playHubNext();
+	else if (action == "PREVIOUS") { HubTrack previous; if(g_hub.takePrevious(previous))startHubTrack(previous,false); }
+	else if (g_youtubePlayer && g_youtubePlayer->active()) g_youtubePlayer->command(action);
+	else if (g_player) g_player->command(action);
+}
+
+static void beginChatRequest(HWND window, const TwitchChatMessage &m, const std::string &query)
+{
+	const std::string requestId=nextChatRequestId();int level=0;if(m.subscriber)level|=1;if(m.vip)level|=2;if(m.moderator)level|=4;if(m.broadcaster)level|=8;
+	const bool spotifyLink=query.rfind("spotify:track:",0)==0||query.find("open.spotify.com/track/")!=std::string::npos;
+	const bool spotifyRequest=spotifyLink||(externalActive()&&g_spotify.state().authorized);
+	if(spotifyRequest){std::thread([window,requestId,m,query,level]{auto*r=new HubSearchResult;SpotifyQueueTrack s;if(g_spotify.searchTrack(query,s)){r->track.id=requestId;r->track.provider="spotify";r->track.providerId=s.uri;r->track.title=s.title;r->track.artist=s.artist;r->track.album=s.album;r->track.artworkUrl=s.artworkUrl;r->track.durationSeconds=int(s.durationMs/1000);r->track.request=true;r->track.requestedBy=m.displayName;r->track.requesterId=m.userId;r->track.requesterLevel=level;}else{r->track.id=requestId;r->error="Spotify could not find that track. Try a more specific title and artist or paste a Spotify track link.";}if(!PostMessageW(window,WM_HUB_REQUEST_RESULT,0,reinterpret_cast<LPARAM>(r)))delete r;}).detach();return;}
+	std::thread([window,requestId,m,query,level]{auto*r=new HubSearchResult(resolveHubSearch(query,m.displayName));r->track.id=requestId;r->track.requesterId=m.userId;r->track.requesterLevel=level;if(!PostMessageW(window,WM_HUB_REQUEST_RESULT,0,reinterpret_cast<LPARAM>(r)))delete r;}).detach();
+}
+
+static void handleTwitchChat(HWND window, const TwitchChatMessage &m)
+{
+	std::string text=m.text;while(!text.empty()&&std::isspace((unsigned char)text.front()))text.erase(text.begin());while(!text.empty()&&std::isspace((unsigned char)text.back()))text.pop_back();
+	std::string lower=text;std::transform(lower.begin(),lower.end(),lower.begin(),[](unsigned char c){return char(std::tolower(c));});
+	if(lower.rfind("!sr",0)==0){if(!chatCommandAllowed("sr",m)){sendTwitchMessage(m.displayName+": you don't have permission to request songs.");return;}std::string q=text.size()>3?text.substr(3):"";while(!q.empty()&&std::isspace((unsigned char)q.front()))q.erase(q.begin());if(q.empty()){sendTwitchMessage(m.displayName+": usage is !sr <song name or url>");return;}beginChatRequest(window,m,q);return;}
+	struct Command{const char*text;const char*key;const char*action;const char*reply;};
+	for(const Command &c:std::initializer_list<Command>{{"!play","play","PLAY","Playback resumed"},{"!pause","pause","PAUSE","Playback paused"},{"!skip","skip","SKIP","Track skipped"},{"!restart","restart","RESTART","Track restarted"},{"!previous","previous","PREVIOUS","Playing the previous track"},{"!prev","previous","PREVIOUS","Playing the previous track"}}){if(lower==c.text){if(!chatCommandAllowed(c.key,m)){sendTwitchMessage(m.displayName+": you don't have permission to control playback.");return;}runChatTransport(c.action);sendTwitchMessage(c.reply);return;}}
+	if(lower=="!remove"||lower.rfind("!remove ",0)==0){if(!chatCommandAllowed("remove",m)){sendTwitchMessage(m.displayName+": you don't have permission to remove requests.");return;}std::string id=text.size()>7?text.substr(7):"";while(!id.empty()&&(id.front()==' '||id.front()=='#'))id.erase(id.begin());if(!id.empty()&&(id.front()=='r'||id.front()=='R'))id.front()='R';else if(!id.empty())id='R'+id;if(id.empty()){sendTwitchMessage("Usage: !remove #<request ID>");return;}HubTrack removed;for(const auto&t:g_hub.requests())if(t.id==id){removed=t;break;}if(removed.provider=="spotify"){g_hub.cancelRequest(id);saveHubState();syncHubQueueView();sendTwitchMessage("Removed request #"+id+": "+removed.title+" - "+removed.artist);return;}if(!removed.id.empty()&&g_hub.removeRequest(id)){saveHubState();syncHubQueueView();sendTwitchMessage("Removed request #"+id+": "+removed.title+" - "+removed.artist);}else sendTwitchMessage("Could not remove request #"+id+": That request is not waiting in the queue.");}
+}
+
 static LRESULT CALLBACK windowProc(HWND window, UINT message, WPARAM wParam, LPARAM lParam)
 {
+	if(message==WM_TWITCH_CHAT){std::unique_ptr<TwitchChatMessage>m(reinterpret_cast<TwitchChatMessage*>(lParam));if(m)handleTwitchChat(window,*m);return 0;}
 	if (message == WM_CLOSE) { g_closeRequested = true; return 0; }
 	if (message == WM_DRAWITEM) {
 		auto *item = reinterpret_cast<DRAWITEMSTRUCT *>(lParam);
@@ -1505,16 +1590,31 @@ static LRESULT CALLBACK windowProc(HWND window, UINT message, WPARAM wParam, LPA
 			}
 		}
 		if (result && result->error.empty()) {
+			if (result->track.provider == "spotify" && !g_spotify.addToQueue(result->track.providerId))
+				result->error = "Spotify could not add that track. Make sure Spotify is playing on an active device.";
+		}
+		if (result && result->error.empty()) {
 			const HubTrack accepted = result->track;
-			g_hub.enqueueRequest(std::move(result->track)); syncHubQueueView();
-			const int position = int(g_hub.requests().size());
+			g_hub.enqueueRequest(std::move(result->track)); saveHubState(); syncHubQueueView();
+			if (accepted.provider == "spotify") {
+				std::lock_guard<std::mutex> lock(g_recentSpotifyRequestMutex);
+				g_recentSpotifyRequests[accepted.providerId] = GetTickCount64();
+			}
+			int position = int(g_hub.requests().size());
+			if (accepted.provider == "spotify") {
+				g_spotify.refreshQueue(); const auto spotify = g_spotify.state();
+				for (size_t i = 0; i < spotify.queue.size(); ++i) if (spotify.queue[i].uri == accepted.providerId) { position = int(i + 1); break; }
+			}
 			{
+				sendTwitchMessage(accepted.title + " - " + accepted.artist + ", requested by " + accepted.requestedBy +
+					", was added as request #" + accepted.id + " (queue position " + std::to_string(position) + ").");
 				std::lock_guard<std::mutex> lock(g_hostEventMutex);
 				g_hostEvents.push_back("HOST\tREQUEST_ACCEPTED\t" + accepted.id + "\t" + accepted.title + "\t" +
 					accepted.artist + "\t" + accepted.requestedBy + "\t" + std::to_string(position) + "\n");
 			}
-			if (!g_hub.hasCurrent()) playHubNext();
+			if (accepted.provider != "spotify" && !g_hub.hasCurrent()) playHubNext();
 		} else if (result) {
+			sendTwitchMessage("Request rejected: " + result->error);
 			std::lock_guard<std::mutex> lock(g_hostEventMutex);
 			g_hostEvents.push_back("HOST\tREQUEST_REJECTED\t" + result->track.id + "\t" + result->error + "\n");
 		}
@@ -2041,6 +2141,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int)
 		SendMessageW(control, WM_SETFONT, reinterpret_cast<WPARAM>(uiFont), TRUE);
 	loadHubState();
 	g_hub.setNonRequestLabel(wideToUtf8(musicSetting(L"nonRequestLabel", L"Stream DJ")));
+	g_authSender = wideToUtf8(musicSetting(L"authSender", L"streamer"));
 	g_systemMedia.start("spotify");
 	g_spotify.start();
 	g_streamerTwitch.start(); g_botTwitch.start();
@@ -2053,7 +2154,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int)
 	HANDLE pipe = CreateNamedPipeW(L"\\\\.\\pipe\\RearSilverStreamSuiteMusicPlayer", PIPE_ACCESS_DUPLEX,
 		PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_NOWAIT, 1, 1024 * 1024, 1024 * 1024, 0, nullptr);
 	if (pipe == INVALID_HANDLE_VALUE) return 3;
-	bool connected = false, running = true; std::string input, lastSpotifyQueueSignature; ULONGLONG lastStatus = 0, lastHubStatus = 0, lastYouTubePoll = 0, lastExternalPoll = 0, lastSpotifyUiRefresh = 0, lastTwitchValidation=GetTickCount64(); uint64_t lastStreamerRevision=0,lastBotRevision=0;
+	bool connected = false, running = true; std::string input, lastSpotifyQueueSignature,lastChatSender; ULONGLONG lastStatus = 0, lastHubStatus = 0, lastYouTubePoll = 0, lastExternalPoll = 0, lastSpotifyUiRefresh = 0, lastTwitchValidation=GetTickCount64(); uint64_t lastStreamerRevision=0,lastBotRevision=0,lastChatStreamerRevision=0,lastChatBotRevision=0;
 	while (running) {
 		MSG message{}; while (PeekMessageW(&message, nullptr, 0, 0, PM_REMOVE)) { TranslateMessage(&message); DispatchMessageW(&message); }
 		if (g_closeRequested) { running = false; continue; }
@@ -2061,14 +2162,49 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int)
 			g_youtubePlayer->pollStatus(); lastYouTubePoll = GetTickCount64();
 		}
 		if (externalActive() && GetTickCount64() - lastExternalPoll >= 500) {
-			refreshExternalPlayer(window);const SpotifyClientState spotify=g_spotify.state();std::string signature=spotify.current.uri+'|'+std::to_string(spotify.queue.size());for(const auto&track:spotify.queue)signature+='|'+track.uri;if(signature!=lastSpotifyQueueSignature){lastSpotifyQueueSignature=std::move(signature);syncHubQueueView();if(g_page==1)InvalidateRect(window,nullptr,FALSE);}lastExternalPoll = GetTickCount64();
+			const SpotifyClientState spotify=g_spotify.state();const SystemMediaState liveMedia=g_systemMedia.state();bool cancelledCurrent=false;
+			for(const auto &request:g_hub.requests())if(request.provider=="spotify"&&request.cancelled&&(request.providerId==spotify.current.uri||(!liveMedia.title.empty()&&request.title==liveMedia.title&&request.artist==liveMedia.artist))){commandExternalPlayer(SystemMediaProvider::Action::Next);g_hub.removeRequest(request.id);saveHubState();syncHubQueueView();cancelledCurrent=true;break;}
+			if(!cancelledCurrent)refreshExternalPlayer(window);
+			bool requestStarted=false;if(!spotify.current.uri.empty())for(const auto &request:g_hub.requests())if(request.provider=="spotify"&&request.providerId==spotify.current.uri){requestStarted=g_hub.removeRequest(request.id)||requestStarted;}if(requestStarted)saveHubState();
+			// Spotify owns its real playback queue. Reconcile our persistent request ledger
+			// against a successfully checked live snapshot so old requests cannot cause false
+			// duplicate rejections after Spotify has played, removed, or discarded them.
+			if(spotify.connected&&spotify.queueChecked&&!spotify.current.uri.empty()){
+				std::unordered_set<std::string> liveUris;liveUris.insert(spotify.current.uri);
+				for(const auto &track:spotify.queue)if(!track.uri.empty())liveUris.insert(track.uri);
+				const ULONGLONG now=GetTickCount64();bool ledgerChanged=false;
+				for(const auto &request:g_hub.requests()){
+					if(request.provider!="spotify"||request.providerId.empty())continue;
+					bool protectedByGrace=false;
+					{
+						std::lock_guard<std::mutex> lock(g_recentSpotifyRequestMutex);
+						auto recent=g_recentSpotifyRequests.find(request.providerId);
+						if(liveUris.count(request.providerId)){
+							if(recent!=g_recentSpotifyRequests.end())g_recentSpotifyRequests.erase(recent);
+						}else if(recent!=g_recentSpotifyRequests.end()){
+							protectedByGrace=now-recent->second<kSpotifyRequestPropagationGraceMs;
+							if(!protectedByGrace)g_recentSpotifyRequests.erase(recent);
+						}
+					}
+					if(!liveUris.count(request.providerId)&&!protectedByGrace)ledgerChanged=g_hub.removeRequest(request.id)||ledgerChanged;
+				}
+				if(ledgerChanged){saveHubState();syncHubQueueView();}
+			}
+			std::string signature=spotify.current.uri+'|'+std::to_string(spotify.queue.size());for(const auto&track:spotify.queue)signature+='|'+track.uri;if(signature!=lastSpotifyQueueSignature){lastSpotifyQueueSignature=std::move(signature);syncHubQueueView();if(g_page==1)InvalidateRect(window,nullptr,FALSE);}lastExternalPoll = GetTickCount64();
 		}
 		// Keep every WebView-backed page self-healing. This also retries the
 		// page-ready handshake if a document's first message was lost in a rapid
 		// Library/Accounts navigation or source switch.
 		if(g_page>=2&&g_page<=6&&g_overlayDesigner&&GetTickCount64()-lastSpotifyUiRefresh>=250){g_overlayDesigner->refresh();lastSpotifyUiRefresh=GetTickCount64();}
-		if(GetTickCount64()-lastTwitchValidation>=3600000){g_streamerTwitch.reconnect();g_botTwitch.reconnect();lastTwitchValidation=GetTickCount64();}
-		auto publishTwitch=[&](const char*name,TwitchAccount &auth,uint64_t &seen){const uint64_t revision=auth.revision();if(!connected||revision==seen)return;seen=revision;const auto state=auth.state();std::lock_guard<std::mutex>lock(g_hostEventMutex);if(state.connected)g_hostEvents.push_back(std::string("HOST\tAUTH_SESSION\t")+name+'\t'+auth.accessToken()+'\t'+state.login+'\t'+state.userId+"\n");else g_hostEvents.push_back(std::string("HOST\tAUTH_CLEAR\t")+name+"\n");};
+		if(GetTickCount64()-lastTwitchValidation>=3600000){g_streamerTwitch.reconnect(false);g_botTwitch.reconnect(false);lastTwitchValidation=GetTickCount64();}
+		auto publishTwitch=[&](const char*name,TwitchAccount &auth,uint64_t &seen){const uint64_t revision=auth.revision();if(!connected||revision==seen)return;seen=revision;const auto state=auth.state();std::lock_guard<std::mutex>lock(g_hostEventMutex);g_hostEvents.push_back(std::string("HOST\tACCOUNT_STATE\t")+name+'\t'+(state.connected?"connected":"disconnected")+'\t'+state.login+"\n");};
+		auto syncChat=[&]{
+			const auto streamer=g_streamerTwitch.state();const auto bot=g_botTwitch.state();const uint64_t sr=g_streamerTwitch.revision(),br=g_botTwitch.revision();
+			const bool streamerChanged=sr!=lastChatStreamerRevision;
+			if(streamerChanged){lastChatStreamerRevision=sr;g_twitchReader.disconnect();if(streamer.connected){const std::string channel=streamer.login;g_twitchReader.connect(streamer.login,g_streamerTwitch.accessToken(),channel,streamer.userId,[window](const TwitchChatMessage&m){auto*copy=new TwitchChatMessage(m);if(!PostMessageW(window,WM_TWITCH_CHAT,0,reinterpret_cast<LPARAM>(copy)))delete copy;});}}
+			if(br!=lastChatBotRevision||streamerChanged||lastChatSender!=g_authSender){lastChatBotRevision=br;lastChatSender=g_authSender;g_twitchSender.disconnect();if(streamer.connected&&bot.connected&&g_authSender=="bot")g_twitchSender.connect(bot.login,g_botTwitch.accessToken(),streamer.login,streamer.userId);}
+		};
+		syncChat();
 		if (!connected) { connected = ConnectNamedPipe(pipe, nullptr) || GetLastError() == ERROR_PIPE_CONNECTED; g_hostPipeConnected=connected; if (connected) { send(pipe, player.status()); lastStreamerRevision=lastBotRevision=0; } }
 		publishTwitch("streamer",g_streamerTwitch,lastStreamerRevision);publishTwitch("bot",g_botTwitch,lastBotRevision);
 		if (connected) {
@@ -2079,13 +2215,8 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int)
 				while ((newline = input.find('\n')) != std::string::npos) {
 					std::string line = input.substr(0, newline); input.erase(0, newline + 1); if (!line.empty() && line.back() == '\r') line.pop_back();
 					if (line == "SHUTDOWN") { running = false; break; }
-					if (line.rfind("AUTH_STATE\t", 0) == 0) {
-						std::vector<std::string> fields; size_t start=11,tab=0; while((tab=line.find('\t',start))!=std::string::npos){fields.push_back(line.substr(start,tab-start));start=tab+1;} fields.push_back(line.substr(start));
-						if(fields.size()>=3){if(fields[0]=="bot"){g_botAuthState=fields[1];g_botLogin=fields[2];}else{g_streamerAuthState=fields[1];g_streamerLogin=fields[2];}if(g_overlayDesigner)g_overlayDesigner->refresh();}
-					} else if (line.rfind("SETUP_STATE\t", 0) == 0) {
+					if (line.rfind("SETUP_STATE\t", 0) == 0) {
 						const size_t tab=line.find('\t',12);if(tab!=std::string::npos){g_captureExists=line.substr(12,tab-12)=="true";g_playerAutoStart=line.substr(tab+1)=="true";if(g_overlayDesigner)g_overlayDesigner->refresh();}
-					} else if (line.rfind("AUTH_SENDER_STATE\t", 0) == 0) {
-						g_authSender=line.substr(18); if(g_overlayDesigner)g_overlayDesigner->refresh();
 					} else if (line.rfind("HUB_IMPORT\t", 0) == 0) {
 						const std::string url = line.substr(11);
 						std::thread([window, url] { auto *result = new HubPlaylistResult(resolveHubPlaylist(url));
@@ -2097,17 +2228,28 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int)
 						if (fields.size() < 5) continue;
 						const std::string requestId = fields[0], requesterId = fields[1], requester = fields[2], query = fields[4];
 						const int requesterLevel = std::atoi(fields[3].c_str());
-						if(query.rfind("spotify:track:",0)==0||query.find("open.spotify.com/track/")!=std::string::npos){
-							std::string uri=query;if(uri.rfind("spotify:track:",0)!=0){const auto p=uri.find("/track/");std::string id=uri.substr(p+7);const auto end=id.find_first_of("?& ");if(end!=std::string::npos)id.resize(end);uri="spotify:track:"+id;}
-							std::thread([requestId,requester,uri]{if(g_spotify.addToQueue(uri)){g_spotify.refreshQueue();const auto state=g_spotify.state();std::string title="Spotify track",artist="Spotify";int position=1;for(size_t i=0;i<state.queue.size();++i)if(state.queue[i].uri==uri){title=state.queue[i].title;artist=state.queue[i].artist;position=int(i+1);break;}std::lock_guard<std::mutex>lock(g_hostEventMutex);g_hostEvents.push_back("HOST\tREQUEST_ACCEPTED\t"+requestId+'\t'+title+'\t'+artist+'\t'+requester+'\t'+std::to_string(position)+"\n");}else{std::lock_guard<std::mutex>lock(g_hostEventMutex);g_hostEvents.push_back("HOST\tREQUEST_REJECTED\t"+requestId+"\tSpotify could not add that track. Check playback is active and Spotify is connected.\n");}}).detach();continue;
+						const bool spotifyLink=query.rfind("spotify:track:",0)==0||query.find("open.spotify.com/track/")!=std::string::npos;
+						const bool spotifyRequest=spotifyLink||(externalActive()&&g_spotify.state().authorized);
+						if(spotifyRequest){
+							std::thread([window,requestId,requesterId,requester,requesterLevel,query]{auto *result=new HubSearchResult;SpotifyQueueTrack spotifyTrack;if(g_spotify.searchTrack(query,spotifyTrack)){result->track.id=requestId;result->track.provider="spotify";result->track.providerId=spotifyTrack.uri;result->track.title=spotifyTrack.title;result->track.artist=spotifyTrack.artist;result->track.album=spotifyTrack.album;result->track.artworkUrl=spotifyTrack.artworkUrl;result->track.durationSeconds=int(spotifyTrack.durationMs/1000);result->track.request=true;result->track.requestedBy=requester;result->track.requesterId=requesterId;result->track.requesterLevel=requesterLevel;}else{result->track.id=requestId;result->error="Spotify could not find that track. Try a more specific title and artist or paste a Spotify track link.";}if(!PostMessageW(window,WM_HUB_REQUEST_RESULT,0,reinterpret_cast<LPARAM>(result)))delete result;}).detach();continue;
 						}
 						std::thread([window, query, requesterId, requester, requesterLevel, requestId] { auto *result = new HubSearchResult(resolveHubSearch(query, requester));
 							result->track.id = requestId;
 							result->track.requesterId = requesterId; result->track.requesterLevel = requesterLevel;
 							if (!PostMessageW(window, WM_HUB_REQUEST_RESULT, 0, reinterpret_cast<LPARAM>(result))) delete result; }).detach();
 					} else if (line.rfind("HUB_REMOVE\t", 0) == 0) {
-						const std::string id = line.substr(11); HubTrack removed;
+						std::string id = line.substr(11);
+						if(!id.empty()&&id.front()=='#')id.erase(id.begin());
+						if(!id.empty()&&(id.front()=='r'||id.front()=='R'))id.front()='R';
+						else if(!id.empty()&&std::all_of(id.begin(),id.end(),[](unsigned char c){return std::isdigit(c)!=0;}))id='R'+id;
+						HubTrack removed;
 						for (const HubTrack &track : g_hub.requests()) if (track.id == id) { removed = track; break; }
+						if (removed.provider == "spotify") {
+							g_hub.cancelRequest(id); saveHubState(); syncHubQueueView();
+							std::lock_guard<std::mutex> lock(g_hostEventMutex);
+							g_hostEvents.push_back("HOST\tREQUEST_REMOVED\t" + id + "\t" + removed.title + "\t" + removed.artist + "\n");
+							continue;
+						}
 						if (removed.id.empty() && g_hub.hasCurrent() && g_hub.current().request && g_hub.current().id == id)
 							removed = g_hub.current();
 						if (!removed.id.empty() && g_hub.removeRequest(id)) {
@@ -2183,7 +2325,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int)
 		}
 		Sleep(10);
 	}
-	g_streamerTwitch.stop();g_botTwitch.stop();g_spotify.stop(); g_systemMedia.stop(); CloseHandle(pipe); g_overlayDesigner.reset(); g_youtubePlayer->shutdown(); g_youtubePlayer = nullptr; DestroyWindow(window); g_player = nullptr;
+	g_twitchReader.disconnect();g_twitchSender.disconnect();g_streamerTwitch.stop();g_botTwitch.stop();g_spotify.stop(); g_systemMedia.stop(); CloseHandle(pipe); g_overlayDesigner.reset(); g_youtubePlayer->shutdown(); g_youtubePlayer = nullptr; DestroyWindow(window); g_player = nullptr;
 	if (g_controlFont) { DeleteObject(g_controlFont); g_controlFont = nullptr; } if (g_controlBackgroundBrush) { DeleteObject(g_controlBackgroundBrush); g_controlBackgroundBrush = nullptr; }
 	g_splashImage.reset(); g_brandHeaderImage.reset(); g_brandIconImage.reset(); RemoveFontResourceExW(soraPath.c_str(), FR_PRIVATE, nullptr);
 	GdiplusShutdown(gdiplusToken); CoUninitialize(); CefShutdown(); ReleaseMutex(singleInstance); CloseHandle(singleInstance); return 0;

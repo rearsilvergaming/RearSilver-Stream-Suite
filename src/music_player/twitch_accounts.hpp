@@ -22,7 +22,7 @@ public:
 	void start();
 	void stop();
 	void beginLogin();
-	void reconnect();
+	void reconnect(bool interactive = true);
 	void logout();
 	TwitchAccountState state() const;
 	std::string accessToken() const;
@@ -31,13 +31,14 @@ public:
 
 private:
 	void loginWorker();
-	void reconnectWorker();
+	void reconnectWorker(bool interactive);
 	bool validate();
 	bool refresh();
 	bool load();
 	void save();
 	void clear();
 	void changed();
+	void cancelWorker();
 
 	std::string m_account;
 	mutable std::mutex m_mutex;
@@ -45,6 +46,6 @@ private:
 	std::string m_accessToken, m_refreshToken;
 	std::thread m_worker;
 	std::atomic<bool> m_stop{false};
+	std::atomic<bool> m_cancel{false};
 	std::atomic<uint64_t> m_revision{0};
 };
-

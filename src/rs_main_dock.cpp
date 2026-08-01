@@ -22,9 +22,6 @@
 #include "rs_music/rs_music.hpp"
 #include "rs_music/state/rs_music_state.hpp"
 #include "rs_music/rs_music_controller.hpp"
-#include "rs_music/rs_music_command_router.hpp"
-#include "rs_music/rs_music_twitch_irc_reader.hpp"
-#include "rs_music/rs_music_twitch_irc_sender.hpp"
 #include "rs_music/rs_music_twitch_auth.hpp"
 
 // Set Twitch status dot colour
@@ -119,59 +116,26 @@ RsMainDock::RsMainDock(QWidget *parent) : QWidget(parent)
 	// --------------------------------------------------
 	m_streamerAuth = new RsMusicTwitchAuth("music/twitch/streamer", this);
 	m_botAuth = new RsMusicTwitchAuth("music/twitch/bot", this);
-	m_musicCommandRouter = new RsMusicCommandRouter(m_musicController, this);
-	m_musicIrcReader = new RsMusicTwitchIrcReader(this);
-	m_musicIrcSender = new RsMusicTwitchIrcSender(this);
-	connect(m_musicIrcSender, &RsMusicTwitchIrcSender::authenticationFailed, this, [this]() {
-		QSettings settings("RearSilver", "RearSilver-Stream-Suite");
-		settings.setValue("music/twitch/send_from_bot", false);
-		QTimer::singleShot(0, this, &RsMainDock::connectMusicChat);
-	});
-
-	connect(m_musicIrcReader, &RsMusicTwitchIrcReader::chatMessageReceived, this,
-		[this](const RsMusicChatMessage &message) {
-			RsMusicChatContext context;
-			context.userId = message.userId;
-			context.displayName = message.displayName;
-			context.isSubscriber = message.isSubscriber;
-			context.isVip = message.isVip;
-			context.isMod = message.isMod;
-			context.isBroadcaster = message.isBroadcaster;
-			m_musicCommandRouter->ingestChatMessage(context, message.message);
-		});
-	connect(m_musicCommandRouter, &RsMusicCommandRouter::feedbackMessage, m_musicIrcSender,
-		&RsMusicTwitchIrcSender::sendMessage);
-	connect(m_streamerAuth, &RsMusicTwitchAuth::authCompleted, this, &RsMainDock::connectMusicChat);
-	connect(m_botAuth, &RsMusicTwitchAuth::authCompleted, this, &RsMainDock::connectMusicChat);
-	connect(m_streamerAuth, &RsMusicTwitchAuth::loggedOut, m_musicIrcReader, &RsMusicTwitchIrcReader::disconnect);
-	connect(m_streamerAuth, &RsMusicTwitchAuth::loggedOut, m_musicIrcSender, &RsMusicTwitchIrcSender::disconnect);
-	connect(m_botAuth, &RsMusicTwitchAuth::loggedOut, this, [this]() {
-		m_musicIrcSender->disconnect();
-		QTimer::singleShot(0, this, &RsMainDock::connectMusicChat);
-	});
-	connect(m_botAuth, &RsMusicTwitchAuth::authFailed, this, [this](const QString &) {
-		m_musicIrcSender->disconnect();
-		QTimer::singleShot(0, this, &RsMainDock::connectMusicChat);
-	});
+	// Twitch chat is owned by the standalone Media Player. OBS receives only
+	// mirrored account state and music state over IPC; it never opens IRC.
 
 	// Build the UI and bind every auth-state listener before attempting an
 	// asynchronous reconnect. Otherwise an expired token can fail during
 	// construction and leave the status text permanently on Reconnecting.
 	createUi();
-	connect(m_musicController, &RsMusicController::twitchSessionReceived, this,
-		[this](const QString &account, const QString &token, const QString &login, const QString &userId) {
-			RsMusicTwitchAuth *auth = account == "bot" ? m_botAuth : m_streamerAuth;
-			if (auth) auth->adoptSession(token, login, userId);
-			connectMusicChat(); publishMusicAuthState();
+	connect(m_musicController, &RsMusicController::twitchAccountStateReceived, this,
+		[this](const QString &account, bool connected, const QString &login) {
+			QLabel *dot = account == "bot" ? m_lblBotDot : m_lblStreamerDot;
+			QLabel *text = account == "bot" ? m_lblBotText : m_lblStreamerText;
+			RsSetTwitchDot(dot, connected ? "#00C853" : "#FF3B30");
+			if (text) text->setText(connected ? QString("%1: %2").arg(account == "bot" ? "Bot" : "Streamer", login)
+				: QString("%1 — Not connected").arg(account == "bot" ? "Bot" : "Streamer"));
+			if (account == "bot") m_botAuthResolved = true; else m_streamerAuthResolved = true;
 		});
-	connect(m_musicController, &RsMusicController::twitchSessionCleared, this, [this](const QString &account) {
-		RsMusicTwitchAuth *auth = account == "bot" ? m_botAuth : m_streamerAuth;
-		if (auth) auth->clearTransientSession(); publishMusicAuthState();
-	});
 	connect(m_musicController, &RsMusicController::twitchSenderPreferenceRequested, this, [this](bool useBot) {
 		const bool effectiveBot = useBot && m_botAuth && m_botAuth->hasValidToken();
 		QSettings("RearSilver", "RearSilver-Stream-Suite").setValue("music/twitch/send_from_bot", effectiveBot);
-		connectMusicChat(); publishMusicAuthState();
+		publishMusicAuthState();
 	});
 	connect(m_musicController, &RsMusicController::twitchAuthStatusRequested, this, &RsMainDock::publishMusicAuthState);
 	for (RsMusicTwitchAuth *auth : {m_streamerAuth, m_botAuth}) {
@@ -335,24 +299,6 @@ if (m_lblBotDot && m_botAuth && !m_botAuthResolved) {
 	// become an ordinary logged-out state with the Login button available.
 	// The Media Player publishes validated transient sessions when its IPC pipe connects.
 
-}
-
-void RsMainDock::connectMusicChat()
-{
-	if (!m_streamerAuth || !m_streamerAuth->hasValidToken() || m_streamerAuth->userLogin().isEmpty())
-		return;
-
-	const QString channel = m_streamerAuth->userLogin();
-	m_musicIrcReader->connectToChat(channel, m_streamerAuth->accessToken(), channel);
-
-	QSettings settings("RearSilver", "RearSilver-Stream-Suite");
-	const bool sendFromBot = settings.value("music/twitch/send_from_bot", false).toBool();
-
-	if (sendFromBot && m_botAuth && m_botAuth->hasValidToken() && !m_botAuth->userLogin().isEmpty()) {
-		m_musicIrcSender->connectSender(m_botAuth->userLogin(), m_botAuth->accessToken(), channel);
-	} else {
-		m_musicIrcSender->connectSender(channel, m_streamerAuth->accessToken(), channel);
-	}
 }
 
 RsMainDock::~RsMainDock()
@@ -731,16 +677,9 @@ void RsMainDock::updateMusicStatusInfo()
 
 void RsMainDock::publishMusicAuthState()
 {
-	auto clean = [](QString value) { return value.replace('\t', ' ').replace('\n', ' '); };
-	auto publish = [&](const QString &account, RsMusicTwitchAuth *auth) {
-		const QString state = auth && auth->hasValidToken() ? "connected" : "disconnected";
-		const QString login = auth ? clean(auth->userLogin()) : QString();
-		RsMusicLocalPlayer::instance().sendUiCommand("AUTH_STATE", account + '\t' + state + '\t' + login);
-	};
-	publish("streamer", m_streamerAuth); publish("bot", m_botAuth);
-	const bool useBot = QSettings("RearSilver", "RearSilver-Stream-Suite").value("music/twitch/send_from_bot", false).toBool() &&
-		m_botAuth && m_botAuth->hasValidToken();
-	RsMusicLocalPlayer::instance().sendUiCommand("AUTH_SENDER_STATE", useBot ? "bot" : "streamer");
+	// Account credentials and sender choice are exclusively owned by the Media
+	// Player. OBS receives safe ACCOUNT_STATE mirrors from it; it never pushes
+	// authentication state or credentials back into the player.
 }
 
 

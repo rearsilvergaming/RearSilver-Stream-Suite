@@ -288,7 +288,6 @@ void RsMainDock::createPanels()
 	m_pageMusicSetup = new RsMusicSetup(m_contentCard);
 	RsMusicServer::instance().start(musicState);
 	m_pageMusicOverlay = new RsMusicOverlay(m_contentCard);
-	connect(musicSettings, &RsMusicSettings::senderPreferenceChanged, this, &RsMainDock::connectMusicChat);
 
 	// Stack registration (order determines page index)
 	m_stack->addWidget(m_pageControls);       // 0

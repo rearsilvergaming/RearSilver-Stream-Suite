@@ -62,5 +62,6 @@ private:
 	QString m_pendingPlaybackCommand;
 	int m_pendingConnectionAttempts = 0;
 	int m_hubConnectionAttempts = 0;
+	bool m_connectedThisSession = false;
 	bool m_shuttingDown = false;
 };

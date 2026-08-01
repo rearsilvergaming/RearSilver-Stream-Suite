@@ -11,6 +11,7 @@ public:
 	static void ensureObsEventHook();
 	static void shutdown();
 	static bool containsProgram(const QString &path);
+	static bool autoLaunchEnabled();
 	static void addProgram(const QString &path);
 	static void removeProgram(const QString &path);
 };

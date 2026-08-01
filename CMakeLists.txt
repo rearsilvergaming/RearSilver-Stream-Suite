@@ -49,7 +49,7 @@ if(WIN32)
 	add_executable(RearSilver-Music-Player WIN32 src/music_player/main.cpp src/music_player/music_hub.cpp
 		src/music_player/youtube_resolver.cpp src/music_player/local_library.cpp
 		src/music_player/system_media_provider.cpp src/music_player/spotify_client.cpp
-		src/music_player/twitch_accounts.cpp src/music_player/app.rc)
+		src/music_player/twitch_accounts.cpp src/music_player/twitch_chat_service.cpp src/music_player/app.rc)
 	target_include_directories(RearSilver-Music-Player PRIVATE
 		"${CMAKE_CURRENT_SOURCE_DIR}/third_party/miniaudio"
 		"${CMAKE_CURRENT_SOURCE_DIR}/third_party/webview2/include"
@@ -231,12 +231,6 @@ add_library(${PROJECT_NAME} MODULE
 
     src/rs_music/rs_music_twitch_auth.cpp
     src/rs_music/rs_music_twitch_auth.hpp
-    src/rs_music/rs_music_twitch_irc_sender.cpp
-    src/rs_music/rs_music_twitch_irc_sender.hpp
-    src/rs_music/rs_music_twitch_irc_reader.cpp
-    src/rs_music/rs_music_twitch_irc_reader.hpp
-    src/rs_music/rs_music_command_router.cpp
-    src/rs_music/rs_music_command_router.hpp
     src/rs_music/rs_music_controller.cpp
     src/rs_music/rs_music_controller.hpp
     src/rs_music/rs_music_scheduler.cpp

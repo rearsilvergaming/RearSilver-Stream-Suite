@@ -21,9 +21,6 @@ class QResizeEvent;
 class QLabel;
 // Music chat / command plumbing
 class RsMusicController;
-class RsMusicCommandRouter;
-class RsMusicTwitchIrcReader;
-class RsMusicTwitchIrcSender;
 class RsMusicTwitchAuth;
 
 
@@ -103,7 +100,6 @@ private:
 	// Info bar
 	void updateSceneSourceInfo();
 	void updateMusicStatusInfo();
-	void connectMusicChat();
 	void publishMusicAuthState();
 
 	// 🔒 Safety Lock helpers
@@ -117,9 +113,6 @@ private:
 	RsMusicState *m_musicState = nullptr;
 	// Music control & chat plumbing (Phase 6A)
 	RsMusicController *m_musicController = nullptr;
-	RsMusicCommandRouter *m_musicCommandRouter = nullptr;
-	RsMusicTwitchIrcReader *m_musicIrcReader = nullptr;
-	RsMusicTwitchIrcSender *m_musicIrcSender = nullptr;
 
 // Transient Twitch sessions supplied and refreshed by the Media Player.
 	RsMusicTwitchAuth *m_streamerAuth = nullptr;

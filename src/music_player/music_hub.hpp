@@ -19,6 +19,7 @@ struct HubTrack {
 	int requesterLevel = 0;
 	int durationSeconds = 0;
 	bool request = false;
+	bool cancelled = false;
 };
 
 class MusicHubModel {
@@ -29,7 +30,9 @@ public:
 	void activateSource(std::string source);
 	void setNonRequestLabel(std::string label);
 	void enqueueRequest(HubTrack track);
+	void replaceRequests(std::vector<HubTrack> tracks);
 	bool removeRequest(const std::string &id);
+	bool cancelRequest(const std::string &id);
 	void clearRequests();
 	void shuffleFallback();
 

@@ -64,12 +64,31 @@ void MusicHubModel::enqueueRequest(HubTrack track)
 	m_requests.push_back(std::move(track));
 }
 
+void MusicHubModel::replaceRequests(std::vector<HubTrack> tracks)
+{
+	std::lock_guard<std::mutex> lock(m_mutex);
+	m_requests.clear();
+	for (HubTrack &track : tracks) {
+		track.request = true;
+		m_requests.push_back(std::move(track));
+	}
+}
+
 bool MusicHubModel::removeRequest(const std::string &id)
 {
 	std::lock_guard<std::mutex> lock(m_mutex);
 	const auto found = std::find_if(m_requests.begin(), m_requests.end(), [&](const HubTrack &track) { return track.id == id; });
 	if (found == m_requests.end()) return false;
 	m_requests.erase(found); return true;
+}
+
+bool MusicHubModel::cancelRequest(const std::string &id)
+{
+	std::lock_guard<std::mutex> lock(m_mutex);
+	const auto found = std::find_if(m_requests.begin(), m_requests.end(), [&](const HubTrack &track) { return track.id == id; });
+	if (found == m_requests.end()) return false;
+	found->cancelled = true;
+	return true;
 }
 
 void MusicHubModel::clearRequests() { std::lock_guard<std::mutex> lock(m_mutex); m_requests.clear(); }
@@ -198,7 +217,8 @@ std::string MusicHubModel::trackJson(const HubTrack &track)
 		<< ",\"album\":" << json(track.album)
 		<< ",\"artworkUrl\":" << json(track.artworkUrl) << ",\"requestedBy\":" << json(track.requestedBy)
 		<< ",\"requesterId\":" << json(track.requesterId) << ",\"requesterLevel\":" << track.requesterLevel
-		<< ",\"durationSeconds\":" << track.durationSeconds << ",\"request\":" << (track.request ? "true" : "false") << "}";
+		<< ",\"durationSeconds\":" << track.durationSeconds << ",\"request\":" << (track.request ? "true" : "false")
+		<< ",\"cancelled\":" << (track.cancelled ? "true" : "false") << "}";
 	return out.str();
 }
 
@@ -223,6 +243,8 @@ std::string MusicHubModel::snapshotJson(const std::string &status, int64_t posit
 		out << "],\"localLibrary\":["; first = true;
 		for (const HubTrack &track : m_localLibrary) { if (!first) out << ','; first = false; out << trackJson(track); }
 	}
+	out << "],\"requests\":["; first = true;
+	for (const HubTrack &track : m_requests) { if (!first) out << ','; first = false; out << trackJson(track); }
 	out << "]}"; return out.str();
 }
 

@@ -1,6 +1,7 @@
 #include "rs_music_local_player.hpp"
 #include "rs_music_metadata.hpp"
 #include "state/rs_music_track.hpp"
+#include "enhancements/rs_auto_start.hpp"
 
 #include <QCoreApplication>
 #include <QCryptographicHash>
@@ -35,12 +36,13 @@ RsMusicLocalPlayer::RsMusicLocalPlayer()
 	connect(m_socket, &QLocalSocket::readyRead, this, &RsMusicLocalPlayer::readMessages);
 	connect(m_socket, &QLocalSocket::connected, this, [this]() {
 		m_hubConnectionAttempts = 0;
+		m_connectedThisSession = true;
 		blog(LOG_INFO, "[RS Music] Companion control channel connected.");
 	});
 	connect(m_socket, &QLocalSocket::disconnected, this, [this]() {
 		if (m_shuttingDown)
 			return;
-		blog(LOG_WARNING, "[RS Music] Companion control channel disconnected; reconnecting.");
+		blog(LOG_INFO, "[RS Music] Companion control channel disconnected; waiting for the player.");
 		m_hubConnectionAttempts = 0;
 		QTimer::singleShot(250, this, &RsMusicLocalPlayer::connectToHub);
 	});
@@ -100,7 +102,19 @@ bool RsMusicLocalPlayer::ensureCompanion()
 		return true;
 	}
 
+	// Merely loading the OBS dock must never opt the user into the Suite music
+	// system.  Launch (and therefore relaunch) the companion only when the user
+	// explicitly added it to Auto-Start and enabled automatic launching.
 	const QString path = companionPath();
+	// Auto-Start registration is configuration, not an instruction to launch now.
+	// OBS startup is handled by RsAutoStart's FINISHED_LOADING event.  This path
+	// only performs crash/accidental-close recovery after a player has actually
+	// connected during the current OBS session.
+	const bool launchEnabled = m_connectedThisSession && !path.isEmpty() &&
+		RsAutoStart::autoLaunchEnabled() && RsAutoStart::containsProgram(path);
+	if (!launchEnabled)
+		return false;
+
 	if (path.isEmpty()) {
 		blog(LOG_ERROR, "[RS Music] Companion player executable was not found.");
 		emit playbackError("The bundled local music player is missing. Repair or reinstall the Suite.");

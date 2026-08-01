@@ -18,7 +18,7 @@ extern "C" {
 
 // Public client identifier for the RearSilver Stream Suite Twitch application.
 // OAuth client IDs are identifiers, not secrets; no client secret is embedded.
-static const char *TWITCH_CLIENT_ID = "6h5j0d7kfjaeyw6fejisawwqheeahd";
+static const char *TWITCH_CLIENT_ID = "6p4h3yfjdyomp89jjhe2u4u18zm4pc";
 
 // Twitch endpoints
 static const char *DEVICE_CODE_URL = "https://id.twitch.tv/oauth2/device";

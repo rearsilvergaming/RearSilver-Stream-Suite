@@ -2,6 +2,7 @@
 #define NOMINMAX
 #include <windows.h>
 #include <dwmapi.h>
+#include <psapi.h>
 #include <tlhelp32.h>
 #include <shellapi.h>
 #include <objidl.h>
@@ -47,8 +48,10 @@
 #include <cstring>
 #include <deque>
 #include <fstream>
+#include <iomanip>
 #include <memory>
 #include <mutex>
+#include <sstream>
 #include <string>
 #include <thread>
 #include <unordered_map>
@@ -60,6 +63,100 @@ using Microsoft::WRL::Callback;
 using Microsoft::WRL::ComPtr;
 
 static std::string wideToUtf8(const std::wstring &value);
+
+static std::mutex g_traceMutex;
+static std::wstring g_tracePath;
+static ULONGLONG g_traceStarted = 0;
+static std::atomic<unsigned long long> g_traceSequence{0};
+
+static std::wstring traceLogPath()
+{
+	if (!g_tracePath.empty()) return g_tracePath;
+	wchar_t localAppData[MAX_PATH]{};
+	if (!GetEnvironmentVariableW(L"LOCALAPPDATA", localAppData, MAX_PATH)) return L"";
+	const std::wstring root = std::wstring(localAppData) + L"\\RearSilver Stream Suite";
+	const std::wstring folder = root + L"\\Logs";
+	CreateDirectoryW(root.c_str(), nullptr);
+	CreateDirectoryW(folder.c_str(), nullptr);
+	SYSTEMTIME now{};
+	GetLocalTime(&now);
+	wchar_t name[160]{};
+	swprintf_s(name, L"\\control-hub-trace-%04u%02u%02u-%02u%02u%02u-PID%lu.log",
+		now.wYear, now.wMonth, now.wDay, now.wHour, now.wMinute, now.wSecond,
+		GetCurrentProcessId());
+	g_tracePath = folder + name;
+	g_traceStarted = GetTickCount64();
+	return g_tracePath;
+}
+
+static void traceLog(const char *event, const std::string &detail = {})
+{
+	const std::wstring path = traceLogPath();
+	if (path.empty()) return;
+	SYSTEMTIME now{};
+	GetLocalTime(&now);
+	std::lock_guard<std::mutex> lock(g_traceMutex);
+	std::ofstream output(path, std::ios::binary | std::ios::app);
+	if (!output) return;
+	output << std::setfill('0') << now.wYear << '-' << std::setw(2) << now.wMonth << '-'
+		<< std::setw(2) << now.wDay << 'T' << std::setw(2) << now.wHour << ':'
+		<< std::setw(2) << now.wMinute << ':' << std::setw(2) << now.wSecond << '.'
+		<< std::setw(3) << now.wMilliseconds << std::setfill(' ')
+		<< " seq=" << ++g_traceSequence
+		<< " elapsed_ms=" << (GetTickCount64() - g_traceStarted)
+		<< " pid=" << GetCurrentProcessId() << " tid=" << GetCurrentThreadId()
+		<< " event=" << event;
+	if (!detail.empty()) output << " detail=\"" << detail << '"';
+	output << "\r\n";
+	output.flush();
+}
+
+static void traceProcessMemory()
+{
+	PROCESS_MEMORY_COUNTERS_EX memory{};
+	memory.cb = sizeof(memory);
+	if (!GetProcessMemoryInfo(GetCurrentProcess(),
+		reinterpret_cast<PROCESS_MEMORY_COUNTERS *>(&memory), sizeof(memory))) return;
+	std::ostringstream detail;
+	detail << "working_set_mb=" << (memory.WorkingSetSize / (1024 * 1024))
+		<< " private_mb=" << (memory.PrivateUsage / (1024 * 1024))
+		<< " peak_working_set_mb=" << (memory.PeakWorkingSetSize / (1024 * 1024))
+		<< " gdi=" << GetGuiResources(GetCurrentProcess(), GR_GDIOBJECTS)
+		<< " user=" << GetGuiResources(GetCurrentProcess(), GR_USEROBJECTS);
+	traceLog("process-memory", detail.str());
+}
+
+static LONG WINAPI traceUnhandledException(EXCEPTION_POINTERS *exception)
+{
+	std::ostringstream detail;
+	if (exception && exception->ExceptionRecord) {
+		detail << "code=0x" << std::hex << exception->ExceptionRecord->ExceptionCode
+			<< " address=0x" << reinterpret_cast<uintptr_t>(exception->ExceptionRecord->ExceptionAddress);
+	}
+	traceLog("unhandled-exception", detail.str());
+	return EXCEPTION_CONTINUE_SEARCH;
+}
+
+static BOOL CALLBACK traceMonitor(HMONITOR monitor, HDC, LPRECT rect, LPARAM)
+{
+	MONITORINFOEXW info{}; info.cbSize = sizeof(info);
+	GetMonitorInfoW(monitor, &info);
+	std::ostringstream detail;
+	detail << "rect=" << rect->left << ',' << rect->top << ',' << rect->right << ',' << rect->bottom
+		<< " primary=" << ((info.dwFlags & MONITORINFOF_PRIMARY) ? 1 : 0);
+	traceLog("monitor", detail.str());
+	return TRUE;
+}
+
+static void tracedDwmFlush(const char *label)
+{
+	const ULONGLONG started = GetTickCount64();
+	const HRESULT result = DwmFlush();
+	std::ostringstream detail;
+	detail << "label=" << label << " hr=0x" << std::hex << static_cast<unsigned long>(result)
+		<< std::dec << " duration_ms=" << (GetTickCount64() - started);
+	traceLog("dwm-flush", detail.str());
+}
 
 static std::wstring lifecycleLogPath()
 {
@@ -195,9 +292,17 @@ public:
 	~WebViewYouTubePlayer() { shutdown(); }
 	void shutdown()
 	{
+		traceLog("webview-youtube-shutdown-begin", m_controller ? "controller=present" : "controller=absent");
 		m_ready = false; m_active = false; m_parent = nullptr;
-		if (m_controller) { m_controller->put_IsVisible(FALSE); m_controller->Close(); }
+		if (m_controller) {
+			const HRESULT visibleResult = m_controller->put_IsVisible(FALSE);
+			{ std::ostringstream detail; detail << "visible=0 hr=0x" << std::hex << static_cast<unsigned long>(visibleResult); traceLog("webview-youtube-visibility", detail.str()); }
+			traceLog("webview-youtube-controller-close-begin");
+			const HRESULT closeResult = m_controller->Close();
+			{ std::ostringstream detail; detail << "hr=0x" << std::hex << static_cast<unsigned long>(closeResult); traceLog("webview-youtube-controller-close-complete", detail.str()); }
+		}
 		m_webView.Reset(); m_controller.Reset();
+		traceLog("webview-youtube-shutdown-complete");
 	}
 	void initialise(HWND parent)
 	{
@@ -218,12 +323,18 @@ public:
 		// Keep Chromium's audio service in the WebView2 browser process. OBS's
 		// Application Audio Capture can then associate embedded YouTube playback
 		// with the Suite player instead of losing it to a detached utility process.
-		environmentOptions->put_AdditionalBrowserArguments(L"--disable-features=AudioServiceOutOfProcess");
+		// Diagnostic: force WebView2 onto its software compositor as well as CEF.
+		// The monitor blackout still occurred with CEF's GPU disabled and before
+		// shutdown, immediately around WebView2 surface creation/visibility.
+		environmentOptions->put_AdditionalBrowserArguments(
+			L"--disable-features=AudioServiceOutOfProcess --disable-gpu --disable-gpu-compositing");
+		traceLog("webview-youtube-software-rendering-enabled");
 
 		CreateCoreWebView2EnvironmentWithOptions(
 			nullptr, webViewData.c_str(), environmentOptions.Get(),
 			Callback<ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler>(
 				[this, folder](HRESULT result, ICoreWebView2Environment *environment) -> HRESULT {
+					{ std::ostringstream detail; detail << "hr=0x" << std::hex << static_cast<unsigned long>(result) << " environment=" << (environment ? 1 : 0); traceLog("webview-youtube-environment-created", detail.str()); }
 					if (FAILED(result) || !environment) {
 						m_events.emplace_back("ERROR\tMicrosoft WebView2 Runtime is unavailable. Repair the Suite installation.\n");
 						return result;
@@ -232,9 +343,19 @@ public:
 						m_parent,
 						Callback<ICoreWebView2CreateCoreWebView2ControllerCompletedHandler>(
 							[this, folder](HRESULT controllerResult, ICoreWebView2Controller *controller) -> HRESULT {
+								{ std::ostringstream detail; detail << "hr=0x" << std::hex << static_cast<unsigned long>(controllerResult) << " controller=" << (controller ? 1 : 0); traceLog("webview-youtube-controller-created", detail.str()); }
 								if (FAILED(controllerResult) || !controller) return controllerResult;
 								m_controller = controller;
 								m_controller->get_CoreWebView2(&m_webView);
+								EventRegistrationToken processFailedToken{};
+								m_webView->add_ProcessFailed(
+									Callback<ICoreWebView2ProcessFailedEventHandler>(
+										[](ICoreWebView2 *, ICoreWebView2ProcessFailedEventArgs *args) -> HRESULT {
+											COREWEBVIEW2_PROCESS_FAILED_KIND kind{};
+											if (args) args->get_ProcessFailedKind(&kind);
+											traceLog("webview-youtube-process-failed", "kind=" + std::to_string(static_cast<int>(kind)));
+											return S_OK;
+										}).Get(), &processFailedToken);
 								ComPtr<ICoreWebView2_3> webView3;
 								if (SUCCEEDED(m_webView.As(&webView3))) {
 									webView3->SetVirtualHostNameToFolderMapping(
@@ -266,7 +387,7 @@ public:
 										}).Get(),
 									&token);
 								resize();
-								m_controller->put_IsVisible(FALSE);
+								{ const HRESULT hr = m_controller->put_IsVisible(FALSE); std::ostringstream detail; detail << "visible=0 hr=0x" << std::hex << static_cast<unsigned long>(hr); traceLog("webview-youtube-visibility", detail.str()); }
 								m_webView->Navigate(L"https://rearsilver.local/youtube-player.html");
 								return S_OK;
 							}).Get());
@@ -289,7 +410,8 @@ public:
 		const int videoX = contentLeft + (availableWidth - videoWidth) / 2;
 		const int videoY = 104 + std::max(0, (availableHeight - videoHeight) / 2);
 		RECT bounds{videoX, videoY, videoX + videoWidth, videoY + videoHeight};
-		m_controller->put_Bounds(bounds);
+		const HRESULT hr = m_controller->put_Bounds(bounds);
+		{ std::ostringstream detail; detail << "left=" << bounds.left << " top=" << bounds.top << " right=" << bounds.right << " bottom=" << bounds.bottom << " hr=0x" << std::hex << static_cast<unsigned long>(hr); traceLog("webview-youtube-bounds", detail.str()); }
 	}
 
 	void load(const std::string &videoId)
@@ -305,14 +427,14 @@ public:
 		m_currentVideoId = safe;
 		m_active = true;
 		setWindowMode(true);
-		if (m_controller) m_controller->put_IsVisible(TRUE);
+		if (m_controller) { const HRESULT hr=m_controller->put_IsVisible(TRUE); std::ostringstream detail; detail << "visible=1 hr=0x" << std::hex << static_cast<unsigned long>(hr); traceLog("webview-youtube-visibility", detail.str()); }
 		loadPending();
 	}
 
 	void hide()
 	{
 		m_active = false;
-		if (m_controller) m_controller->put_IsVisible(FALSE);
+		if (m_controller) { const HRESULT hr=m_controller->put_IsVisible(FALSE); std::ostringstream detail; detail << "visible=0 hr=0x" << std::hex << static_cast<unsigned long>(hr); traceLog("webview-youtube-visibility", detail.str()); }
 		setWindowMode(false);
 	}
 
@@ -368,6 +490,10 @@ public:
 	{
 		unload();
 		if (m_engineReady) { ma_engine_uninit(&m_engine); m_engineReady = false; }
+		// Artwork is a GDI+ Image. Release it while GDI+ is still running;
+		// otherwise Player's late wWinMain-scope destructor releases it after
+		// GdiplusShutdown and faults during process exit.
+		m_artwork.reset();
 	}
 
 	std::string command(const std::string &line)
@@ -581,12 +707,14 @@ public:
 
 	bool initialise(HWND parent)
 	{
+		traceLog("cef-browser-create-begin");
 		m_parent = parent;
 		m_browserClosed.store(false);
 		CefWindowInfo info; info.SetAsWindowless(parent);
 		CefBrowserSettings settings; settings.windowless_frame_rate = 30;
 		const bool created = CefBrowserHost::CreateBrowser(info, this, "about:blank", settings, nullptr, nullptr);
-		if (!created) m_browserClosed.store(true);
+		if (!created) { m_browserClosed.store(true); traceLog("cef-browser-create-failed"); }
+		else traceLog("cef-browser-create-queued");
 		return created;
 	}
 	void setParent(HWND parent) { m_parent = parent; }
@@ -598,7 +726,8 @@ public:
 	}
 	void closeBrowserAndWait()
 	{
-		if (!m_browser) return;
+		if (!m_browser) { traceLog("cef-browser-close-skip", "reason=no-browser"); return; }
+		traceLog("cef-browser-close-begin");
 		m_browserClosed.store(false);
 		m_browser->GetHost()->CloseBrowser(true);
 		// CEF owns its UI thread because multi_threaded_message_loop is enabled.
@@ -618,6 +747,8 @@ public:
 			}
 			Sleep(1);
 		}
+		if (!m_browserClosed.load()) traceLog("cef-browser-close-timeout");
+		else traceLog("cef-browser-close-complete");
 		m_devToolsRegistration = nullptr;
 	}
 	void resize() { if (m_browser) m_browser->GetHost()->WasResized(); }
@@ -727,6 +858,7 @@ public:
 	}
 	void OnAfterCreated(CefRefPtr<CefBrowser> browser) override
 	{
+		traceLog("cef-browser-after-created");
 		m_browser = browser;
 		// The browser is born on about:blank. Do not keep a GPU-backed OSR surface
 		// active until YouTube is actually selected.
@@ -735,7 +867,7 @@ public:
 		m_devToolsRegistration = browser->GetHost()->AddDevToolsMessageObserver(this);
 		if (m_pendingLoad) { m_pendingLoad = false; loadCurrent(); }
 	}
-	void OnBeforeClose(CefRefPtr<CefBrowser>) override { m_devToolsRegistration = nullptr; m_browser = nullptr; m_browserClosed.store(true); }
+	void OnBeforeClose(CefRefPtr<CefBrowser>) override { traceLog("cef-browser-before-close"); m_devToolsRegistration = nullptr; m_browser = nullptr; m_browserClosed.store(true); }
 	void OnLoadEnd(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame, int) override
 	{
 		(void)browser; (void)frame;
@@ -1369,24 +1501,47 @@ public:
 	~OverlayDesignerSurface() { shutdown(); }
 	void shutdown()
 	{
+		traceLog("webview-overlay-shutdown-begin", m_controller ? "controller=present" : "controller=absent");
 		m_ready = false; m_page = -1; m_parent = nullptr;
-		if (m_controller) { m_controller->put_IsVisible(FALSE); m_controller->Close(); }
+		if (m_controller) {
+			const HRESULT visibleHr = m_controller->put_IsVisible(FALSE);
+			{ std::ostringstream detail; detail << "visible=0 hr=0x" << std::hex << static_cast<unsigned long>(visibleHr); traceLog("webview-overlay-visibility", detail.str()); }
+			traceLog("webview-overlay-controller-close-begin");
+			const HRESULT closeHr = m_controller->Close();
+			{ std::ostringstream detail; detail << "hr=0x" << std::hex << static_cast<unsigned long>(closeHr); traceLog("webview-overlay-controller-close-complete", detail.str()); }
+		}
 		m_webView.Reset(); m_controller.Reset();
+		traceLog("webview-overlay-shutdown-complete");
 	}
 	void initialise(HWND parent)
 	{
+		traceLog("webview-overlay-environment-create-begin");
 		m_parent = parent;
 		wchar_t localAppData[MAX_PATH]{}; GetEnvironmentVariableW(L"LOCALAPPDATA", localAppData, MAX_PATH);
 		const std::wstring suiteData = std::wstring(localAppData) + L"\\RearSilver Stream Suite"; CreateDirectoryW(suiteData.c_str(), nullptr);
 		const std::wstring webData = suiteData + L"\\OverlayDesignerWebView2"; CreateDirectoryW(webData.c_str(), nullptr);
 		std::wstring folder = executableAssetPath(L""); if (!folder.empty() && (folder.back() == L'\\' || folder.back() == L'/')) folder.pop_back();
-		CreateCoreWebView2EnvironmentWithOptions(nullptr, webData.c_str(), nullptr,
+		auto environmentOptions = Microsoft::WRL::Make<CoreWebView2EnvironmentOptions>();
+		environmentOptions->put_AdditionalBrowserArguments(
+			L"--disable-gpu --disable-gpu-compositing");
+		traceLog("webview-overlay-software-rendering-enabled");
+		CreateCoreWebView2EnvironmentWithOptions(nullptr, webData.c_str(), environmentOptions.Get(),
 			Callback<ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler>([this, folder](HRESULT result, ICoreWebView2Environment *environment) -> HRESULT {
+				{ std::ostringstream detail; detail << "hr=0x" << std::hex << static_cast<unsigned long>(result) << " environment=" << (environment ? 1 : 0); traceLog("webview-overlay-environment-created", detail.str()); }
 				if (FAILED(result) || !environment) return result;
 				return environment->CreateCoreWebView2Controller(m_parent,
 					Callback<ICoreWebView2CreateCoreWebView2ControllerCompletedHandler>([this, folder](HRESULT controllerResult, ICoreWebView2Controller *controller) -> HRESULT {
+						{ std::ostringstream detail; detail << "hr=0x" << std::hex << static_cast<unsigned long>(controllerResult) << " controller=" << (controller ? 1 : 0); traceLog("webview-overlay-controller-created", detail.str()); }
 						if (FAILED(controllerResult) || !controller) return controllerResult;
 						m_controller = controller; m_controller->get_CoreWebView2(&m_webView);
+						EventRegistrationToken processFailedToken{};
+						m_webView->add_ProcessFailed(
+							Callback<ICoreWebView2ProcessFailedEventHandler>([](ICoreWebView2 *, ICoreWebView2ProcessFailedEventArgs *args) -> HRESULT {
+								COREWEBVIEW2_PROCESS_FAILED_KIND kind{};
+								if (args) args->get_ProcessFailedKind(&kind);
+								traceLog("webview-overlay-process-failed", "kind=" + std::to_string(static_cast<int>(kind)));
+								return S_OK;
+							}).Get(), &processFailedToken);
 						ComPtr<ICoreWebView2_3> webView3; if (SUCCEEDED(m_webView.As(&webView3))) webView3->SetVirtualHostNameToFolderMapping(L"rearsilver.local", folder.c_str(), COREWEBVIEW2_HOST_RESOURCE_ACCESS_KIND_ALLOW);
 						ComPtr<ICoreWebView2Settings> settings; if (SUCCEEDED(m_webView->get_Settings(&settings))) { settings->put_AreDefaultContextMenusEnabled(FALSE); settings->put_AreDevToolsEnabled(FALSE); settings->put_IsZoomControlEnabled(FALSE); }
 						EventRegistrationToken token{}; m_webView->add_WebMessageReceived(
@@ -1511,7 +1666,12 @@ public:
 			injectPage(page == 2 ? L"library.html" : page == 3 ? L"overlay-designer.html" :
 				page == 4 ? L"settings.html" : page == 5 ? L"accounts.html" : page == 6 ? L"commands.html" : L"stream-tools.html");
 		}
-		if (m_controller) { resize(); m_controller->put_IsVisible(visible ? TRUE : FALSE); }
+		if (m_controller) {
+			resize();
+			const HRESULT hr = m_controller->put_IsVisible(visible ? TRUE : FALSE);
+			std::ostringstream detail; detail << "page=" << page << " visible=" << (visible ? 1 : 0) << " hr=0x" << std::hex << static_cast<unsigned long>(hr);
+			traceLog("webview-overlay-visibility", detail.str());
+		}
 		if (visible) refresh();
 	}
 	void refresh() {
@@ -1524,7 +1684,14 @@ public:
 		else if (m_page == 6) sendCommandsConfig();
 		else if (m_page == 7) sendToolsConfig();
 	}
-	void resize() { if (!m_controller || !m_parent) return; RECT client{}; GetClientRect(m_parent, &client); const int sidebar = sidebarWidthFor(client.right); RECT bounds{sidebar + 16, 100, std::max(sidebar + 17, int(client.right) - 16), std::max(101, int(client.bottom) - 112)}; m_controller->put_Bounds(bounds); }
+	void resize() {
+		if (!m_controller || !m_parent) return;
+		RECT client{}; GetClientRect(m_parent, &client); const int sidebar = sidebarWidthFor(client.right);
+		RECT bounds{sidebar + 16, 100, std::max(sidebar + 17, int(client.right) - 16), std::max(101, int(client.bottom) - 112)};
+		const HRESULT hr = m_controller->put_Bounds(bounds);
+		std::ostringstream detail; detail << "left=" << bounds.left << " top=" << bounds.top << " right=" << bounds.right << " bottom=" << bounds.bottom << " hr=0x" << std::hex << static_cast<unsigned long>(hr);
+		traceLog("webview-overlay-bounds", detail.str());
+	}
 private:
 	static bool validColour(const std::wstring &value) { return value.size() == 7 && value[0] == L'#' && std::all_of(value.begin() + 1, value.end(), [](wchar_t c) { return iswxdigit(c) != 0; }); }
 	void injectPage(const wchar_t *name) {
@@ -1753,7 +1920,19 @@ static void handleTwitchChat(HWND window, const TwitchChatMessage &m)
 static LRESULT CALLBACK windowProc(HWND window, UINT message, WPARAM wParam, LPARAM lParam)
 {
 	if(message==WM_TWITCH_CHAT){std::unique_ptr<TwitchChatMessage>m(reinterpret_cast<TwitchChatMessage*>(lParam));if(m)handleTwitchChat(window,*m);return 0;}
-	if (message == WM_CLOSE) { g_closeRequested = true; return 0; }
+	if (message == WM_CLOSE) { traceLog("window-close-request"); g_closeRequested = true; return 0; }
+	if (message == WM_DESTROY) traceLog("window-destroy");
+	if (message == WM_NCDESTROY) traceLog("window-nc-destroy");
+	if (message == WM_ACTIVATE) { std::ostringstream detail; detail << "state=" << LOWORD(wParam) << " minimized=" << HIWORD(wParam) << " other_hwnd=0x" << std::hex << static_cast<unsigned long long>(reinterpret_cast<uintptr_t>(reinterpret_cast<HWND>(lParam))); traceLog("window-activate", detail.str()); }
+	if (message == WM_SETFOCUS || message == WM_KILLFOCUS) { std::ostringstream detail; detail << "other_hwnd=0x" << std::hex << static_cast<unsigned long long>(reinterpret_cast<uintptr_t>(reinterpret_cast<HWND>(wParam))); traceLog(message == WM_SETFOCUS ? "window-set-focus" : "window-kill-focus", detail.str()); }
+	if (message == WM_SHOWWINDOW) { std::ostringstream detail; detail << "shown=" << (wParam ? 1 : 0) << " status=" << static_cast<long long>(lParam); traceLog("window-show", detail.str()); }
+	if (message == WM_SYSCOMMAND) { std::ostringstream detail; detail << "command=0x" << std::hex << (static_cast<unsigned long long>(wParam) & 0xfff0ULL); traceLog("window-system-command", detail.str()); }
+	if (message == WM_SETTINGCHANGE) { std::ostringstream detail; detail << "action=" << static_cast<unsigned long long>(wParam); if (lParam) detail << " section=" << wideToUtf8(reinterpret_cast<const wchar_t *>(lParam)); traceLog("window-setting-change", detail.str()); }
+	if (message == WM_SIZE) { std::ostringstream detail; detail << "type=" << static_cast<unsigned long long>(wParam) << " width=" << LOWORD(lParam) << " height=" << HIWORD(lParam); traceLog("window-size", detail.str()); }
+	if (message == WM_DISPLAYCHANGE) { std::ostringstream detail; detail << "bpp=" << wParam << " width=" << LOWORD(lParam) << " height=" << HIWORD(lParam); traceLog("window-display-change", detail.str()); }
+	if (message == WM_DPICHANGED) { std::ostringstream detail; detail << "dpi_x=" << LOWORD(wParam) << " dpi_y=" << HIWORD(wParam); traceLog("window-dpi-change", detail.str()); }
+	if (message == WM_DEVICECHANGE) { traceLog("window-device-change", std::to_string(static_cast<unsigned long long>(wParam))); }
+	if (message == WM_POWERBROADCAST) { traceLog("window-power-broadcast", std::to_string(static_cast<unsigned long long>(wParam))); }
 	if (message == WM_DRAWITEM) {
 		auto *item = reinterpret_cast<DRAWITEMSTRUCT *>(lParam);
 		if (item && item->CtlType == ODT_BUTTON && item->CtlID >= ID_IMPORT_PLAYLIST && item->CtlID <= ID_CLEAR_LOCAL) { drawBrandedButton(*item); return TRUE; }
@@ -1787,11 +1966,13 @@ static LRESULT CALLBACK windowProc(HWND window, UINT message, WPARAM wParam, LPA
 			g_hub.clearLocalLibrary(); g_libraryStatus = L"Local library cleared.";
 		} else if (action == ID_USE_LOCAL || action == ID_USE_YOUTUBE || action == ID_USE_EXTERNAL) {
 			const std::string source = action == ID_USE_LOCAL ? "local" : (action == ID_USE_EXTERNAL ? "external" : "youtube");
+			traceLog("provider-switch-request", "from=" + g_hub.activeSource() + " to=" + source);
 			if (source == "local" && g_hub.localLibrary().empty()) g_libraryStatus = L"Add local files or a folder before selecting Local files.";
 			else if (source == "youtube" && g_hub.youtubeFallback().empty()) g_libraryStatus = L"Import a YouTube fallback playlist before selecting YouTube.";
 			else {
 				if (g_player) g_player->command("STOP"); if (g_youtubePlayer) { g_youtubePlayer->command("STOP"); g_youtubePlayer->hide(); }
 				g_hub.activateSource(source); syncHubQueueView(); if (source != "external") playHubNext();
+				traceLog("provider-switch-complete", "active=" + g_hub.activeSource());
 				g_libraryStatus = source == "local" ? L"Local files are now the active music source. Chat requests are unavailable." : (source == "external" ? L"External player selected. Start Spotify or another compatible desktop player." : L"YouTube is now the active music source.");
 			}
 		} else {
@@ -2318,6 +2499,10 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int)
 	// second browser instance and trip a libcef process-singleton assertion.
 	const int subprocessExit = CefExecuteProcess(cefMainArgs, cefApp, nullptr);
 	if (subprocessExit >= 0) return subprocessExit;
+	SetUnhandledExceptionFilter(traceUnhandledException);
+	traceLog("process-start", wcsstr(GetCommandLineW(), L"--watchdog") ? "watchdog=1" : "watchdog=0");
+	EnumDisplayMonitors(nullptr, nullptr, traceMonitor, 0);
+	traceProcessMemory();
 
 	// Keep the browser process and every Chromium child in one Windows job.
 	// CEF normally tears its renderer/GPU/utility processes down during
@@ -2363,7 +2548,11 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int)
 		CloseHandle(singleInstance);
 		return 0;
 	}
-	CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+	const HRESULT comResult = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+	{
+		std::ostringstream detail; detail << "hr=0x" << std::hex << static_cast<unsigned long>(comResult);
+		traceLog("com-initialise", detail.str());
+	}
 	GdiplusStartupInput gdiplusInput; ULONG_PTR gdiplusToken = 0; GdiplusStartup(&gdiplusToken, &gdiplusInput, nullptr);
 	const std::wstring soraPath = executableAssetPath(L"Sora-Variable.ttf");
 	AddFontResourceExW(soraPath.c_str(), FR_PRIVATE, nullptr);
@@ -2403,11 +2592,17 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int)
 		// file; Chromium then terminates on LOG_TO_FILE with an empty path.
 		CefString(&cefSettings.log_file) = cefData + L"\\cef.log";
 	}
+	traceLog("cef-initialise-begin");
 	if (!CefInitialize(cefMainArgs, cefSettings, cefApp, nullptr)) {
+		traceLog("cef-initialise-failed");
 		if (splash) DestroyWindow(splash); RemoveFontResourceExW(soraPath.c_str(), FR_PRIVATE, nullptr);
 		GdiplusShutdown(gdiplusToken); CoUninitialize(); return 1;
 	}
-	Player player; g_player = &player; if (!player.initialise()) return 2;
+	traceLog("cef-initialise-complete");
+	auto playerOwner = std::make_unique<Player>();
+	Player &player = *playerOwner;
+	g_player = &player;
+	if (!player.initialise()) return 2;
 	HICON appIcon = static_cast<HICON>(LoadImageW(instance, MAKEINTRESOURCEW(101), IMAGE_ICON, 0, 0, LR_DEFAULTSIZE));
 	WNDCLASSW wc{}; wc.style = CS_DBLCLKS; wc.lpfnWndProc = windowProc; wc.hInstance = instance; wc.hCursor = LoadCursor(nullptr, IDC_ARROW); wc.hIcon = appIcon; wc.lpszClassName = L"RearSilverMusicPlayerWindow"; RegisterClassW(&wc);
 	HWND window = CreateWindowExW(0, wc.lpszClassName, L"RearSilver Stream Suite | Control Hub", WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN,
@@ -2481,12 +2676,23 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int)
 	// The YouTube CEF browser is created lazily by CefYouTubePlayer::load().
 	// Spotify and Local operation therefore keep no idle OSR browser alive.
 	g_youtubePlayer->setParent(window);
+	// Restoring the provider does not pass through the Library button handler.
+	// Recreate the YouTube browser explicitly on cold start so a persisted
+	// YouTube session is immediately usable rather than waiting for the user to
+	// click "Use YouTube" again.
+	if (g_hub.activeSource() == "youtube") {
+		traceLog("youtube-restored-provider-init", g_hub.hasCurrent() ? "current=1" : "current=0");
+		if (g_hub.hasCurrent() && g_hub.current().provider != "local")
+			startHubTrack(g_hub.current(), false);
+		else
+			playHubNext();
+	}
 	// OBS launches the Hub; the Hub is the sole owner of its optional apps.
 	launchManagedPrograms();
 	HANDLE pipe = CreateNamedPipeW(L"\\\\.\\pipe\\RearSilverStreamSuiteMusicPlayer", PIPE_ACCESS_DUPLEX,
 		PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_NOWAIT, 1, 1024 * 1024, 1024 * 1024, 0, nullptr);
 	if (pipe == INVALID_HANDLE_VALUE) return 3;
-	bool connected = false, running = true; std::string input, lastSpotifyQueueSignature,lastChatSender; ULONGLONG lastStatus = 0, lastHubStatus = 0, lastYouTubePoll = 0, lastExternalPoll = 0, lastSpotifyUiRefresh = 0, lastTwitchValidation=GetTickCount64(); uint64_t lastStreamerRevision=0,lastBotRevision=0,lastChatStreamerRevision=0,lastChatBotRevision=0;
+	bool connected = false, running = true; std::string input, lastSpotifyQueueSignature,lastChatSender; ULONGLONG lastStatus = 0, lastHubStatus = 0, lastYouTubePoll = 0, lastExternalPoll = 0, lastSpotifyUiRefresh = 0, lastTwitchValidation=GetTickCount64(), lastTraceHeartbeat = 0; uint64_t lastStreamerRevision=0,lastBotRevision=0,lastChatStreamerRevision=0,lastChatBotRevision=0;
 	while (running) {
 		MSG message{}; while (PeekMessageW(&message, nullptr, 0, 0, PM_REMOVE)) { TranslateMessage(&message); DispatchMessageW(&message); }
 		if (g_closeRequested) { running = false; continue; }
@@ -2655,32 +2861,66 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int)
 			RECT playbackRegion{0, std::max(0L, client.bottom - 106), client.right, client.bottom};
 			InvalidateRect(window, &playbackRegion, FALSE);
 		}
+		if (GetTickCount64() - lastTraceHeartbeat >= 5000) {
+			std::ostringstream detail;
+			detail << "provider=" << g_hub.activeSource()
+				<< " youtube_active=" << (g_youtubePlayer && g_youtubePlayer->active() ? 1 : 0)
+				<< " visible=" << (IsWindowVisible(window) ? 1 : 0)
+				<< " iconic=" << (IsIconic(window) ? 1 : 0)
+				<< " foreground=" << (GetForegroundWindow() == window ? 1 : 0);
+			traceLog("heartbeat", detail.str());
+			traceProcessMemory();
+			lastTraceHeartbeat = GetTickCount64();
+		}
 		Sleep(10);
 	}
+	traceLog("shutdown-begin", "provider=" + g_hub.activeSource());
 	// Managed applications close first while the Hub is still fully alive. This
 	// preserves the successful ordering of the old OBS Auto-Start Manager and
 	// prevents both abandoned apps and a competing GPU/compositor teardown.
-	if (musicBool(L"tool.autoClose", true)) closeManagedProgramsAndWait();
+	if (musicBool(L"tool.autoClose", true)) {
+		traceLog("managed-apps-close-begin");
+		closeManagedProgramsAndWait();
+		traceLog("managed-apps-close-complete");
+	}
 
 	// Let DWM finish retiring the optional applications' surfaces before the
 	// Hub begins its own Chromium teardown. OBS used to provide this separation
 	// naturally because it remained alive after closing managed applications.
-	DwmFlush(); Sleep(200); DwmFlush();
+	tracedDwmFlush("after-managed-apps-1"); Sleep(200); tracedDwmFlush("after-managed-apps-2");
 	lifecycleLog("browser-shutdown-begin");
+	traceLog("network-stop-begin");
 	// Keep the native Hub visible while its embedded browsers close. Hiding its
 	// DirectComposition surface first can momentarily blank another display.
 	g_twitchReader.disconnect();g_twitchSender.disconnect();g_streamerTwitch.stop();g_botTwitch.stop();g_spotify.stop(); g_systemMedia.stop();
+	traceLog("network-stop-complete");
 	if (g_overlayDesigner) { g_overlayDesigner->shutdown(); g_overlayDesigner.reset(); }
 	if (g_youtubePlayer) { g_youtubePlayer->shutdown(); g_youtubePlayer = nullptr; }
-	DwmFlush();
+	tracedDwmFlush("after-browser-close");
+	traceLog("window-hide-begin");
 	ShowWindow(window, SW_HIDE); UpdateWindow(window);
-	CloseHandle(pipe); DestroyWindow(window); g_player = nullptr;
+	traceLog("window-hide-complete");
+	CloseHandle(pipe); traceLog("window-destroy-begin"); DestroyWindow(window); traceLog("window-destroy-complete"); g_player = nullptr;
+	// Player owns miniaudio state and a GDI+ artwork Image. Destroy it before
+	// the process tears down either subsystem instead of leaving its destructor
+	// to run after GdiplusShutdown at the closing brace of wWinMain.
+	playerOwner.reset();
+	traceLog("native-player-destroyed");
 	if (g_controlFont) { DeleteObject(g_controlFont); g_controlFont = nullptr; } if (g_controlBackgroundBrush) { DeleteObject(g_controlBackgroundBrush); g_controlBackgroundBrush = nullptr; }
 	g_splashImage.reset(); g_brandHeaderImage.reset(); g_brandIconImage.reset(); RemoveFontResourceExW(soraPath.c_str(), FR_PRIVATE, nullptr);
 	// CEF must be shut down on its initialising thread while COM is still alive.
 	// Releasing COM first left Chromium's compositor to be dismantled by process
 	// termination, which can briefly reset a second monitor's presentation path.
+	// The CefApp is also reference-counted by the local browser-process owner.
+	// Release that final owner before CefShutdown; allowing its destructor to run
+	// after CefShutdown caused the repeatable 0xc0000005 recorded at process exit.
+	cefApp = nullptr;
+	traceLog("cef-app-reference-released");
+	traceLog("cef-shutdown-begin");
 	CefShutdown();
+	traceLog("cef-shutdown-complete");
 	lifecycleLog("clean-exit");
+	traceProcessMemory();
+	traceLog("process-exit-clean");
 	GdiplusShutdown(gdiplusToken); CoUninitialize(); ReleaseMutex(singleInstance); CloseHandle(singleInstance); return 0;
 }

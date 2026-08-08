@@ -5,6 +5,10 @@
 #include "rs_music_metadata.hpp"
 #include "rs_music_youtube_resolver.hpp"
 #include "enhancements/rs_auto_start.hpp"
+#include "enhancements/rs_browser_refresh.hpp"
+#include "enhancements/rs_quick_text.hpp"
+#include "enhancements/rs_timer.hpp"
+#include "enhancements/rs_instant_replay.hpp"
 
 #include <QDateTime>
 #include <QFileInfo>
@@ -27,19 +31,16 @@ RsMusicController::RsMusicController(RsMusicState *state, QObject *parent) : QOb
 			obs_source_t *capture = obs_get_source_by_name("Music Capture");
 			const bool captureExists = capture != nullptr; if (capture) obs_source_release(capture);
 			const QString player = RsMusicLocalPlayer::instance().executablePath();
-			const bool autoStart = !player.isEmpty() && RsAutoStart::containsProgram(player);
+			// The Control Hub is core infrastructure, not an optional autostart item.
+			// Keep the legacy setup surface truthful while it remains in the dock.
+			const bool autoStart = !player.isEmpty();
 			RsMusicLocalPlayer::instance().sendUiCommand("SETUP_STATE",
 				QString("%1\t%2").arg(captureExists ? "true" : "false", autoStart ? "true" : "false"));
 		};
 		if (command == "SETUP_STATUS") { publishSetupState(); return; }
-		if (command.startsWith("AUTOSTART\t")) {
-			const QString player = RsMusicLocalPlayer::instance().executablePath();
-			if (!player.isEmpty()) {
-				if (command.section('\t', 1, 1) == "true") RsAutoStart::addProgram(player);
-				else RsAutoStart::removeProgram(player);
-			}
-			publishSetupState(); return;
-		}
+		// The Control Hub is mandatory infrastructure now. Legacy AUTOSTART
+		// messages are acknowledged but no longer add it to the optional list.
+		if (command.startsWith("AUTOSTART\t")) { publishSetupState(); return; }
 		if (command.startsWith("AUTH_ACTION\t")) {
 			const QStringList parts = command.split('\t');
 			if (parts.size() >= 3) emit twitchAuthActionRequested(parts[1], parts[2]);
@@ -68,6 +69,37 @@ RsMusicController::RsMusicController(RsMusicState *state, QObject *parent) : QOb
 				if (bits.size() == 3) QSettings("RearSilver", "RearSilver-Stream-Suite").setValue(
 					QString("music/commands/%1/%2").arg(bits[1], bits[2]), value == "true" || value == "1");
 			}
+			return;
+		}
+		if (command.startsWith("TOOL\t")) {
+			const QString action = command.section('\t', 1, 1);
+			const QByteArray raw = command.section('\t', 2).toUtf8();
+			QJsonParseError error;
+			const QJsonDocument json = QJsonDocument::fromJson("{\"value\":" + raw + "}", &error);
+			const QJsonValue value = error.error == QJsonParseError::NoError
+				? json.object().value("value") : QJsonValue(command.section('\t', 2));
+			if (action == "setAutoLaunch") RsAutoStart::setAutoLaunchEnabled(value.toBool());
+			else if (action == "setAutoClose") RsAutoStart::setAutoCloseEnabled(value.toBool());
+			else if (action == "launchPrograms") RsAutoStart::launchPrograms();
+			else if (action == "closePrograms") RsAutoStart::closePrograms();
+			else if (action == "addProgram") RsAutoStart::addProgram(value.toString());
+			else if (action == "removeProgram") RsAutoStart::removeProgram(value.toString());
+			else if (action == "launchProgram") RsAutoStart::launchProgram(value.toString());
+			else if (action == "closeProgram") RsAutoStart::closeProgram(value.toString());
+			else if (action == "refreshCurrent") RsBrowserRefresh::refreshCurrentScene();
+			else if (action == "refreshAll") RsBrowserRefresh::refreshAllScenes();
+			else if (action == "dropText") { const QJsonObject o=value.toObject(); RsQuickText::showText(o.value("text").toString(),o.value("size").toInt(120),o.value("colour").toString("#ffffff"),o.value("font").toString("Sora")); }
+			else if (action == "clearText") RsQuickText::clearAll();
+			else if (action == "timerEnsure") { const QJsonObject o=value.toObject(); RsTimer::configure(o.value("label").toString("Timer"),o.value("mode").toString("countdown"),o.value("seconds").toInt(300)); }
+			else if (action == "timerStyle") { const QJsonObject o=value.toObject(); RsTimer::configureStyle(o.value("textColour").toString("#ffffff"),o.value("labelSize").toInt(28),o.value("timeSize").toInt(84),o.value("shadow").toBool(true),o.value("background").toBool(false),o.value("backgroundColour").toString("#000000"),o.value("backgroundOpacity").toInt(70),o.value("backgroundRadius").toInt(48),o.value("hideWhenFinished").toBool(false)); }
+			else if (action == "timerStart") RsTimer::start();
+			else if (action == "timerPause") RsTimer::pauseResume();
+			else if (action == "timerReset") RsTimer::reset();
+			else if (action == "timerShow") RsTimer::setVisible(true);
+			else if (action == "timerHide") RsTimer::setVisible(false);
+			else if (action == "triggerReplay") RsInstantReplay::triggerReplay();
+			else if (action == "hideReplay") RsInstantReplay::hideReplaySource();
+			else if (action == "saveReplayFolder") RsInstantReplay::setReplayFolderOverride(value.toString());
 			return;
 		}
 		if (command.startsWith("REQUEST_ACCEPTED\t")) {

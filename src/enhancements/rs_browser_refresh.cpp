@@ -272,6 +272,9 @@ static int refresh_all_scenes(QPlainTextEdit *log)
 
 } // namespace
 
+int RsBrowserRefresh::refreshCurrentScene() { return refresh_current_scene(nullptr); }
+int RsBrowserRefresh::refreshAllScenes() { return refresh_all_scenes(nullptr); }
+
 // ---------------------------------------------------------------
 // UI factory (keeps your buttons/logs)
 // ---------------------------------------------------------------

@@ -84,6 +84,11 @@ static QStringList cfg_load_programs()
 		s = s.trimmed();
 
 	lines.removeAll(QString());
+	// The Control Hub is part of the Suite runtime, not an optional managed app.
+	// Older builds added it to this list; silently migrate that stale entry out.
+	lines.erase(std::remove_if(lines.begin(), lines.end(), [](const QString &path) {
+		return QFileInfo(path).fileName().compare("RearSilver-Music-Player.exe", Qt::CaseInsensitive) == 0;
+	}), lines.end());
 	return lines;
 }
 
@@ -428,6 +433,16 @@ bool RsAutoStart::autoLaunchEnabled()
 {
 	return cfg_load_bool(kCfgAutoLaunch, false);
 }
+
+bool RsAutoStart::autoCloseEnabled() { return cfg_load_bool(kCfgAutoClose, false); }
+QStringList RsAutoStart::programs() { return cfg_load_programs(); }
+
+void RsAutoStart::setAutoLaunchEnabled(bool enabled) { cfg_save_bool(kCfgAutoLaunch, enabled); }
+void RsAutoStart::setAutoCloseEnabled(bool enabled) { cfg_save_bool(kCfgAutoClose, enabled); }
+void RsAutoStart::launchPrograms() { do_launch_paths(cfg_load_programs(), nullptr); }
+void RsAutoStart::closePrograms() { do_close_paths(cfg_load_programs(), nullptr); }
+void RsAutoStart::launchProgram(const QString &path) { if (!path.trimmed().isEmpty()) do_launch_paths({path}, nullptr); }
+void RsAutoStart::closeProgram(const QString &path) { if (!path.trimmed().isEmpty()) do_close_paths({path}, nullptr); }
 
 void RsAutoStart::addProgram(const QString &path)
 {

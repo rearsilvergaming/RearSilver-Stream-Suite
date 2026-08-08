@@ -1,0 +1,165 @@
+﻿<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+*{box-sizing:border-box}body{margin:0;background:#111821;color:#e6e8eb;font:15px Sora,Segoe UI,sans-serif}.intro,p{color:#aebdcc;line-height:1.5}.intro{margin:0 0 18px}.grid{display:grid;grid-template-columns:repeat(2,minmax(320px,1fr));gap:16px}.card{border:1px solid #303b4a;border-radius:15px;background:#151e29;padding:20px}.wide{grid-column:1/-1}h2,h3{margin:0 0 8px}.row{display:flex;gap:10px;align-items:end;margin-top:10px}.row>*{flex:1}button,input,select{width:100%;font:inherit;color:#e6e8eb;background:#1e2633;border:1px solid #3b4a60;border-radius:9px;padding:11px 13px}button{font-weight:700;cursor:pointer}button:hover{border-color:#00d4ff;background:#063847}.primary{background:#007f91;border-color:#00d4ff}.danger{color:#ff9caa}.small{width:auto;flex:0 0 auto}label{display:block;color:#8fb9e8;font-size:12px;margin:12px 0 6px}.status{margin-top:13px;color:#7f95ad;font-size:13px}.preview{min-height:88px;display:grid;place-items:center;margin-top:12px;border:1px solid #303b4a;border-radius:10px;background:#0b0f14;overflow:hidden}.presets{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}.presets button{width:auto}.check{display:flex;align-items:center;gap:8px;color:#b9c9da}.check input{width:auto}.program{display:grid;grid-template-columns:1fr auto auto auto;gap:8px;align-items:center;padding:8px 0;border-bottom:1px solid #293546}.program span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.colour{display:grid;grid-template-columns:44px 1fr;gap:8px}.colour input[type=color]{height:43px;padding:3px}.duration{display:grid;grid-template-columns:1fr 1fr;gap:8px}.hint{font-size:12px;color:#7f95ad;margin-top:8px}@media(max-width:900px){.grid{grid-template-columns:1fr}.wide{grid-column:auto}.row{flex-wrap:wrap}}
+</style>
+</head>
+<body>
+<p class="intro">The Control Hub owns Stream Tools. Styling changes update live in OBS; action buttons are reserved for actions.</p>
+<div class="grid">
+<section class="card wide">
+<h2>Optional applications</h2>
+<p>OBS starts the Hub. The Hub then launches these optional applications and closes them when the Hub exits.</p>
+<div class="row">
+<input id="programPath" readonly placeholder="No application selected">
+<button id="browseProgram" class="small">Choose program…</button>
+<button id="addProgram" class="primary small">Add program</button>
+</div>
+<div id="programs">
+</div>
+<div class="row">
+<button data-action="launchPrograms" class="primary">Launch all optional apps</button>
+<button data-action="closePrograms">Close all optional apps</button>
+</div>
+</section>
+<section class="card">
+<h2>Browser Refresh</h2>
+<p>Reload browser sources while protecting sign-in and donation-provider sessions.</p>
+<div class="row">
+<button data-action="refreshCurrent" class="primary">Current scene</button>
+<button data-action="refreshAll">All scenes</button>
+</div>
+<div id="browserStatus" class="status">Ready.</div>
+</section>
+<section class="card">
+<h2>Instant Replay</h2>
+<p>Save the Replay Buffer and play it through the framed replay source.</p>
+<div class="row">
+<button data-action="triggerReplay" class="primary">Save & play</button>
+<button data-action="hideReplay">Hide replay</button>
+</div>
+<label>Optional replay folder</label>
+<div class="row">
+<input id="replayFolder" readonly placeholder="Use OBS replay folder">
+<button id="browseReplay" class="small">Choose folder…</button>
+<button id="clearReplayFolder" class="small">Use OBS folder</button>
+</div>
+<div class="status">Replay frame design will move here as its own design surface.</div>
+</section>
+<section class="card wide">
+<h2>Quick Text</h2>
+<p>Font, colour and size update live when the source exists. â€œShow textâ€ creates or repairs it and makes it visible.</p>
+<label>Message</label>
+<input id="quickText" placeholder="Type the message to show on stream">
+<div id="quickPreview" class="preview">Preview</div>
+<div class="row">
+<div>
+<label>Size</label>
+<input id="quickSize" type="range" min="8" max="300" value="120">
+</div>
+<div>
+<label>Colour</label>
+<div class="colour">
+<input id="quickColour" type="color" value="#ffffff">
+<input id="quickColourHex" value="#ffffff" maxlength="7">
+</div>
+</div>
+<div>
+<label>Font</label>
+<select id="quickFont">
+</select>
+</div>
+</div>
+<div class="row">
+<button data-action="dropText" class="primary">Show text</button>
+<button id="savePreset">Save as preset</button>
+<button data-action="clearText" class="danger">Clear</button>
+</div>
+<label>Presets (right-click to remove)</label>
+<div id="presets" class="presets">
+</div>
+</section>
+<section class="card wide">
+<h2>Timer</h2>
+<p>Configuration and styling update live. Start, pause and reset remain explicit controls.</p>
+<div class="row">
+<div>
+<label>Title</label>
+<input id="timerLabel" value="Timer">
+</div>
+<div>
+<label>Mode</label>
+<select id="timerMode">
+<option value="countdown">Countdown</option>
+<option value="stopwatch">Stopwatch</option>
+</select>
+</div>
+<div class="duration">
+<div><label>Minutes</label><input id="timerMinutes" type="number" min="0" max="999" value="5"></div>
+<div><label>Seconds</label><input id="timerSecondsPart" type="number" min="0" max="59" value="0"></div>
+</div>
+</div>
+<div class="row">
+<div>
+<label>Text colour</label>
+<div class="colour">
+<input id="timerTextColour" type="color" value="#ffffff">
+<input id="timerTextHex" value="#ffffff" maxlength="7">
+</div>
+</div>
+<div>
+<label>Title size</label>
+<input id="timerLabelSize" type="number" min="8" max="200" value="28">
+</div>
+<div>
+<label>Time size</label>
+<input id="timerTimeSize" type="number" min="12" max="300" value="84">
+</div>
+<div>
+<label>Background colour</label>
+<div class="colour">
+<input id="timerBgColour" type="color" value="#000000">
+<input id="timerBgHex" value="#000000" maxlength="7">
+</div>
+</div>
+</div>
+<div class="row">
+<div>
+<label>Background opacity</label>
+<input id="timerBgOpacity" type="range" min="0" max="100" value="70">
+</div>
+<div>
+<label>Corner radius</label>
+<input id="timerBgRadius" type="range" min="0" max="100" value="48">
+</div>
+<label class="check">
+<input id="timerShadow" type="checkbox" checked>Shadow</label>
+<label class="check">
+<input id="timerBackground" type="checkbox">Background</label>
+<label class="check">
+<input id="timerHideFinished" type="checkbox">Hide when finished</label>
+</div>
+<div class="row">
+<button data-action="timerEnsure">Repair source</button>
+<button data-action="timerStart" class="primary">Start</button>
+<button data-action="timerPause">Pause / resume</button>
+<button data-action="timerReset">Reset</button>
+<button data-action="timerShow">Show</button>
+<button data-action="timerHide">Hide</button>
+</div>
+</section>
+</div>
+<script>(()=>{const $=id=>document.getElementById(id),post=(action,value='')=>chrome.webview.postMessage(JSON.stringify({page:'tools',action,value}));let presetList=['BRB','Coffee Break','Back Soon'],programList=[],ready=false,timerDebounce=0,quickDebounce=0;const fonts=['Sora','Arial','Segoe UI','Calibri','Verdana','Tahoma','Trebuchet MS','Georgia','Times New Roman','Impact','Comic Sans MS'];fonts.forEach(f=>{const o=document.createElement('option');o.textContent=f;$('quickFont').appendChild(o)});const validHex=x=>/^#[0-9a-f]{6}$/i.test(x);function pair(a,b){$(a).oninput=()=>{$(b).value=$(a).value;changed(a)};$(b).oninput=()=>{if(validHex($(b).value)){$(a).value=$(b).value;changed(a)}}}const quick=()=>({text:$('quickText').value,size:+$('quickSize').value,colour:$('quickColour').value,font:$('quickFont').value});const timer=()=>({label:$('timerLabel').value,mode:$('timerMode').value,seconds:(+$('timerMinutes').value||0)*60+(+$('timerSecondsPart').value||0)});const timerStyle=()=>({textColour:$('timerTextColour').value,labelSize:+$('timerLabelSize').value,timeSize:+$('timerTimeSize').value,shadow:$('timerShadow').checked,background:$('timerBackground').checked,backgroundColour:$('timerBgColour').value,backgroundOpacity:+$('timerBgOpacity').value,backgroundRadius:+$('timerBgRadius').value,hideWhenFinished:$('timerHideFinished').checked});function changed(id){preview();if(!ready)return;if(id.startsWith('quick')){clearTimeout(quickDebounce);quickDebounce=setTimeout(()=>post('dropText',quick()),120)}else{clearTimeout(timerDebounce);timerDebounce=setTimeout(()=>{post('timerEnsure',timer());post('timerStyle',timerStyle())},120)}}function preview(){const p=$('quickPreview'),s=+($('quickSize').value||120);p.textContent=$('quickText').value||'Preview';p.style.color=$('quickColour').value;p.style.fontFamily=$('quickFont').value;p.style.fontSize=Math.max(10,Math.min(68,s*.4))+'px'}function renderPresets(){$('presets').innerHTML='';presetList.forEach((x,i)=>{const b=document.createElement('button');b.textContent=x;b.onclick=()=>{$('quickText').value=x;preview();post('dropText',quick())};b.oncontextmenu=e=>{e.preventDefault();presetList.splice(i,1);post('saveQuickPresets',presetList);renderPresets()};$('presets').appendChild(b)})}function renderPrograms(){$('programs').innerHTML='';programList.forEach((x,i)=>{const r=document.createElement('div');r.className='program';const s=document.createElement('span');s.textContent=x;s.title=x;r.appendChild(s);['Launch','Close','Remove'].forEach((n,j)=>{const b=document.createElement('button');b.className='small'+(j===2?' danger':'');b.textContent=n;b.onclick=()=>{if(j===2){programList.splice(i,1);post('removeProgram',x);post('savePrograms',programList);renderPrograms()}else post(j===0?'launchProgram':'closeProgram',x)};r.appendChild(b)});$('programs').appendChild(r)})}document.querySelectorAll('[data-action]').forEach(b=>b.onclick=()=>{const a=b.dataset.action;let v='';if(a==='dropText')v=quick();if(a==='saveReplayFolder')v=$('replayFolder').value;if(a==='timerEnsure')v=timer();post(a,v)});$('addProgram').onclick=()=>{const x=$('programPath').value.trim();if(!x)return;if(!programList.some(p=>p.toLowerCase()===x.toLowerCase())){programList.push(x);post('addProgram',x);post('savePrograms',programList);renderPrograms()}$('programPath').value=''};$('savePreset').onclick=()=>{const x=$('quickText').value.trim();if(x&&!presetList.includes(x)){presetList.push(x);post('saveQuickPresets',presetList);renderPresets()}};pair('quickColour','quickColourHex');pair('timerTextColour','timerTextHex');pair('timerBgColour','timerBgHex');document.querySelectorAll('#quickText,#quickSize,#quickFont,#timerLabel,#timerMode,#timerMinutes,#timerSecondsPart,#timerLabelSize,#timerTimeSize,#timerBgOpacity,#timerBgRadius,#timerShadow,#timerBackground,#timerHideFinished').forEach(e=>{e.oninput=()=>changed(e.id);e.onchange=()=>changed(e.id)});window.rsApplyTools=c=>{ready=false;$('quickSize').value=c.quickSize||120;$('quickColour').value=$('quickColourHex').value=c.quickColour||'#ffffff';$('quickFont').value=c.quickFont||'Sora';$('timerLabel').value=c.timerLabel||'Timer';$('timerMode').value=c.timerMode||'countdown';const sec=c.timerSeconds??300;$('timerMinutes').value=Math.floor(sec/60);$('timerSecondsPart').value=sec%60;$('timerTextColour').value=$('timerTextHex').value=c.timerTextColour||'#ffffff';$('timerLabelSize').value=c.timerLabelSize||28;$('timerTimeSize').value=c.timerTimeSize||84;$('timerShadow').checked=c.timerShadow!==false;$('timerBackground').checked=!!c.timerBackground;$('timerBgColour').value=$('timerBgHex').value=c.timerBgColour||'#000000';$('timerBgOpacity').value=c.timerBgOpacity??70;$('timerBgRadius').value=c.timerBgRadius??48;$('timerHideFinished').checked=!!c.timerHideFinished;$('replayFolder').value=c.replayFolder||'';presetList=Array.isArray(c.quickPresets)?c.quickPresets:presetList;programList=Array.isArray(c.programs)?c.programs:programList;$('browserStatus').textContent=c.status||'Ready.';preview();renderPresets();renderPrograms();ready=true};preview();renderPresets();chrome.webview.postMessage('tools-ready')})();</script>
+<script>
+(()=>{const byId=id=>document.getElementById(id),post=(action,value='')=>chrome.webview.postMessage(JSON.stringify({page:'tools',action,value}));
+byId('browseProgram').onclick=()=>post('pickProgram');
+byId('browseReplay').onclick=()=>post('pickReplayFolder');
+byId('clearReplayFolder').onclick=()=>{byId('replayFolder').value='';post('saveReplayFolder','')};
+window.rsSelectedProgram=path=>{byId('programPath').value=path||''};
+window.rsSelectedReplayFolder=path=>{byId('replayFolder').value=path||'';post('saveReplayFolder',path||'')};})();
+</script>
+</body>
+</html>
+

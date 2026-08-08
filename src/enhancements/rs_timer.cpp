@@ -121,6 +121,16 @@ struct TimerState {
 	bool hideWhenFinished = false;
 };
 
+static void loadTimerSettings(TimerState &s);
+
+static TimerState &hubTimerState()
+{
+	static TimerState state;
+	static bool loaded = false;
+	if (!loaded) { loadTimerSettings(state); loaded = true; }
+	return state;
+}
+
 static QSettings timerSettings()
 {
 	return QSettings("RearSilver", "RearSilver-Stream-Suite");
@@ -1039,3 +1049,43 @@ QWidget *RsTimer::createPage(RsMainDock *dock, QWidget *parent)
 	(void)dock;
 	return scroll;
 }
+
+void RsTimer::configure(const QString &label, const QString &mode, int seconds)
+{
+	TimerState &state = hubTimerState(); state.label = label.trimmed().isEmpty() ? "Timer" : label.trimmed();
+	state.mode = mode.compare("stopwatch", Qt::CaseInsensitive) == 0 ? TimerMode::Stopwatch : TimerMode::Countdown;
+	state.totalSeconds = qMax(0, seconds); state.remainingSeconds = state.mode == TimerMode::Countdown ? state.totalSeconds : 0;
+	saveTimerSettings(state); ensureTimerBrowserSource(state); updateTimerBrowserUrl(state);
+}
+
+void RsTimer::configureStyle(const QString &textColour, int labelSize, int timeSize,
+	bool shadow, bool background, const QString &backgroundColour,
+	int backgroundOpacity, int backgroundRadius, bool hideWhenFinished)
+{
+	TimerState &s = hubTimerState();
+	s.textColor = textColour; s.labelFontSize = qBound(8, labelSize, 200);
+	s.timeFontSize = qBound(12, timeSize, 300); s.shadowEnabled = shadow;
+	s.bgEnabled = background; s.bgColor = backgroundColour;
+	s.bgOpacity = qBound(0, backgroundOpacity, 100); s.bgRadius = qBound(0, backgroundRadius, 100);
+	s.hideWhenFinished = hideWhenFinished; saveTimerSettings(s); ensureTimerBrowserSource(s); updateTimerBrowserUrl(s);
+}
+
+void RsTimer::start()
+{
+	TimerState &s = hubTimerState(); s.running = true; s.paused = false;
+	s.lastTickMs = QDateTime::currentMSecsSinceEpoch(); ensureTimerBrowserSource(s); updateTimerBrowserUrl(s);
+}
+
+void RsTimer::pauseResume()
+{
+	TimerState &s = hubTimerState(); if (!s.running) { start(); return; }
+	applyPendingTick(&s); s.paused = !s.paused; s.lastTickMs = QDateTime::currentMSecsSinceEpoch(); updateTimerBrowserUrl(s);
+}
+
+void RsTimer::reset()
+{
+	TimerState &s = hubTimerState(); s.running = false; s.paused = false; s.elapsedSeconds = 0;
+	s.remainingSeconds = s.mode == TimerMode::Countdown ? s.totalSeconds : 0; updateTimerBrowserUrl(s);
+}
+
+void RsTimer::setVisible(bool visible) { setTimerSourceVisible(visible); }

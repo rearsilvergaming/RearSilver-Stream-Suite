@@ -320,6 +320,22 @@ static void add_preset_row(QWidget *page, QVBoxLayout *presetsLayout, const QStr
 
 } // namespace
 
+bool RsQuickText::showText(const QString &text, int size, const QString &colour, const QString &font)
+{
+	QColor c(colour); if (!c.isValid()) c = Qt::white;
+	const int boundedSize = qBound(8, size, 300);
+	chosenFont = QFont(font.trimmed().isEmpty() ? QStringLiteral("Sora") : font, boundedSize);
+	QSettings settings("RearSilver", "RearSilver-Stream-Suite");
+	settings.setValue("quickText/fontFamily", chosenFont.family());
+	settings.setValue("quickText/fontSize", boundedSize);
+	const uint32_t packed = (uint32_t(c.alpha()) << 24) | (uint32_t(c.red()) << 16) |
+		(uint32_t(c.green()) << 8) | uint32_t(c.blue());
+	chosenColor = packed;
+	return drop_text_into_scene(text, boundedSize, packed, true, nullptr);
+}
+
+int RsQuickText::clearAll() { return clean_quicktext_group(); }
+
 
 // ────────────────────────────────────────────────────────────────
 // UI CREATION

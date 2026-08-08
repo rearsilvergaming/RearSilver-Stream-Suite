@@ -1,8 +1,11 @@
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
 #include <windows.h>
+#include <dwmapi.h>
+#include <tlhelp32.h>
 #include <shellapi.h>
 #include <objidl.h>
+#include <shobjidl.h>
 #include <gdiplus.h>
 #include <wrl.h>
 
@@ -56,6 +59,39 @@ using namespace Gdiplus;
 using Microsoft::WRL::Callback;
 using Microsoft::WRL::ComPtr;
 
+static std::string wideToUtf8(const std::wstring &value);
+
+static std::wstring lifecycleLogPath()
+{
+	wchar_t localAppData[MAX_PATH]{};
+	if (!GetEnvironmentVariableW(L"LOCALAPPDATA", localAppData, MAX_PATH)) return L"";
+	const std::wstring folder = std::wstring(localAppData) + L"\\RearSilver Stream Suite";
+	CreateDirectoryW(folder.c_str(), nullptr);
+	return folder + L"\\control-hub-lifecycle.log";
+}
+
+static void lifecycleLog(const char *event)
+{
+	const std::wstring path = lifecycleLogPath();
+	if (path.empty()) return;
+	SYSTEMTIME now{}; GetLocalTime(&now);
+	std::ofstream output(path, std::ios::binary | std::ios::app);
+	if (!output) return;
+	output << now.wYear << '-' << now.wMonth << '-' << now.wDay << ' '
+		<< now.wHour << ':' << now.wMinute << ':' << now.wSecond << '.' << now.wMilliseconds
+		<< " PID=" << GetCurrentProcessId() << " PPID=";
+	DWORD parentId = 0;
+	HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+	if (snapshot != INVALID_HANDLE_VALUE) {
+		PROCESSENTRY32W entry{}; entry.dwSize = sizeof(entry);
+		if (Process32FirstW(snapshot, &entry)) do {
+			if (entry.th32ProcessID == GetCurrentProcessId()) { parentId = entry.th32ParentProcessID; break; }
+		} while (Process32NextW(snapshot, &entry));
+		CloseHandle(snapshot);
+	}
+	output << parentId << " event=" << event << " command=" << wideToUtf8(GetCommandLineW()) << "\r\n";
+}
+
 static bool g_sidebarCollapsed = false;
 static std::unique_ptr<Image> g_brandIconImage;
 static std::unique_ptr<Image> g_brandHeaderImage;
@@ -99,6 +135,10 @@ public:
 		commandLine->AppendSwitch("disable-renderer-backgrounding");
 		commandLine->AppendSwitch("disable-backgrounding-occluded-windows");
 		commandLine->AppendSwitch("disable-background-media-suspend");
+		// Prevent Chromium from promoting video/windowless surfaces to a hardware
+		// multi-plane overlay.  Abrupt MPO/swap-chain transitions can reset DWM and
+		// briefly blank an entire monitor, including while the CEF page is dormant.
+		commandLine->AppendSwitch("disable-direct-composition-video-overlays");
 		commandLine->AppendSwitchWithValue("autoplay-policy", "no-user-gesture-required");
 		commandLine->AppendSwitchWithValue("disable-features",
 			"CalculateNativeWinOcclusion,IntensiveWakeUpThrottling,"
@@ -152,6 +192,13 @@ static std::wstring executableAssetPath(const wchar_t *name)
 
 class WebViewYouTubePlayer {
 public:
+	~WebViewYouTubePlayer() { shutdown(); }
+	void shutdown()
+	{
+		m_ready = false; m_active = false; m_parent = nullptr;
+		if (m_controller) { m_controller->put_IsVisible(FALSE); m_controller->Close(); }
+		m_webView.Reset(); m_controller.Reset();
+	}
 	void initialise(HWND parent)
 	{
 		m_parent = parent;
@@ -535,14 +582,43 @@ public:
 	bool initialise(HWND parent)
 	{
 		m_parent = parent;
+		m_browserClosed.store(false);
 		CefWindowInfo info; info.SetAsWindowless(parent);
 		CefBrowserSettings settings; settings.windowless_frame_rate = 30;
-		return CefBrowserHost::CreateBrowser(info, this, "about:blank", settings, nullptr, nullptr);
+		const bool created = CefBrowserHost::CreateBrowser(info, this, "about:blank", settings, nullptr, nullptr);
+		if (!created) m_browserClosed.store(true);
+		return created;
 	}
+	void setParent(HWND parent) { m_parent = parent; }
 	void shutdown()
 	{
-		if (m_browser) m_browser->GetHost()->CloseBrowser(true);
-		for (int i = 0; i < 200 && m_browser; ++i) Sleep(5);
+		m_active.store(false);
+		closeBrowserAndWait();
+		m_devToolsRegistration = nullptr; m_parent = nullptr;
+	}
+	void closeBrowserAndWait()
+	{
+		if (!m_browser) return;
+		m_browserClosed.store(false);
+		m_browser->GetHost()->CloseBrowser(true);
+		// CEF owns its UI thread because multi_threaded_message_loop is enabled.
+		// CefDoMessageLoopWork is mutually exclusive with that mode and can race
+		// renderer/GPU teardown.  Keep only the native Win32 queue responsive while
+		// OnBeforeClose completes asynchronously on CEF's thread.
+		const ULONGLONG deadline = GetTickCount64() + 2000;
+		while (!m_browserClosed.load() && GetTickCount64() < deadline) {
+			MSG message{};
+			while (PeekMessageW(&message, nullptr, 0, 0, PM_REMOVE)) {
+				if (message.message == WM_QUIT) {
+					PostQuitMessage(static_cast<int>(message.wParam));
+					break;
+				}
+				TranslateMessage(&message);
+				DispatchMessageW(&message);
+			}
+			Sleep(1);
+		}
+		m_devToolsRegistration = nullptr;
 	}
 	void resize() { if (m_browser) m_browser->GetHost()->WasResized(); }
 	void load(const std::string &videoId)
@@ -553,12 +629,31 @@ public:
 		const bool canReusePlayer = m_browser && m_active.load() && !m_videoId.empty();
 		m_videoId = safe; m_active.store(true); m_endedSent = false; m_errorSent = false; m_loadingVideo.store(true);
 		m_positionMs.store(0); m_durationMs.store(0);
+		// CEF is created lazily only while YouTube owns playback. Local and external
+		// providers therefore carry no idle CEF browser/compositor surface.
+		if (!m_browser) {
+			m_pendingLoad = true;
+			if (!m_parent || !initialise(m_parent)) m_pendingLoad = false;
+			if (m_parent) InvalidateRect(m_parent, nullptr, FALSE);
+			return;
+		}
+		m_browser->GetHost()->WasHidden(false);
 		if (canReusePlayer) command("LOAD_VIDEO", safe);
 		else if (m_browser) loadCurrent();
-		else m_pendingLoad = true;
 		if (m_parent) InvalidateRect(m_parent, nullptr, FALSE);
 	}
-	void hide() { m_active.store(false); if (m_browser) m_browser->GetMainFrame()->LoadURL("about:blank"); if (m_parent) InvalidateRect(m_parent, nullptr, FALSE); }
+	void hide()
+	{
+		m_active.store(false);
+		// Destroy the OSR browser rather than retaining an idle Chromium composition
+		// surface. It will be recreated lazily if YouTube is selected again.
+		closeBrowserAndWait();
+		{
+			std::lock_guard<std::mutex> lock(m_paintMutex);
+			m_frame.reset();
+		}
+		if (m_parent) InvalidateRect(m_parent, nullptr, FALSE);
+	}
 	void command(const std::string &action, const std::string &argument = {})
 	{
 		if (!m_browser || !m_active.load()) return;
@@ -632,11 +727,15 @@ public:
 	}
 	void OnAfterCreated(CefRefPtr<CefBrowser> browser) override
 	{
-		m_browser = browser; browser->GetHost()->WasHidden(false); browser->GetHost()->SetFocus(true);
+		m_browser = browser;
+		// The browser is born on about:blank. Do not keep a GPU-backed OSR surface
+		// active until YouTube is actually selected.
+		browser->GetHost()->WasHidden(!m_active.load());
+		browser->GetHost()->SetFocus(m_active.load());
 		m_devToolsRegistration = browser->GetHost()->AddDevToolsMessageObserver(this);
 		if (m_pendingLoad) { m_pendingLoad = false; loadCurrent(); }
 	}
-	void OnBeforeClose(CefRefPtr<CefBrowser>) override { m_devToolsRegistration = nullptr; m_browser = nullptr; }
+	void OnBeforeClose(CefRefPtr<CefBrowser>) override { m_devToolsRegistration = nullptr; m_browser = nullptr; m_browserClosed.store(true); }
 	void OnLoadEnd(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame, int) override
 	{
 		(void)browser; (void)frame;
@@ -784,6 +883,7 @@ private:
 		m_browser->GetMainFrame()->LoadURL("https://rearsilver.local/player?v=" + m_videoId + "&start=" + start);
 	}
 	HWND m_parent = nullptr; CefRefPtr<CefBrowser> m_browser;
+	std::atomic<bool> m_browserClosed{true};
 	CefRefPtr<CefRegistration> m_devToolsRegistration;
 	std::atomic<bool> m_active{false};
 	std::atomic<int> m_nextPollId{1000};
@@ -812,7 +912,7 @@ static constexpr ULONGLONG kSpotifyRequestPropagationGraceMs = 15000;
 static TwitchAccount g_streamerTwitch("streamer"), g_botTwitch("bot");
 static TwitchChatService g_twitchReader, g_twitchSender;
 static bool g_closeRequested = false;
-static int g_page = 0;
+static int g_page = 7;
 static std::string g_streamerAuthState = "disconnected", g_streamerLogin;
 static std::string g_botAuthState = "disconnected", g_botLogin, g_authSender = "streamer";
 static bool g_captureExists = false, g_playerAutoStart = false, g_hostPipeConnected = false;
@@ -1106,6 +1206,117 @@ static constexpr const wchar_t *kMusicSettingsRegistry = L"Software\\RearSilver\
 static std::wstring musicSetting(const wchar_t *name,const wchar_t *fallback){HKEY key{};if(RegOpenKeyExW(HKEY_CURRENT_USER,kMusicSettingsRegistry,0,KEY_READ,&key)!=ERROR_SUCCESS)return fallback;wchar_t value[1024]{};DWORD type=0,bytes=sizeof(value);const LSTATUS result=RegQueryValueExW(key,name,nullptr,&type,reinterpret_cast<BYTE*>(value),&bytes);RegCloseKey(key);return result==ERROR_SUCCESS&&type==REG_SZ?value:fallback;}
 static void setMusicSetting(const wchar_t *name,const std::wstring &value){HKEY key{};DWORD d=0;if(RegCreateKeyExW(HKEY_CURRENT_USER,kMusicSettingsRegistry,0,nullptr,0,KEY_WRITE,nullptr,&key,&d)!=ERROR_SUCCESS)return;RegSetValueExW(key,name,0,REG_SZ,reinterpret_cast<const BYTE*>(value.c_str()),DWORD((value.size()+1)*sizeof(wchar_t)));RegCloseKey(key);}
 static bool musicBool(const wchar_t *name,bool fallback){const auto value=musicSetting(name,fallback?L"true":L"false");return value==L"true"||value==L"1";}
+
+static std::wstring normalisedProgramPath(std::wstring path)
+{
+	std::replace(path.begin(), path.end(), L'/', L'\\');
+	wchar_t full[MAX_PATH]{};
+	if (GetFullPathNameW(path.c_str(), MAX_PATH, full, nullptr)) path = full;
+	std::transform(path.begin(), path.end(), path.begin(), [](wchar_t c) { return wchar_t(towlower(c)); });
+	return path;
+}
+
+static std::vector<std::wstring> managedPrograms()
+{
+	std::vector<std::wstring> programs;
+	const std::string json = wideToUtf8(musicSetting(L"tool.programs", L"[]"));
+	CefRefPtr<CefValue> value = CefParseJSON(json, JSON_PARSER_RFC);
+	if (!value || value->GetType() != VTYPE_LIST) return programs;
+	CefRefPtr<CefListValue> list = value->GetList();
+	for (size_t i = 0; i < list->GetSize(); ++i) {
+		if (list->GetType(i) != VTYPE_STRING) continue;
+		const std::wstring path = utf8ToWide(list->GetString(i).ToString());
+		if (!path.empty() && GetFileAttributesW(path.c_str()) != INVALID_FILE_ATTRIBUTES) programs.push_back(path);
+	}
+	return programs;
+}
+
+static std::vector<DWORD> processIdsForProgram(const std::wstring &program)
+{
+	std::vector<DWORD> ids;
+	const std::wstring wanted = normalisedProgramPath(program);
+	HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+	if (snapshot == INVALID_HANDLE_VALUE) return ids;
+	PROCESSENTRY32W entry{}; entry.dwSize = sizeof(entry);
+	if (Process32FirstW(snapshot, &entry)) do {
+		HANDLE process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, entry.th32ProcessID);
+		if (!process) continue;
+		wchar_t path[32768]{}; DWORD length = DWORD(std::size(path));
+		if (QueryFullProcessImageNameW(process, 0, path, &length) && normalisedProgramPath(path) == wanted)
+			ids.push_back(entry.th32ProcessID);
+		CloseHandle(process);
+	} while (Process32NextW(snapshot, &entry));
+	CloseHandle(snapshot);
+	return ids;
+}
+
+static void launchManagedProgram(const std::wstring &program)
+{
+	if (program.empty() || GetFileAttributesW(program.c_str()) == INVALID_FILE_ATTRIBUTES || !processIdsForProgram(program).empty()) return;
+	const size_t slash = program.find_last_of(L"\\/");
+	const std::wstring folder = slash == std::wstring::npos ? L"" : program.substr(0, slash);
+	ShellExecuteW(nullptr, L"open", program.c_str(), nullptr, folder.empty() ? nullptr : folder.c_str(), SW_SHOWNORMAL);
+}
+
+struct CloseProgramWindows { DWORD processId; bool foundWindow = false; };
+static BOOL CALLBACK closeProgramWindow(HWND window, LPARAM parameter)
+{
+	auto *state = reinterpret_cast<CloseProgramWindows *>(parameter);
+	DWORD processId = 0; GetWindowThreadProcessId(window, &processId);
+	// Match the proven OBS Auto-Start Manager: request closure from every
+	// visible top-level window owned by this process. Filtering on GW_OWNER can
+	// miss applications whose real main window is technically owned.
+	if (processId == state->processId && IsWindowVisible(window)) {
+		state->foundWindow = true; PostMessageW(window, WM_CLOSE, 0, 0);
+	}
+	return TRUE;
+}
+
+static void closeManagedProgram(const std::wstring &program)
+{
+	for (DWORD processId : processIdsForProgram(program)) {
+		CloseProgramWindows state{processId}; EnumWindows(closeProgramWindow, reinterpret_cast<LPARAM>(&state));
+		// Never terminate another application as part of Hub shutdown. Programs
+		// without a normal top-level window remain running and can be closed by
+		// their owner. A forced GPU-process teardown can blank another display.
+	}
+}
+
+static void launchManagedPrograms(){for(const auto &program:managedPrograms())launchManagedProgram(program);}
+static void closeManagedPrograms(){for(const auto &program:managedPrograms())closeManagedProgram(program);}
+
+static void closeManagedProgramsAndWait()
+{
+	const auto programs = managedPrograms();
+	if (programs.empty()) return;
+
+	// Capture only processes present when shutdown begins. A new instance that
+	// the user starts during this grace period must not keep the Hub open.
+	std::vector<DWORD> closingIds;
+	for (const auto &program : programs) {
+		const auto ids = processIdsForProgram(program);
+		closingIds.insert(closingIds.end(), ids.begin(), ids.end());
+		closeManagedProgram(program);
+	}
+	if (closingIds.empty()) return;
+
+	// The old dock returned to OBS, which naturally remained alive while apps
+	// handled WM_CLOSE. The Hub must explicitly provide that same lifetime.
+	// Keep CEF and the Hub window alive for a bounded graceful-close period;
+	// never force-kill an application that chooses not to exit.
+	const ULONGLONG deadline = GetTickCount64() + 5000;
+	while (GetTickCount64() < deadline) {
+		bool anyRunning = false;
+		for (DWORD processId : closingIds) {
+			HANDLE process = OpenProcess(SYNCHRONIZE, FALSE, processId);
+			if (!process) continue;
+			if (WaitForSingleObject(process, 0) == WAIT_TIMEOUT) anyRunning = true;
+			CloseHandle(process);
+		}
+		if (!anyRunning) break;
+		Sleep(20);
+	}
+}
 static std::wstring textOutputFolder(){wchar_t appData[MAX_PATH]{};GetEnvironmentVariableW(L"APPDATA",appData,MAX_PATH);std::wstring folder=std::wstring(appData)+L"\\RearSilver Stream Suite";CreateDirectoryW(folder.c_str(),nullptr);return folder;}
 static std::wstring textOutputPath(){return textOutputFolder()+L"\\now-playing.txt";}
 static void ensureTextOutputFile(){const std::wstring path=textOutputPath();if(GetFileAttributesW(path.c_str())==INVALID_FILE_ATTRIBUTES){std::ofstream output(path,std::ios::binary);}}
@@ -1155,6 +1366,13 @@ static void setOverlayNumber(const wchar_t *name, DWORD value)
 
 class OverlayDesignerSurface {
 public:
+	~OverlayDesignerSurface() { shutdown(); }
+	void shutdown()
+	{
+		m_ready = false; m_page = -1; m_parent = nullptr;
+		if (m_controller) { m_controller->put_IsVisible(FALSE); m_controller->Close(); }
+		m_webView.Reset(); m_controller.Reset();
+	}
 	void initialise(HWND parent)
 	{
 		m_parent = parent;
@@ -1183,6 +1401,7 @@ public:
 								if (message == "settings-ready") { if (m_page == 4) { m_ready = true; sendSettingsConfig(); } return S_OK; }
 								if (message == "commands-ready") { if (m_page == 6) { m_ready = true; sendCommandsConfig(); } return S_OK; }
 								if (message == "accounts-ready") { if (m_page == 5) { m_ready = true; sendAccountsConfig(); } return S_OK; }
+								if (message == "tools-ready") { if (m_page == 7) { m_ready = true; sendToolsConfig(); } return S_OK; }
 								CefRefPtr<CefValue> parsed = CefParseJSON(message, JSON_PARSER_RFC); if (!parsed || parsed->GetType() != VTYPE_DICTIONARY) return S_OK;
 								CefRefPtr<CefDictionaryValue> object = parsed->GetDictionary();
 								if (object->GetString("page").ToString() == "library") {
@@ -1222,6 +1441,54 @@ public:
 									if(action=="sender"){g_authSender=object->GetString("value").ToString();setMusicSetting(L"authSender",utf8ToWide(g_authSender));}
 									else {TwitchAccount &auth=account=="bot"?g_botTwitch:g_streamerTwitch;if(action=="login")auth.beginLogin();else if(action=="reconnect")auth.reconnect();else if(action=="logout")auth.logout();} sendAccountsConfig();return S_OK;
 								}
+								if(object->GetString("page").ToString()=="tools"){
+									const std::string action=object->GetString("action").ToString();
+									if(action=="pickProgram"||action=="pickReplayFolder"){
+										ComPtr<IFileOpenDialog> dialog;
+										if(SUCCEEDED(CoCreateInstance(CLSID_FileOpenDialog,nullptr,CLSCTX_INPROC_SERVER,IID_PPV_ARGS(&dialog)))){
+											DWORD options=0; dialog->GetOptions(&options);
+											const bool folder=action=="pickReplayFolder";
+											dialog->SetOptions(options|FOS_FORCEFILESYSTEM|(folder?FOS_PICKFOLDERS:FOS_FILEMUSTEXIST));
+											dialog->SetTitle(folder?L"Choose instant replay folder":L"Choose an application");
+											if(!folder){const COMDLG_FILTERSPEC filters[]={{L"Applications",L"*.exe"},{L"All files",L"*.*"}};dialog->SetFileTypes(2,filters);dialog->SetDefaultExtension(L"exe");}
+											if(SUCCEEDED(dialog->Show(m_parent))){
+												ComPtr<IShellItem> item; PWSTR raw=nullptr;
+												if(SUCCEEDED(dialog->GetResult(&item))&&SUCCEEDED(item->GetDisplayName(SIGDN_FILESYSPATH,&raw))){
+													CefRefPtr<CefValue> selected=CefValue::Create(); selected->SetString(wideToUtf8(raw));
+													const std::wstring json=utf8ToWide(CefWriteJSON(selected,JSON_WRITER_DEFAULT).ToString());
+													const std::wstring callback=folder?L"window.rsSelectedReplayFolder":L"window.rsSelectedProgram";
+													m_webView->ExecuteScript((callback+L"("+json+L")").c_str(),nullptr); CoTaskMemFree(raw);
+												}
+											}
+										}
+										return S_OK;
+									}
+									std::string value;
+									if(object->HasKey("value")){CefRefPtr<CefValue>v=object->GetValue("value");value=CefWriteJSON(v,JSON_WRITER_DEFAULT).ToString();}
+									// Optional applications belong to the Control Hub. OBS starts/stops
+									// only the Hub and merely mirrors the other Stream Tool actions.
+									if(action=="savePrograms")setMusicSetting(L"tool.programs",utf8ToWide(value));
+									else if(action=="launchProgram")launchManagedProgram(utf8ToWide(object->GetString("value").ToString()));
+									else if(action=="closeProgram")closeManagedProgram(utf8ToWide(object->GetString("value").ToString()));
+									else if(action=="launchPrograms")launchManagedPrograms();
+									else if(action=="closePrograms")closeManagedPrograms();
+									else if(action=="addProgram"||action=="removeProgram"){}
+									else {std::lock_guard<std::mutex>lock(g_hostEventMutex);g_hostEvents.push_back("HOST\tTOOL\t"+action+"\t"+value+"\n");}
+									if(action=="setAutoLaunch")setMusicSetting(L"tool.autoLaunch",object->GetBool("value")?L"true":L"false");
+									else if(action=="setAutoClose")setMusicSetting(L"tool.autoClose",object->GetBool("value")?L"true":L"false");
+									else if(action=="dropText"){
+										CefRefPtr<CefDictionaryValue>v=object->GetDictionary("value");
+										if(v){setMusicSetting(L"tool.quickSize",std::to_wstring(v->GetInt("size")));setMusicSetting(L"tool.quickColour",utf8ToWide(v->GetString("colour").ToString()));setMusicSetting(L"tool.quickFont",utf8ToWide(v->GetString("font").ToString()));}
+									}else if(action=="timerEnsure"){
+										CefRefPtr<CefDictionaryValue>v=object->GetDictionary("value");
+										if(v){setMusicSetting(L"tool.timerLabel",utf8ToWide(v->GetString("label").ToString()));setMusicSetting(L"tool.timerMode",utf8ToWide(v->GetString("mode").ToString()));setMusicSetting(L"tool.timerSeconds",std::to_wstring(v->GetInt("seconds")));}
+									}else if(action=="timerStyle"){
+										CefRefPtr<CefDictionaryValue>v=object->GetDictionary("value");
+										if(v){setMusicSetting(L"tool.timerTextColour",utf8ToWide(v->GetString("textColour").ToString()));setMusicSetting(L"tool.timerLabelSize",std::to_wstring(v->GetInt("labelSize")));setMusicSetting(L"tool.timerTimeSize",std::to_wstring(v->GetInt("timeSize")));setMusicSetting(L"tool.timerShadow",v->GetBool("shadow")?L"true":L"false");setMusicSetting(L"tool.timerBackground",v->GetBool("background")?L"true":L"false");setMusicSetting(L"tool.timerBgColour",utf8ToWide(v->GetString("backgroundColour").ToString()));setMusicSetting(L"tool.timerBgOpacity",std::to_wstring(v->GetInt("backgroundOpacity")));setMusicSetting(L"tool.timerBgRadius",std::to_wstring(v->GetInt("backgroundRadius")));setMusicSetting(L"tool.timerHideFinished",v->GetBool("hideWhenFinished")?L"true":L"false");}
+									}else if(action=="saveReplayFolder")setMusicSetting(L"tool.replayFolder",utf8ToWide(object->GetString("value").ToString()));
+									else if(action=="saveQuickPresets")setMusicSetting(L"tool.quickPresets",utf8ToWide(value));
+									return S_OK;
+								}
 								if (object->GetString("action").ToString() == "reset") { RegDeleteTreeW(HKEY_CURRENT_USER, kOverlayRegistry); sendConfig(); return S_OK; }
 								const std::string key = object->GetString("key").ToString(), type = object->GetString("type").ToString();
 								static const std::vector<std::string> allowed = {"showArtwork","showTitle","showArtist","showAlbum","showRequester","showProgress","artworkBackground","backgroundTransparent","showCustomText","artworkPosition","timingMode","fontFamily","titleOverflow","scrollDirection","customText","backgroundColour","textColour","accentColour","titleSize","bodySize","scrollSpeed","backgroundOpacity","width","height"};
@@ -1232,29 +1499,30 @@ public:
 								else { const std::wstring value = utf8ToWide(object->GetString("value").ToString()); if ((key == "backgroundColour" || key == "textColour" || key == "accentColour") && !validColour(value)) return S_OK; setOverlaySetting(wideKey.c_str(), value); }
 								return S_OK;
 							}).Get(), &token);
-						resize(); m_controller->put_IsVisible(FALSE); m_page=3; m_webView->Navigate(L"https://rearsilver.local/overlay-designer.html"); return S_OK;
+						resize(); m_page=-1; showPage(g_page); return S_OK;
 					}).Get());
 			}).Get());
 	}
 	void showPage(int page) {
-		const bool visible = page >= 2 && page <= 6;
+		const bool visible = page >= 2 && page <= 7;
 		if (visible && page != m_page && m_webView) {
 			m_page = page;
 			m_ready = false;
 			injectPage(page == 2 ? L"library.html" : page == 3 ? L"overlay-designer.html" :
-				page == 4 ? L"settings.html" : page == 5 ? L"accounts.html" : L"commands.html");
+				page == 4 ? L"settings.html" : page == 5 ? L"accounts.html" : page == 6 ? L"commands.html" : L"stream-tools.html");
 		}
 		if (m_controller) { resize(); m_controller->put_IsVisible(visible ? TRUE : FALSE); }
 		if (visible) refresh();
 	}
 	void refresh() {
-		if (!m_webView || m_page < 2 || m_page > 6) return;
+		if (!m_webView || m_page < 2 || m_page > 7) return;
 		if (!m_ready) { probePageReady(); return; }
 		if (m_page == 2) sendLibraryConfig();
 		else if (m_page == 3) sendConfig();
 		else if (m_page == 4) sendSettingsConfig();
 		else if (m_page == 5) sendAccountsConfig();
 		else if (m_page == 6) sendCommandsConfig();
+		else if (m_page == 7) sendToolsConfig();
 	}
 	void resize() { if (!m_controller || !m_parent) return; RECT client{}; GetClientRect(m_parent, &client); const int sidebar = sidebarWidthFor(client.right); RECT bounds{sidebar + 16, 100, std::max(sidebar + 17, int(client.right) - 16), std::max(101, int(client.bottom) - 112)}; m_controller->put_Bounds(bounds); }
 private:
@@ -1270,9 +1538,9 @@ private:
 	}
 	void probePageReady() {
 		const wchar_t *functionName = m_page == 2 ? L"rsApplyLibrary" : m_page == 3 ? L"rsApplyConfig" :
-			m_page == 4 ? L"rsApplySettings" : m_page == 5 ? L"rsApplyAccounts" : L"rsApplyCommands";
+			m_page == 4 ? L"rsApplySettings" : m_page == 5 ? L"rsApplyAccounts" : m_page == 6 ? L"rsApplyCommands" : L"rsApplyTools";
 		const wchar_t *readyMessage = m_page == 2 ? L"library-ready" : m_page == 3 ? L"ready" :
-			m_page == 4 ? L"settings-ready" : m_page == 5 ? L"accounts-ready" : L"commands-ready";
+			m_page == 4 ? L"settings-ready" : m_page == 5 ? L"accounts-ready" : m_page == 6 ? L"commands-ready" : L"tools-ready";
 		const std::wstring script = L"if(typeof window." + std::wstring(functionName) +
 			L"==='function') window.chrome.webview.postMessage('" + readyMessage + L"');";
 		m_webView->ExecuteScript(script.c_str(), nullptr);
@@ -1284,7 +1552,35 @@ private:
 		string("artworkPosition",L"left"); string("timingMode",L"elapsedTotal"); string("fontFamily",L"Sora"); string("titleOverflow",L"ellipsis"); string("scrollDirection",L"left"); string("customText",L""); string("backgroundColour",L"#0b0f14"); string("textColour",L"#e6e8eb"); string("accentColour",L"#00d4ff"); number("titleSize",34); number("bodySize",20); number("scrollSpeed",45); number("backgroundOpacity",82); number("width",800); number("height",240);
 		CefRefPtr<CefValue> root=CefValue::Create(); root->SetDictionary(d); const std::wstring script=L"window.rsApplyConfig("+utf8ToWide(CefWriteJSON(root,JSON_WRITER_DEFAULT).ToString())+L")"; m_webView->ExecuteScript(script.c_str(),nullptr);
 	}
-	void sendCommandsConfig(){if(!m_ready||!m_webView||m_page!=6)return;CefRefPtr<CefDictionaryValue>d=CefDictionaryValue::Create();for(const char*cmd:{"sr","play","pause","skip","restart","previous","remove"})for(const char*role:{"everyone","subscriber","vip","moderator"}){const std::string key=std::string("command.")+cmd+"."+role;const bool fallback=std::string(cmd)=="sr"?std::string(role)=="everyone":std::string(role)=="moderator";d->SetBool(key,musicBool(utf8ToWide(key).c_str(),fallback));}CefRefPtr<CefValue>root=CefValue::Create();root->SetDictionary(d);m_webView->ExecuteScript((L"window.rsApplyCommands("+utf8ToWide(CefWriteJSON(root,JSON_WRITER_DEFAULT).ToString())+L")").c_str(),nullptr);}
+	void sendCommandsConfig(){if(!m_ready||!m_webView||m_page!=6)return;CefRefPtr<CefDictionaryValue>d=CefDictionaryValue::Create();for(const char*cmd:{"sr","play","pause","skip","restart","previous","remove"})for(const char*role:{"everyone","subscriber","vip","moderator"}){const std::string key=std::string("command.")+cmd+"."+role;const bool fallback=std::string(cmd)=="sr"?std::string(role)=="everyone":std::string(role)=="moderator";d->SetBool(key,musicBool(utf8ToWide(key).c_str(),fallback));}d->SetBool("spotifyAuthorized",g_spotify.state().authorized);CefRefPtr<CefValue>root=CefValue::Create();root->SetDictionary(d);m_webView->ExecuteScript((L"window.rsApplyCommands("+utf8ToWide(CefWriteJSON(root,JSON_WRITER_DEFAULT).ToString())+L")").c_str(),nullptr);}
+	void sendToolsConfig(){
+		if(!m_ready||!m_webView||m_page!=7)return;
+		CefRefPtr<CefDictionaryValue>d=CefDictionaryValue::Create();
+		d->SetInt("quickSize",_wtoi(musicSetting(L"tool.quickSize",L"120").c_str()));
+		d->SetString("quickColour",wideToUtf8(musicSetting(L"tool.quickColour",L"#ffffff")));
+		d->SetString("quickFont",wideToUtf8(musicSetting(L"tool.quickFont",L"Sora")));
+		d->SetString("timerLabel",wideToUtf8(musicSetting(L"tool.timerLabel",L"Timer")));
+		d->SetString("timerMode",wideToUtf8(musicSetting(L"tool.timerMode",L"countdown")));
+		d->SetInt("timerSeconds",_wtoi(musicSetting(L"tool.timerSeconds",L"300").c_str()));
+		d->SetString("timerTextColour",wideToUtf8(musicSetting(L"tool.timerTextColour",L"#ffffff")));
+		d->SetInt("timerLabelSize",_wtoi(musicSetting(L"tool.timerLabelSize",L"28").c_str()));
+		d->SetInt("timerTimeSize",_wtoi(musicSetting(L"tool.timerTimeSize",L"84").c_str()));
+		d->SetBool("timerShadow",musicBool(L"tool.timerShadow",true));
+		d->SetBool("timerBackground",musicBool(L"tool.timerBackground",false));
+		d->SetString("timerBgColour",wideToUtf8(musicSetting(L"tool.timerBgColour",L"#000000")));
+		d->SetInt("timerBgOpacity",_wtoi(musicSetting(L"tool.timerBgOpacity",L"70").c_str()));
+		d->SetInt("timerBgRadius",_wtoi(musicSetting(L"tool.timerBgRadius",L"48").c_str()));
+		d->SetBool("timerHideFinished",musicBool(L"tool.timerHideFinished",false));
+		d->SetString("replayFolder",wideToUtf8(musicSetting(L"tool.replayFolder",L"")));
+		auto applyArray=[&](const char*key,const wchar_t*setting,const wchar_t*fallback){
+			CefRefPtr<CefValue>parsed=CefParseJSON(wideToUtf8(musicSetting(setting,fallback)),JSON_PARSER_RFC);
+			if(parsed&&parsed->GetType()==VTYPE_LIST)d->SetList(key,parsed->GetList());
+		};
+		applyArray("quickPresets",L"tool.quickPresets",L"[\"BRB\",\"Coffee Break\",\"Back Soon\"]");
+		applyArray("programs",L"tool.programs",L"[]");
+		d->SetString("status",g_hostPipeConnected?"Connected to OBS. Stream Tool actions are ready.":"OBS is not connected. Settings are saved; live actions become available when OBS opens.");
+		CefRefPtr<CefValue>root=CefValue::Create();root->SetDictionary(d);m_webView->ExecuteScript((L"window.rsApplyTools("+utf8ToWide(CefWriteJSON(root,JSON_WRITER_DEFAULT).ToString())+L")").c_str(),nullptr);
+	}
 	void sendLibraryConfig() {
 		if(!m_ready||!m_webView||m_page!=2)return; CefRefPtr<CefDictionaryValue>d=CefDictionaryValue::Create(); d->SetString("url",g_hub.fallbackUrl()); d->SetString("status",wideToUtf8(g_libraryStatus)); d->SetString("label",g_hub.fallbackLabel()); d->SetInt("youtubeCount",int(g_hub.youtubeFallback().size())); d->SetInt("requestCount",int(g_hub.requests().size())); d->SetInt("localCount",int(g_hub.localLibrary().size())); d->SetString("source",g_hub.activeSource()); CefRefPtr<CefValue>root=CefValue::Create();root->SetDictionary(d);const std::wstring script=L"window.rsApplyLibrary("+utf8ToWide(CefWriteJSON(root,JSON_WRITER_DEFAULT).ToString())+L")";m_webView->ExecuteScript(script.c_str(),nullptr);
 	}
@@ -1700,8 +1996,9 @@ static LRESULT CALLBACK windowProc(HWND window, UINT message, WPARAM wParam, LPA
 			}
 		}
 		const int navStart = 104;
-		if (point.x < sidebar && point.y >= navStart && point.y < navStart + 364) {
-			g_page = std::clamp((static_cast<int>(point.y) - navStart) / 52, 0, 6);
+		if (point.x < sidebar && point.y >= navStart && point.y < navStart + 416) {
+			static const int navOrder[] = {7, 0, 1, 2, 3, 4, 5, 6};
+			g_page = navOrder[std::clamp((static_cast<int>(point.y) - navStart) / 52, 0, 7)];
 			positionLibraryControls(window);
 			positionOverlayControls(window);
 			if (g_youtubePlayer && g_youtubePlayer->active())
@@ -1785,28 +2082,30 @@ static LRESULT CALLBACK windowProc(HWND window, UINT message, WPARAM wParam, LPA
 	g_sidebarToggle = expanded ? RECT{194, 31, 220, 57} : RECT{78, 31, 104, 57};
 	label(graphics, expanded ? L"\u2039" : L"\u203A", heading,
 		RectF(float(g_sidebarToggle.left), float(g_sidebarToggle.top), 26, 26), secondary, StringAlignmentCenter);
-	const wchar_t *pages[] = {L"Now Playing", L"Queue & Requests", L"Library", L"Overlay Designer", L"Settings", L"Accounts", L"Commands"};
-	const wchar_t *icons[] = {L"\u25B6", L"\u2261", L"\u266B", L"\u25C7", L"\u2699", L"@", L"!"};
+	const wchar_t *pages[] = {L"Now Playing", L"Queue & Requests", L"Library", L"Overlay Designer", L"Settings", L"Accounts", L"Commands", L"Stream Tools"};
+	const wchar_t *icons[] = {L"\u25B6", L"\u2261", L"\u266B", L"\u25C7", L"\u2699", L"@", L"!", L"+"};
+	static const int navOrder[] = {7, 0, 1, 2, 3, 4, 5, 6};
 	const float navStart = 104.0f;
-	for (int i = 0; i < 7; ++i) {
+	for (int i = 0; i < 8; ++i) {
 		const float y = navStart + i * 52.0f;
-		if (i == g_page) {
+		const int page = navOrder[i];
+		if (page == g_page) {
 			roundedPanel(graphics, RectF(13, y, float(sidebar - 26), 42), 9, accentSoft);
 			SolidBrush active(accent); graphics.FillRectangle(&active, 13.0f, y + 9.0f, 3.0f, 24.0f);
 		}
-		label(graphics, icons[i], bodyBold, RectF(23, y, 34, 42), i == g_page ? accent : secondary, StringAlignmentCenter);
-		if (expanded) label(graphics, pages[i], body, RectF(63, y, 143, 42), i == g_page ? primary : secondary);
+		label(graphics, icons[page], bodyBold, RectF(23, y, 34, 42), page == g_page ? accent : secondary, StringAlignmentCenter);
+		if (expanded) label(graphics, pages[page], body, RectF(63, y, 143, 42), page == g_page ? primary : secondary);
 	}
 	if (expanded) {
 		roundedPanel(graphics, RectF(20, float(height - 58), 44, 24), 7, accentSoft);
 		label(graphics, L"PRO", smallFont, RectF(20, float(height - 58), 44, 24), gold, StringAlignmentCenter);
-		label(graphics, L"Media Player", smallFont, RectF(72, float(height - 58), 128, 24), tertiary);
+		label(graphics, L"Control Hub", smallFont, RectF(72, float(height - 58), 128, 24), tertiary);
 	}
 
 	const float contentX = float(sidebar + 28), contentWidth = float(width - sidebar - 56);
 	const wchar_t *subtitles[] = {L"Your stream soundtrack at a glance", L"Manage what plays next",
 		L"Organise local music and provider playlists", L"Create a design that fits your stream",
-		L"Playback, appearance and accessibility", L"Connect Twitch identities and choose the chat sender", L"Chat controls at a glance"};
+		L"Playback, appearance and accessibility", L"Connect Twitch identities and choose the chat sender", L"Chat controls at a glance", L"Quality-of-life tools for live production"};
 	label(graphics, pages[g_page], display, RectF(contentX, 22, contentWidth, 44), primary);
 	label(graphics, subtitles[g_page], body, RectF(contentX, 64, contentWidth, 28), secondary);
 
@@ -1995,6 +2294,7 @@ static LRESULT CALLBACK splashWindowProc(HWND window, UINT message, WPARAM wPara
 
 int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int)
 {
+	lifecycleLog("process-start");
 	// CEF still resolves a small number of packaged runtime files relative to
 	// the process working directory. Explorer, OBS and autostart can each give
 	// us a different directory, so normalise it before *any* CEF process runs.
@@ -2019,16 +2319,43 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int)
 	const int subprocessExit = CefExecuteProcess(cefMainArgs, cefApp, nullptr);
 	if (subprocessExit >= 0) return subprocessExit;
 
+	// Keep the browser process and every Chromium child in one Windows job.
+	// CEF normally tears its renderer/GPU/utility processes down during
+	// CefShutdown, but a renderer that has lost its parent IPC connection can
+	// otherwise survive as an invisible, CPU-consuming process and keep the
+	// installation directory locked. JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE makes
+	// the operating system the final authority: when the Hub process exits and
+	// its job handle is closed, every remaining descendant is reaped as well.
+	// The handle deliberately remains open for the lifetime of the process.
+	HANDLE processJob = CreateJobObjectW(nullptr, nullptr);
+	if (processJob) {
+		JOBOBJECT_EXTENDED_LIMIT_INFORMATION jobLimits{};
+		jobLimits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+		if (!SetInformationJobObject(processJob, JobObjectExtendedLimitInformation,
+			&jobLimits, sizeof(jobLimits)) ||
+			!AssignProcessToJobObject(processJob, GetCurrentProcess())) {
+			lifecycleLog("process-job-unavailable");
+			CloseHandle(processJob);
+			processJob = nullptr;
+		} else {
+			lifecycleLog("process-job-active");
+		}
+	}
+
 	// OBS autostart and a manual launch can arrive almost simultaneously. A
 	// second browser process would own a separate in-memory account state while
 	// still displaying persisted queue data from the first player.
 	HANDLE singleInstance = CreateMutexW(nullptr, TRUE, L"Local\\RearSilverStreamSuiteMediaPlayer");
 	if (!singleInstance) return 4;
 	if (GetLastError() == ERROR_ALREADY_EXISTS) {
+		const bool watchdogLaunch = wcsstr(GetCommandLineW(), L"--watchdog") != nullptr;
+		lifecycleLog(watchdogLaunch ? "duplicate-watchdog-exit" : "duplicate-user-activate");
 		for (int attempt = 0; attempt < 30; ++attempt) {
 			if (HWND existing = FindWindowW(L"RearSilverMusicPlayerWindow", nullptr)) {
-				ShowWindow(existing, SW_RESTORE);
-				SetForegroundWindow(existing);
+				if (!watchdogLaunch) {
+					ShowWindow(existing, SW_RESTORE);
+					SetForegroundWindow(existing);
+				}
 				break;
 			}
 			Sleep(100);
@@ -2083,11 +2410,12 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int)
 	Player player; g_player = &player; if (!player.initialise()) return 2;
 	HICON appIcon = static_cast<HICON>(LoadImageW(instance, MAKEINTRESOURCEW(101), IMAGE_ICON, 0, 0, LR_DEFAULTSIZE));
 	WNDCLASSW wc{}; wc.style = CS_DBLCLKS; wc.lpfnWndProc = windowProc; wc.hInstance = instance; wc.hCursor = LoadCursor(nullptr, IDC_ARROW); wc.hIcon = appIcon; wc.lpszClassName = L"RearSilverMusicPlayerWindow"; RegisterClassW(&wc);
-	HWND window = CreateWindowExW(0, wc.lpszClassName, L"RearSilver Stream Suite | Media Player", WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN,
+	HWND window = CreateWindowExW(0, wc.lpszClassName, L"RearSilver Stream Suite | Control Hub", WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN,
 		CW_USEDEFAULT, CW_USEDEFAULT, 1120, 720, nullptr, nullptr, instance, nullptr);
 	SendMessageW(window, WM_SETICON, ICON_BIG, reinterpret_cast<LPARAM>(appIcon));
 	SendMessageW(window, WM_SETICON, ICON_SMALL, reinterpret_cast<LPARAM>(appIcon));
 	ShowWindow(window, SW_SHOW); UpdateWindow(window);
+	lifecycleLog("window-shown");
 	if (splash) {
 		while (GetTickCount64() - splashShownAt < 1200) {
 			MSG splashMessage{};
@@ -2150,7 +2478,11 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int)
 	positionLibraryControls(window);
 	positionOverlayControls(window);
 	g_youtubePlayer = new CefYouTubePlayer();
-	g_youtubePlayer->initialise(window);
+	// The YouTube CEF browser is created lazily by CefYouTubePlayer::load().
+	// Spotify and Local operation therefore keep no idle OSR browser alive.
+	g_youtubePlayer->setParent(window);
+	// OBS launches the Hub; the Hub is the sole owner of its optional apps.
+	launchManagedPrograms();
 	HANDLE pipe = CreateNamedPipeW(L"\\\\.\\pipe\\RearSilverStreamSuiteMusicPlayer", PIPE_ACCESS_DUPLEX,
 		PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_NOWAIT, 1, 1024 * 1024, 1024 * 1024, 0, nullptr);
 	if (pipe == INVALID_HANDLE_VALUE) return 3;
@@ -2325,8 +2657,30 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int)
 		}
 		Sleep(10);
 	}
-	g_twitchReader.disconnect();g_twitchSender.disconnect();g_streamerTwitch.stop();g_botTwitch.stop();g_spotify.stop(); g_systemMedia.stop(); CloseHandle(pipe); g_overlayDesigner.reset(); g_youtubePlayer->shutdown(); g_youtubePlayer = nullptr; DestroyWindow(window); g_player = nullptr;
+	// Managed applications close first while the Hub is still fully alive. This
+	// preserves the successful ordering of the old OBS Auto-Start Manager and
+	// prevents both abandoned apps and a competing GPU/compositor teardown.
+	if (musicBool(L"tool.autoClose", true)) closeManagedProgramsAndWait();
+
+	// Let DWM finish retiring the optional applications' surfaces before the
+	// Hub begins its own Chromium teardown. OBS used to provide this separation
+	// naturally because it remained alive after closing managed applications.
+	DwmFlush(); Sleep(200); DwmFlush();
+	lifecycleLog("browser-shutdown-begin");
+	// Keep the native Hub visible while its embedded browsers close. Hiding its
+	// DirectComposition surface first can momentarily blank another display.
+	g_twitchReader.disconnect();g_twitchSender.disconnect();g_streamerTwitch.stop();g_botTwitch.stop();g_spotify.stop(); g_systemMedia.stop();
+	if (g_overlayDesigner) { g_overlayDesigner->shutdown(); g_overlayDesigner.reset(); }
+	if (g_youtubePlayer) { g_youtubePlayer->shutdown(); g_youtubePlayer = nullptr; }
+	DwmFlush();
+	ShowWindow(window, SW_HIDE); UpdateWindow(window);
+	CloseHandle(pipe); DestroyWindow(window); g_player = nullptr;
 	if (g_controlFont) { DeleteObject(g_controlFont); g_controlFont = nullptr; } if (g_controlBackgroundBrush) { DeleteObject(g_controlBackgroundBrush); g_controlBackgroundBrush = nullptr; }
 	g_splashImage.reset(); g_brandHeaderImage.reset(); g_brandIconImage.reset(); RemoveFontResourceExW(soraPath.c_str(), FR_PRIVATE, nullptr);
-	GdiplusShutdown(gdiplusToken); CoUninitialize(); CefShutdown(); ReleaseMutex(singleInstance); CloseHandle(singleInstance); return 0;
+	// CEF must be shut down on its initialising thread while COM is still alive.
+	// Releasing COM first left Chromium's compositor to be dismantled by process
+	// termination, which can briefly reset a second monitor's presentation path.
+	CefShutdown();
+	lifecycleLog("clean-exit");
+	GdiplusShutdown(gdiplusToken); CoUninitialize(); ReleaseMutex(singleInstance); CloseHandle(singleInstance); return 0;
 }

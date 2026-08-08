@@ -102,19 +102,7 @@ bool RsMusicLocalPlayer::ensureCompanion()
 		return true;
 	}
 
-	// Merely loading the OBS dock must never opt the user into the Suite music
-	// system.  Launch (and therefore relaunch) the companion only when the user
-	// explicitly added it to Auto-Start and enabled automatic launching.
 	const QString path = companionPath();
-	// Auto-Start registration is configuration, not an instruction to launch now.
-	// OBS startup is handled by RsAutoStart's FINISHED_LOADING event.  This path
-	// only performs crash/accidental-close recovery after a player has actually
-	// connected during the current OBS session.
-	const bool launchEnabled = m_connectedThisSession && !path.isEmpty() &&
-		RsAutoStart::autoLaunchEnabled() && RsAutoStart::containsProgram(path);
-	if (!launchEnabled)
-		return false;
-
 	if (path.isEmpty()) {
 		blog(LOG_ERROR, "[RS Music] Companion player executable was not found.");
 		emit playbackError("The bundled local music player is missing. Repair or reinstall the Suite.");
@@ -123,6 +111,10 @@ bool RsMusicLocalPlayer::ensureCompanion()
 	if (m_process->state() == QProcess::NotRunning) {
 		blog(LOG_INFO, "[RS Music] Starting companion player: %s", path.toUtf8().constData());
 		m_process->setProgram(path);
+		// A watchdog launch must never restore/foreground an already-running Hub.
+		// The Hub's single-instance path uses this marker to distinguish recovery
+		// from a deliberate launch by the user.
+		m_process->setArguments({"--watchdog"});
 		m_process->setWorkingDirectory(QFileInfo(path).absolutePath());
 		m_process->start();
 		if (!m_process->waitForStarted(3000)) {

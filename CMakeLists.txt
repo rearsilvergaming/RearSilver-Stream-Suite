@@ -56,6 +56,7 @@ if(WIN32)
 		"${RS_CEF_SDK_ROOT}/include")
 	target_link_libraries(RearSilver-Music-Player PRIVATE
 		gdiplus
+		dwmapi
 		ole32
 		"${CMAKE_CURRENT_SOURCE_DIR}/third_party/webview2/lib/x64/WebView2Loader.dll.lib"
 		"${RS_CEF_SDK_ROOT}/x64/release/libcef.lib"
@@ -89,6 +90,9 @@ if(WIN32)
 		COMMAND "${CMAKE_COMMAND}" -E copy_if_different
 			"${CMAKE_CURRENT_SOURCE_DIR}/src/music_player/settings.html"
 			"$<TARGET_FILE_DIR:RearSilver-Music-Player>/settings.html"
+		COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+			"${CMAKE_CURRENT_SOURCE_DIR}/src/music_player/stream-tools.html"
+			"$<TARGET_FILE_DIR:RearSilver-Music-Player>/stream-tools.html"
 		COMMAND "${CMAKE_COMMAND}" -E copy_if_different
 			"${CMAKE_CURRENT_SOURCE_DIR}/src/music_player/commands.html"
 			"$<TARGET_FILE_DIR:RearSilver-Music-Player>/commands.html"

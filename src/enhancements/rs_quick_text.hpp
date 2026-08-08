@@ -8,4 +8,6 @@ class RsQuickText : public QWidget {
 
 public:
 	static QWidget *createPage(RsMainDock *dock, QWidget *parent = nullptr);
+	static bool showText(const QString &text, int size, const QString &colour, const QString &font);
+	static int clearAll();
 };

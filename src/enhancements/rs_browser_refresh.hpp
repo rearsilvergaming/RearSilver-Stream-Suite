@@ -8,4 +8,6 @@ class RsBrowserRefresh {
 public:
 	// Build the Browser Refresh panel for the Enhancements tab
 	static QWidget *createPage(RsMainDock *dock, QWidget *parent);
+	static int refreshCurrentScene();
+	static int refreshAllScenes();
 };

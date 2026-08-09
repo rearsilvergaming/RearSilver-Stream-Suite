@@ -94,6 +94,9 @@ if(WIN32)
 			"${CMAKE_CURRENT_SOURCE_DIR}/src/music_player/stream-tools.html"
 			"$<TARGET_FILE_DIR:RearSilver-Music-Player>/stream-tools.html"
 		COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+			"${CMAKE_CURRENT_SOURCE_DIR}/src/music_player/hub-surface.html"
+			"$<TARGET_FILE_DIR:RearSilver-Music-Player>/hub-surface.html"
+		COMMAND "${CMAKE_COMMAND}" -E copy_if_different
 			"${CMAKE_CURRENT_SOURCE_DIR}/src/music_player/commands.html"
 			"$<TARGET_FILE_DIR:RearSilver-Music-Player>/commands.html"
 		COMMAND "${CMAKE_COMMAND}" -E copy_if_different

@@ -232,10 +232,6 @@ public:
 		commandLine->AppendSwitch("disable-renderer-backgrounding");
 		commandLine->AppendSwitch("disable-backgrounding-occluded-windows");
 		commandLine->AppendSwitch("disable-background-media-suspend");
-		// Prevent Chromium from promoting video/windowless surfaces to a hardware
-		// multi-plane overlay.  Abrupt MPO/swap-chain transitions can reset DWM and
-		// briefly blank an entire monitor, including while the CEF page is dormant.
-		commandLine->AppendSwitch("disable-direct-composition-video-overlays");
 		commandLine->AppendSwitchWithValue("autoplay-policy", "no-user-gesture-required");
 		commandLine->AppendSwitchWithValue("disable-features",
 			"CalculateNativeWinOcclusion,IntensiveWakeUpThrottling,"
@@ -323,12 +319,12 @@ public:
 		// Keep Chromium's audio service in the WebView2 browser process. OBS's
 		// Application Audio Capture can then associate embedded YouTube playback
 		// with the Suite player instead of losing it to a detached utility process.
-		// Diagnostic: force WebView2 onto its software compositor as well as CEF.
-		// The monitor blackout still occurred with CEF's GPU disabled and before
-		// shutdown, immediately around WebView2 surface creation/visibility.
+		// Keep Chromium's audio service in this process so OBS Application Audio
+		// Capture can associate playback with the Control Hub. GPU rendering stays
+		// enabled; the blackout investigation isolated Spotify's desktop process.
 		environmentOptions->put_AdditionalBrowserArguments(
-			L"--disable-features=AudioServiceOutOfProcess --disable-gpu --disable-gpu-compositing");
-		traceLog("webview-youtube-software-rendering-enabled");
+			L"--disable-features=AudioServiceOutOfProcess");
+		traceLog("webview-youtube-gpu-rendering-enabled");
 
 		CreateCoreWebView2EnvironmentWithOptions(
 			nullptr, webViewData.c_str(), environmentOptions.Get(),
@@ -1282,7 +1278,7 @@ static void loadHubState()
 	g_hub.activateSource(object->GetString("activeSource").ToString());
 	HubTrack current = readTrack(object->GetDictionary("current"));
 	if (!current.providerId.empty()) {
-		g_hub.recordStarted(current);
+		g_hub.restoreCurrent(current);
 		if (g_player) g_player->setMetadata(current.title + "\t" + current.artist + "\t" + current.album + "\t" +
 			(current.artworkUrl.empty() ? playerFallbackArtwork() : current.artworkUrl));
 	}
@@ -1511,6 +1507,8 @@ public:
 			{ std::ostringstream detail; detail << "hr=0x" << std::hex << static_cast<unsigned long>(closeHr); traceLog("webview-overlay-controller-close-complete", detail.str()); }
 		}
 		m_webView.Reset(); m_controller.Reset();
+		m_visibilityKnown = false; m_visible = false;
+		m_boundsKnown = false; SetRectEmpty(&m_bounds);
 		traceLog("webview-overlay-shutdown-complete");
 	}
 	void initialise(HWND parent)
@@ -1522,9 +1520,10 @@ public:
 		const std::wstring webData = suiteData + L"\\OverlayDesignerWebView2"; CreateDirectoryW(webData.c_str(), nullptr);
 		std::wstring folder = executableAssetPath(L""); if (!folder.empty() && (folder.back() == L'\\' || folder.back() == L'/')) folder.pop_back();
 		auto environmentOptions = Microsoft::WRL::Make<CoreWebView2EnvironmentOptions>();
-		environmentOptions->put_AdditionalBrowserArguments(
-			L"--disable-gpu --disable-gpu-compositing");
-		traceLog("webview-overlay-software-rendering-enabled");
+		// The Hub now owns one persistent WebView2 presentation surface.  Keep
+		// normal GPU rendering enabled; software rendering did not prevent the
+		// display blackout and needlessly penalised the commercial UI.
+		traceLog("webview-overlay-single-surface-gpu-rendering");
 		CreateCoreWebView2EnvironmentWithOptions(nullptr, webData.c_str(), environmentOptions.Get(),
 			Callback<ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler>([this, folder](HRESULT result, ICoreWebView2Environment *environment) -> HRESULT {
 				{ std::ostringstream detail; detail << "hr=0x" << std::hex << static_cast<unsigned long>(result) << " environment=" << (environment ? 1 : 0); traceLog("webview-overlay-environment-created", detail.str()); }
@@ -1534,6 +1533,8 @@ public:
 						{ std::ostringstream detail; detail << "hr=0x" << std::hex << static_cast<unsigned long>(controllerResult) << " controller=" << (controller ? 1 : 0); traceLog("webview-overlay-controller-created", detail.str()); }
 						if (FAILED(controllerResult) || !controller) return controllerResult;
 						m_controller = controller; m_controller->get_CoreWebView2(&m_webView);
+						m_visibilityKnown = false; m_visible = false;
+						m_boundsKnown = false; SetRectEmpty(&m_bounds);
 						EventRegistrationToken processFailedToken{};
 						m_webView->add_ProcessFailed(
 							Callback<ICoreWebView2ProcessFailedEventHandler>([](ICoreWebView2 *, ICoreWebView2ProcessFailedEventArgs *args) -> HRESULT {
@@ -1548,6 +1549,7 @@ public:
 							Callback<ICoreWebView2WebMessageReceivedEventHandler>([this](ICoreWebView2 *, ICoreWebView2WebMessageReceivedEventArgs *args) -> HRESULT {
 								wchar_t *raw = nullptr; if (FAILED(args->TryGetWebMessageAsString(&raw)) || !raw) return S_OK;
 								const std::string message = wideToUtf8(raw); CoTaskMemFree(raw);
+								if (message == "hub-ready") { showCurrentPage(); return S_OK; }
 								// A message from the document being replaced may arrive after the next
 								// page has been selected. Never let that stale message mark the new page
 								// ready or it can remain stuck showing its default/disconnected state.
@@ -1654,6 +1656,7 @@ public:
 								else { const std::wstring value = utf8ToWide(object->GetString("value").ToString()); if ((key == "backgroundColour" || key == "textColour" || key == "accentColour") && !validColour(value)) return S_OK; setOverlaySetting(wideKey.c_str(), value); }
 								return S_OK;
 							}).Get(), &token);
+						m_webView->Navigate(L"https://rearsilver.local/hub-surface.html");
 						resize(); m_page=-1; showPage(g_page); return S_OK;
 					}).Get());
 			}).Get());
@@ -1663,14 +1666,16 @@ public:
 		if (visible && page != m_page && m_webView) {
 			m_page = page;
 			m_ready = false;
-			injectPage(page == 2 ? L"library.html" : page == 3 ? L"overlay-designer.html" :
-				page == 4 ? L"settings.html" : page == 5 ? L"accounts.html" : page == 6 ? L"commands.html" : L"stream-tools.html");
+			showCurrentPage();
 		}
 		if (m_controller) {
 			resize();
-			const HRESULT hr = m_controller->put_IsVisible(visible ? TRUE : FALSE);
-			std::ostringstream detail; detail << "page=" << page << " visible=" << (visible ? 1 : 0) << " hr=0x" << std::hex << static_cast<unsigned long>(hr);
-			traceLog("webview-overlay-visibility", detail.str());
+			if (!m_visibilityKnown || m_visible != visible) {
+				const HRESULT hr = m_controller->put_IsVisible(visible ? TRUE : FALSE);
+				if (SUCCEEDED(hr)) { m_visibilityKnown = true; m_visible = visible; }
+				std::ostringstream detail; detail << "page=" << page << " visible=" << (visible ? 1 : 0) << " hr=0x" << std::hex << static_cast<unsigned long>(hr);
+				traceLog("webview-overlay-visibility", detail.str());
+			}
 		}
 		if (visible) refresh();
 	}
@@ -1688,28 +1693,37 @@ public:
 		if (!m_controller || !m_parent) return;
 		RECT client{}; GetClientRect(m_parent, &client); const int sidebar = sidebarWidthFor(client.right);
 		RECT bounds{sidebar + 16, 100, std::max(sidebar + 17, int(client.right) - 16), std::max(101, int(client.bottom) - 112)};
+		if (m_boundsKnown && EqualRect(&m_bounds, &bounds)) return;
 		const HRESULT hr = m_controller->put_Bounds(bounds);
+		if (SUCCEEDED(hr)) { m_bounds = bounds; m_boundsKnown = true; }
 		std::ostringstream detail; detail << "left=" << bounds.left << " top=" << bounds.top << " right=" << bounds.right << " bottom=" << bounds.bottom << " hr=0x" << std::hex << static_cast<unsigned long>(hr);
 		traceLog("webview-overlay-bounds", detail.str());
 	}
 private:
+	bool m_visibilityKnown = false;
+	bool m_visible = false;
+	bool m_boundsKnown = false;
+	RECT m_bounds{};
 	static bool validColour(const std::wstring &value) { return value.size() == 7 && value[0] == L'#' && std::all_of(value.begin() + 1, value.end(), [](wchar_t c) { return iswxdigit(c) != 0; }); }
-	void injectPage(const wchar_t *name) {
-		if (!m_webView) return;
-		std::ifstream input(executableAssetPath(name), std::ios::binary);
-		if (!input) { m_webView->Navigate((std::wstring(L"https://rearsilver.local/") + name).c_str()); return; }
-		const std::string html((std::istreambuf_iterator<char>(input)), {});
-		// NavigateToString gives each injected page a real document lifecycle.
-		// document.write/close could leave queued messages from the previous page.
-		m_webView->NavigateToString(utf8ToWide(html).c_str());
+	void showCurrentPage() {
+		if (!m_webView || m_page < 2 || m_page > 7) return;
+		const wchar_t *name = m_page == 2 ? L"library.html" : m_page == 3 ? L"overlay-designer.html" :
+			m_page == 4 ? L"settings.html" : m_page == 5 ? L"accounts.html" : m_page == 6 ? L"commands.html" : L"stream-tools.html";
+		const wchar_t *functionName = m_page == 2 ? L"rsApplyLibrary" : m_page == 3 ? L"rsApplyConfig" :
+			m_page == 4 ? L"rsApplySettings" : m_page == 5 ? L"rsApplyAccounts" : m_page == 6 ? L"rsApplyCommands" : L"rsApplyTools";
+		const wchar_t *readyMessage = m_page == 2 ? L"library-ready" : m_page == 3 ? L"ready" :
+			m_page == 4 ? L"settings-ready" : m_page == 5 ? L"accounts-ready" : m_page == 6 ? L"commands-ready" : L"tools-ready";
+		const std::wstring script = L"window.rsShowPage&&window.rsShowPage('https://rearsilver.local/" + std::wstring(name) +
+			L"','" + functionName + L"','" + readyMessage + L"')";
+		m_webView->ExecuteScript(script.c_str(), nullptr);
 	}
 	void probePageReady() {
 		const wchar_t *functionName = m_page == 2 ? L"rsApplyLibrary" : m_page == 3 ? L"rsApplyConfig" :
 			m_page == 4 ? L"rsApplySettings" : m_page == 5 ? L"rsApplyAccounts" : m_page == 6 ? L"rsApplyCommands" : L"rsApplyTools";
 		const wchar_t *readyMessage = m_page == 2 ? L"library-ready" : m_page == 3 ? L"ready" :
 			m_page == 4 ? L"settings-ready" : m_page == 5 ? L"accounts-ready" : m_page == 6 ? L"commands-ready" : L"tools-ready";
-		const std::wstring script = L"if(typeof window." + std::wstring(functionName) +
-			L"==='function') window.chrome.webview.postMessage('" + readyMessage + L"');";
+		const std::wstring script = L"if(window.rsActiveHas&&window.rsActiveHas('" + std::wstring(functionName) +
+			L"')) window.chrome.webview.postMessage('" + readyMessage + L"');";
 		m_webView->ExecuteScript(script.c_str(), nullptr);
 	}
 	void sendConfig() {

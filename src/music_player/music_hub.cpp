@@ -175,6 +175,26 @@ void MusicHubModel::recordStarted(const HubTrack &track)
 	while (m_history.size() > 50) m_history.pop_back();
 }
 
+void MusicHubModel::restoreCurrent(const HubTrack &track)
+{
+	std::lock_guard<std::mutex> lock(m_mutex);
+	m_current = track; m_hasCurrent = true;
+	if (m_history.empty() || m_history.front().id != track.id) m_history.push_front(track);
+	while (m_history.size() > 50) m_history.pop_back();
+
+	// activateSource() rebuilds the active fallback and resets its cursor. When
+	// restoring a saved fallback track, resume the playlist after that track so
+	// it is not displayed (or played) twice.
+	if (!track.request && track.provider == m_activeSource && !m_fallback.empty()) {
+		const auto found = std::find_if(m_fallback.begin(), m_fallback.end(), [&](const HubTrack &candidate) {
+			return (!track.id.empty() && candidate.id == track.id) ||
+				(!track.providerId.empty() && candidate.providerId == track.providerId);
+		});
+		if (found != m_fallback.end())
+			m_cursor = (static_cast<size_t>(std::distance(m_fallback.begin(), found)) + 1) % m_fallback.size();
+	}
+}
+
 void MusicHubModel::clearCurrent() { std::lock_guard<std::mutex> lock(m_mutex); m_current = {}; m_hasCurrent = false; }
 bool MusicHubModel::hasCurrent() const { std::lock_guard<std::mutex> lock(m_mutex); return m_hasCurrent; }
 HubTrack MusicHubModel::current() const { std::lock_guard<std::mutex> lock(m_mutex); return m_current; }

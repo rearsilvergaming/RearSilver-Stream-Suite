@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>RearSilver Stream Suite | Control Hub</title>
+<style>
+html,body,#pages{width:100%;height:100%;margin:0;overflow:hidden;background:#0b0f14}
+#pages{position:relative}
+.page{position:absolute;inset:0;width:100%;height:100%;margin:0;border:0;display:none;background:#0b0f14}
+.page.active{display:block}
+</style></head>
+<body><div id="pages"></div><script>
+const pages=document.getElementById('pages');
+const frames=new Map();
+let activeFrame=null;
+
+// Child pages live in same-origin iframes. Route their commands through this
+// single top-level WebView2 surface so native code receives one message stream.
+window.rsNativePost=message=>window.chrome.webview.postMessage(message);
+
+function createPage(url){
+  let frame=frames.get(url);
+  if(frame)return frame;
+  frame=document.createElement('iframe');
+  frame.className='page';
+  frame.title='Control Hub page';
+  frame.src=url;
+  pages.appendChild(frame);
+  frames.set(url,frame);
+  return frame;
+}
+
+let readinessGeneration=0;
+function announceWhenReady(frame,functionName,readyMessage,generation,attempt=0){
+  if(generation!==readinessGeneration||frame!==activeFrame)return;
+  try{
+    const target=frame.contentWindow;
+    if(target&&typeof target[functionName]==='function'){
+      window.chrome.webview.postMessage(readyMessage);
+      return;
+    }
+  }catch(_){}
+  if(attempt<100)setTimeout(()=>announceWhenReady(frame,functionName,readyMessage,generation,attempt+1),50);
+}
+
+window.rsShowPage=function(url,functionName,readyMessage){
+  if(!url)return;
+  const next=createPage(url);
+  if(activeFrame!==next){
+    if(activeFrame)activeFrame.classList.remove('active');
+    activeFrame=next;
+    activeFrame.classList.add('active');
+  }
+  const generation=++readinessGeneration;
+  if(functionName&&readyMessage)announceWhenReady(next,functionName,readyMessage,generation);
+};
+window.rsInvokeAll=function(name,value){
+  let handled=false;
+  for(const frame of frames.values()){
+    try{
+      const target=frame.contentWindow;
+      if(target&&typeof target[name]==='function'){
+        target[name](value);
+        handled=true;
+      }
+    }catch(_){}
+  }
+  return handled;
+};
+window.rsActiveHas=function(name){
+  const target=activeFrame&&activeFrame.contentWindow;
+  return !!(target&&typeof target[name]==='function');
+};
+for(const name of ['rsApplyLibrary','rsApplyConfig','rsApplySettings','rsApplyAccounts','rsApplyCommands','rsApplyTools'])
+  window[name]=value=>window.rsInvokeAll(name,value);
+
+window.chrome.webview.postMessage('hub-ready');
+
+// Warm the remaining Hub pages after first paint. They remain ordinary DOM
+// iframes inside this one WebView2 controller; navigation only changes CSS.
+setTimeout(()=>{
+  for(const name of ['stream-tools','library','overlay-designer','settings','accounts','commands'])
+    createPage('https://rearsilver.local/'+name+'.html');
+},250);
+</script></body></html>

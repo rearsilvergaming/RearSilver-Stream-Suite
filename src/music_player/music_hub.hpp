@@ -41,6 +41,7 @@ public:
 	bool selectAt(size_t playbackIndex, HubTrack &track);
 	bool takePrevious(HubTrack &track);
 	void recordStarted(const HubTrack &track);
+	void restoreCurrent(const HubTrack &track);
 	void clearCurrent();
 
 	bool hasCurrent() const;

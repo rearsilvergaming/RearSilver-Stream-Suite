@@ -7,7 +7,7 @@
 <section class="card spotify"><div class="head"><h2>Spotify account</h2><span id="spotifyStatus" class="status">Not configured</span></div><p>Spotify stays the audio player. Connecting its Web API adds queue visibility, searches and song requests. Your own Client ID keeps access and quota independent from RearSilver.</p><div class="callback"><strong>Redirect URI</strong><code id="callback">http://127.0.0.1:18246/spotify/callback</code><button onclick="copyCallback()">Copy</button></div><div class="field"><input id="spotifyClientId" autocomplete="off" spellcheck="false" placeholder="Paste your Spotify Client ID"><button onclick="saveSpotify()">Save Client ID</button></div><div id="spotifyIdentity" class="identity">No Spotify account connected</div><div class="actions"><button onclick="act('spotify','login')">Connect Spotify</button><button onclick="act('spotify','refresh')">Refresh queue</button><button onclick="act('spotify','logout')">Disconnect</button><button onclick="openSpotifySetup()">Open developer dashboard</button></div><p class="help">Create an app, add the redirect URI shown above, then paste only its <strong>Client ID</strong>. Never enter a Client Secret. Spotify currently requires the development-app owner to have Premium.</p><div id="spotifyError" class="error"></div></section>
 <section class="card spotify"><div class="head"><h2>Connection diagnostics</h2><button onclick="copyDiagnostics()">Copy diagnostics</button></div><p>No access tokens or refresh tokens are displayed here.</p><pre id="diagnostics" style="white-space:pre-wrap;word-break:break-word;background:#0c131c;border:1px solid var(--border);border-radius:9px;padding:14px;max-height:260px;overflow:auto;color:#b9cee3;font:12px Consolas,monospace">Waiting for events…</pre></section>
 </div></main><script>
-const send=o=>window.chrome.webview.postMessage(JSON.stringify(o));
+const nativePost=message=>parent.rsNativePost(message),send=o=>nativePost(JSON.stringify(o));
 const act=(account,action)=>send({page:'accounts',account,action});
 const saveSpotify=()=>send({page:'accounts',account:'spotify',action:'saveClientId',value:document.getElementById('spotifyClientId').value});
 const copyCallback=()=>navigator.clipboard.writeText(document.getElementById('callback').textContent);
@@ -32,5 +32,5 @@ window.rsApplyAccounts=c=>{
  document.getElementById('spotifyError').textContent=c.spotifyError||'';
  const diagnostics='IPC: '+(c.ipcConnected?'connected':'waiting')+'\nStreamer state: '+(c.streamerState||'unknown')+' ('+(c.streamerLogin||'no login')+')\nBot state: '+(c.botState||'unknown')+' ('+(c.botLogin||'no login')+')\n\n'+(c.spotifyDiagnostics||'No Spotify events yet.'),box=document.getElementById('diagnostics');if(box.textContent!==diagnostics&&!window.getSelection().toString())box.textContent=diagnostics;
 };
-window.chrome.webview.postMessage('accounts-ready')
+nativePost('accounts-ready')
 </script></body></html>

@@ -1643,6 +1643,13 @@ public:
 										CefRefPtr<CefDictionaryValue>v=object->GetDictionary("value");
 										if(v){setMusicSetting(L"tool.timerTextColour",utf8ToWide(v->GetString("textColour").ToString()));setMusicSetting(L"tool.timerLabelSize",std::to_wstring(v->GetInt("labelSize")));setMusicSetting(L"tool.timerTimeSize",std::to_wstring(v->GetInt("timeSize")));setMusicSetting(L"tool.timerShadow",v->GetBool("shadow")?L"true":L"false");setMusicSetting(L"tool.timerBackground",v->GetBool("background")?L"true":L"false");setMusicSetting(L"tool.timerBgColour",utf8ToWide(v->GetString("backgroundColour").ToString()));setMusicSetting(L"tool.timerBgOpacity",std::to_wstring(v->GetInt("backgroundOpacity")));setMusicSetting(L"tool.timerBgRadius",std::to_wstring(v->GetInt("backgroundRadius")));setMusicSetting(L"tool.timerHideFinished",v->GetBool("hideWhenFinished")?L"true":L"false");}
 									}else if(action=="saveReplayFolder")setMusicSetting(L"tool.replayFolder",utf8ToWide(object->GetString("value").ToString()));
+									else if(action=="replayBufferConfig"){
+										CefRefPtr<CefDictionaryValue>v=object->GetDictionary("value");
+										if(v){setMusicSetting(L"tool.replaySeconds",std::to_wstring(v->GetInt("seconds")));setMusicSetting(L"tool.replayAutoStart",v->GetBool("autoStart")?L"true":L"false");setMusicSetting(L"tool.replayAutoHide",v->GetBool("autoHide")?L"true":L"false");}
+									}else if(action=="replayFrameConfig"){
+										CefRefPtr<CefDictionaryValue>v=object->GetDictionary("value");
+										if(v){setMusicSetting(L"tool.replayTitle",utf8ToWide(v->GetString("title").ToString()));setMusicSetting(L"tool.replayFont",utf8ToWide(v->GetString("font").ToString()));setMusicSetting(L"tool.replayTitleSize",std::to_wstring(v->GetInt("titleSize")));setMusicSetting(L"tool.replayBackground",utf8ToWide(v->GetString("background").ToString()));setMusicSetting(L"tool.replayAccent",utf8ToWide(v->GetString("accent").ToString()));setMusicSetting(L"tool.replayTextColour",utf8ToWide(v->GetString("textColour").ToString()));setMusicSetting(L"tool.replayOpacity",std::to_wstring(v->GetInt("opacity")));setMusicSetting(L"tool.replayBorderWidth",std::to_wstring(v->GetInt("borderWidth")));setMusicSetting(L"tool.replayRadius",std::to_wstring(v->GetInt("radius")));setMusicSetting(L"tool.replayFrameWidth",std::to_wstring(v->GetInt("frameWidth")));setMusicSetting(L"tool.replayFrameHeight",std::to_wstring(v->GetInt("frameHeight")));setMusicSetting(L"tool.replayFrameX",std::to_wstring(v->GetInt("frameX")));setMusicSetting(L"tool.replayFrameY",std::to_wstring(v->GetInt("frameY")));}
+									}
 									else if(action=="saveQuickPresets")setMusicSetting(L"tool.quickPresets",utf8ToWide(value));
 									return S_OK;
 								}
@@ -1753,6 +1760,22 @@ private:
 		d->SetInt("timerBgRadius",_wtoi(musicSetting(L"tool.timerBgRadius",L"48").c_str()));
 		d->SetBool("timerHideFinished",musicBool(L"tool.timerHideFinished",false));
 		d->SetString("replayFolder",wideToUtf8(musicSetting(L"tool.replayFolder",L"")));
+		d->SetInt("replaySeconds",_wtoi(musicSetting(L"tool.replaySeconds",L"10").c_str()));
+		d->SetBool("replayAutoStart",musicBool(L"tool.replayAutoStart",false));
+		d->SetBool("replayAutoHide",musicBool(L"tool.replayAutoHide",true));
+		d->SetString("replayTitle",wideToUtf8(musicSetting(L"tool.replayTitle",L"INSTANT REPLAY")));
+		d->SetString("replayFont",wideToUtf8(musicSetting(L"tool.replayFont",L"Sora")));
+		d->SetInt("replayTitleSize",_wtoi(musicSetting(L"tool.replayTitleSize",L"52").c_str()));
+		d->SetString("replayBackground",wideToUtf8(musicSetting(L"tool.replayBackground",L"#0b0f14")));
+		d->SetString("replayAccent",wideToUtf8(musicSetting(L"tool.replayAccent",L"#00d4ff")));
+		d->SetString("replayTextColour",wideToUtf8(musicSetting(L"tool.replayTextColour",L"#e6e8eb")));
+		d->SetInt("replayOpacity",_wtoi(musicSetting(L"tool.replayOpacity",L"92").c_str()));
+		d->SetInt("replayBorderWidth",_wtoi(musicSetting(L"tool.replayBorderWidth",L"12").c_str()));
+		d->SetInt("replayRadius",_wtoi(musicSetting(L"tool.replayRadius",L"28").c_str()));
+		d->SetInt("replayFrameWidth",_wtoi(musicSetting(L"tool.replayFrameWidth",L"1280").c_str()));
+		d->SetInt("replayFrameHeight",_wtoi(musicSetting(L"tool.replayFrameHeight",L"720").c_str()));
+		d->SetInt("replayFrameX",_wtoi(musicSetting(L"tool.replayFrameX",L"320").c_str()));
+		d->SetInt("replayFrameY",_wtoi(musicSetting(L"tool.replayFrameY",L"180").c_str()));
 		auto applyArray=[&](const char*key,const wchar_t*setting,const wchar_t*fallback){
 			CefRefPtr<CefValue>parsed=CefParseJSON(wideToUtf8(musicSetting(setting,fallback)),JSON_PARSER_RFC);
 			if(parsed&&parsed->GetType()==VTYPE_LIST)d->SetList(key,parsed->GetList());

@@ -104,7 +104,7 @@ RsMusicController::RsMusicController(RsMusicState *state, QObject *parent) : QOb
 			else if (action == "replayStart") RsInstantReplay::startReplayBuffer();
 			else if (action == "replayStop") RsInstantReplay::stopReplayBuffer();
 			else if (action == "replayBufferConfig") { const QJsonObject o=value.toObject(); RsInstantReplay::configureReplayBuffer(o.value("seconds").toInt(10),o.value("autoStart").toBool(false),o.value("autoHide").toBool(true)); }
-			else if (action == "replayFrameConfig") { const QJsonObject o=value.toObject(); RsInstantReplay::configureReplayFrame(o.value("title").toString("INSTANT REPLAY"),o.value("font").toString("Sora"),o.value("titleSize").toInt(52),o.value("background").toString("#0b0f14"),o.value("accent").toString("#00d4ff"),o.value("opacity").toInt(92),o.value("borderWidth").toInt(12),o.value("radius").toInt(28)); }
+else if (action == "replayFrameConfig") { const QJsonObject o=value.toObject(); RsInstantReplay::configureReplayFrame(o.value("title").toString("INSTANT REPLAY"),o.value("font").toString("Sora"),o.value("titleSize").toInt(52),o.value("background").toString("#0b0f14"),o.value("accent").toString("#00d4ff"),o.value("textColour").toString("#e6e8eb"),o.value("opacity").toInt(92),o.value("borderWidth").toInt(12),o.value("radius").toInt(28),o.value("frameWidth").toInt(1280),o.value("frameHeight").toInt(720),o.value("frameX").toInt(320),o.value("frameY").toInt(180)); }
 			else if (action == "saveReplayFolder") RsInstantReplay::setReplayFolderOverride(value.toString());
 			return;
 		}

@@ -23,6 +23,7 @@
 #include <QFont>
 #include <QStandardPaths>
 #include <QColor>
+#include <QRect>
 
 #include <vector>
 #include <cstring>
@@ -49,6 +50,52 @@ static qint64 s_lastReplayRequestTime = 0;
 static qint64 s_replayBufferStartTime = 0;
 static bool s_waitingForRequestedReplay = false;
 static QString s_visibleReplaySceneName;
+
+struct ReplayFrameLayout {
+	int width = 1280;
+	int height = 720;
+	int x = 320;
+	int y = 180;
+	int border = 12;
+	int outerRadius = 28;
+	int innerRadius = 16;
+	QRect aperture;
+	QRect titleRect;
+};
+
+static ReplayFrameLayout s_replayFrameLayout;
+
+static ReplayFrameLayout makeReplayFrameLayout(int requestedWidth, int requestedHeight,
+						 int requestedX, int requestedY, int requestedBorder,
+						 int requestedRadius, int titleSize)
+{
+	obs_video_info ovi = {};
+	const bool haveVideo = obs_get_video_info(&ovi);
+	const int canvasWidth = haveVideo && ovi.base_width ? static_cast<int>(ovi.base_width) : 1920;
+	const int canvasHeight = haveVideo && ovi.base_height ? static_cast<int>(ovi.base_height) : 1080;
+
+	ReplayFrameLayout layout;
+	layout.width = qBound(320, requestedWidth, canvasWidth);
+	layout.height = qBound(180, requestedHeight, canvasHeight);
+	layout.x = qBound(0, requestedX, qMax(0, canvasWidth - layout.width));
+	layout.y = qBound(0, requestedY, qMax(0, canvasHeight - layout.height));
+	layout.border = qBound(0, requestedBorder, 64);
+	const int maxRadius = qMax(0, qMin(layout.width, layout.height) / 2);
+	// Keep the inner edge rounded even when a thick border is selected.
+	layout.outerRadius = qBound(0, qMax(requestedRadius, layout.border + 8), maxRadius);
+	layout.innerRadius = qMax(0, layout.outerRadius - layout.border);
+
+	const int shortEdge = qMin(layout.width, layout.height);
+	const int padding = qMax(layout.border + 16, qRound(shortEdge * 0.035));
+	const int header = qMax(qRound(qBound(12, titleSize, 180) * 1.45), qRound(layout.height * 0.11));
+	const int apertureTop = qMin(layout.height - padding - 1, padding + header);
+	layout.aperture = QRect(padding, apertureTop,
+		qMax(1, layout.width - (padding * 2)),
+		qMax(1, layout.height - apertureTop - padding));
+	layout.titleRect = QRect(padding, padding, layout.width - (padding * 2),
+		qMax(1, apertureTop - padding));
+	return layout;
+}
 
 // ------------------------------------------------------------
 // Hotkey
@@ -242,23 +289,11 @@ static void initReplayGroupTransform(obs_sceneitem_t *group)
 {
 	if (!group)
 		return;
-
-	obs_video_info ovi;
-	if (!obs_get_video_info(&ovi))
-		return;
-
-	// 1️⃣ FORCE the group to have real bounds (THIS is the missing piece)
-	vec2 bounds = {(float)ovi.base_width, (float)ovi.base_height};
-
-	obs_sceneitem_set_bounds_type(group, OBS_BOUNDS_SCALE_INNER);
-	obs_sceneitem_set_bounds(group, &bounds);
-
-	// 2️⃣ Anchor from centre
-	obs_sceneitem_set_alignment(group, OBS_ALIGN_CENTER);
-
-	// 3️⃣ NOW positioning works correctly
-	vec2 pos = {(float)ovi.base_width * 0.5f, (float)ovi.base_height * 0.5f};
-
+	obs_sceneitem_set_alignment(group, OBS_ALIGN_LEFT | OBS_ALIGN_TOP);
+	obs_sceneitem_set_bounds_type(group, OBS_BOUNDS_NONE);
+	vec2 scale = {1.0f, 1.0f};
+	obs_sceneitem_set_scale(group, &scale);
+	vec2 pos = {(float)s_replayFrameLayout.x, (float)s_replayFrameLayout.y};
 	obs_sceneitem_set_pos(group, &pos);
 }
 
@@ -380,39 +415,44 @@ void RsInstantReplay::repairReplaySource()
 	ensureReplaySource();
 }
 
+static void fitReplayInsideBackground(obs_scene_t *groupScene);
+
 void RsInstantReplay::configureReplayFrame(const QString &title, const QString &font, int titleSize,
-					     const QString &background, const QString &accent, int opacity,
-					     int borderWidth, int radius)
+					     const QString &background, const QString &accent,
+					     const QString &textColour, int opacity, int borderWidth,
+					     int radius, int frameWidth, int frameHeight, int frameX, int frameY)
 {
-	const int width = 1920;
-	const int height = 1080;
-	const QRect aperture(qRound(width * .07), qRound(height * .14), qRound(width * .86), qRound(height * .76));
-	const int border = qBound(2, borderWidth, 64);
-	const int corner = qBound(0, radius, 160);
+	s_replayFrameLayout = makeReplayFrameLayout(frameWidth, frameHeight, frameX, frameY,
+						       borderWidth, radius, titleSize);
+	const ReplayFrameLayout &layout = s_replayFrameLayout;
 	QColor bg(background);
 	QColor edge(accent);
+	QColor headingColour(textColour);
 	if (!bg.isValid()) bg = QColor("#0b0f14");
 	if (!edge.isValid()) edge = QColor("#00d4ff");
+	if (!headingColour.isValid()) headingColour = QColor("#e6e8eb");
 	bg.setAlpha(qRound(qBound(0, opacity, 100) * 2.55));
 
-	QImage image(width, height, QImage::Format_ARGB32_Premultiplied);
+	QImage image(layout.width, layout.height, QImage::Format_ARGB32_Premultiplied);
 	image.fill(Qt::transparent);
 	QPainter painter(&image);
 	painter.setRenderHint(QPainter::Antialiasing, true);
+	const QRectF outerRect(layout.border / 2.0, layout.border / 2.0,
+			       layout.width - layout.border, layout.height - layout.border);
 	QPainterPath outer;
-	outer.addRoundedRect(QRectF(4, 4, width - 8, height - 8), corner, corner);
+	outer.addRoundedRect(outerRect, layout.outerRadius, layout.outerRadius);
 	QPainterPath inner;
-	inner.addRoundedRect(QRectF(aperture), qMax(0, corner - border), qMax(0, corner - border));
+	inner.addRoundedRect(QRectF(layout.aperture), layout.innerRadius, layout.innerRadius);
 	painter.fillPath(outer.subtracted(inner), bg);
-	painter.setPen(QPen(edge, border));
-	painter.drawRoundedRect(QRectF(aperture).adjusted(-border / 2.0, -border / 2.0, border / 2.0, border / 2.0), corner, corner);
+	painter.setPen(QPen(edge, layout.border));
+	painter.drawRoundedRect(outerRect, layout.outerRadius, layout.outerRadius);
 
 	const QString heading = title.trimmed().isEmpty() ? QStringLiteral("INSTANT REPLAY") : title.trimmed();
 	QFont headingFont(font.trimmed().isEmpty() ? QStringLiteral("Sora") : font, qBound(12, titleSize, 180));
 	headingFont.setBold(true);
 	painter.setFont(headingFont);
-	painter.setPen(edge);
-	painter.drawText(QRect(aperture.left(), 8, aperture.width(), aperture.top() - 18),
+	painter.setPen(headingColour);
+	painter.drawText(layout.titleRect,
 			 Qt::AlignLeft | Qt::AlignVCenter, heading);
 	painter.end();
 
@@ -423,6 +463,18 @@ void RsInstantReplay::configureReplayFrame(const QString &title, const QString &
 		return;
 	saveReplayBgImage(path);
 	ensureReplayBgSource();
+	obs_source_t *sceneSource = obs_frontend_get_current_scene();
+	if (sceneSource) {
+		obs_scene_t *scene = obs_scene_from_source(sceneSource);
+		obs_sceneitem_t *group = findReplayGroup(scene);
+		if (group) {
+			obs_source_t *groupSource = obs_sceneitem_get_source(group);
+			obs_scene_t *groupScene = groupSource ? obs_group_from_source(groupSource) : nullptr;
+			fitReplayInsideBackground(groupScene);
+			initReplayGroupTransform(group);
+		}
+		obs_source_release(sceneSource);
+	}
 }
 
 static void fitReplayInsideBackground(obs_scene_t *groupScene)
@@ -434,28 +486,20 @@ static void fitReplayInsideBackground(obs_scene_t *groupScene)
 	if (!replay || !background)
 		return;
 
-	obs_source_t *backgroundSource = obs_sceneitem_get_source(background);
-	const uint32_t width = backgroundSource ? obs_source_get_width(backgroundSource) : 0;
-	const uint32_t height = backgroundSource ? obs_source_get_height(backgroundSource) : 0;
-	if (!width || !height)
-		return;
-
-	// Use one deterministic top-left coordinate system for both children. Centre
-	// anchoring both at (0,0) lets OBS recalculate the group around their negative
-	// extents and is what separated the replay from its frame.
 	obs_sceneitem_set_alignment(background, OBS_ALIGN_LEFT | OBS_ALIGN_TOP);
 	obs_sceneitem_set_bounds_type(background, OBS_BOUNDS_NONE);
+	vec2 backgroundScale = {1.0f, 1.0f};
+	obs_sceneitem_set_scale(background, &backgroundScale);
 	vec2 backgroundPos = {0.0f, 0.0f};
 	obs_sceneitem_set_pos(background, &backgroundPos);
 
-	// The supplied frame reserves a title strip and border. Keep the replay in
-	// its inner aperture while preserving the recorded video's aspect ratio.
-	vec2 bounds = {static_cast<float>(width) * 0.86f, static_cast<float>(height) * 0.76f};
+	const QRect &aperture = s_replayFrameLayout.aperture;
+	vec2 bounds = {(float)aperture.width(), (float)aperture.height()};
 	obs_sceneitem_set_alignment(replay, OBS_ALIGN_LEFT | OBS_ALIGN_TOP);
 	obs_sceneitem_set_bounds_alignment(replay, OBS_ALIGN_CENTER);
 	obs_sceneitem_set_bounds_type(replay, OBS_BOUNDS_SCALE_INNER);
 	obs_sceneitem_set_bounds(replay, &bounds);
-	vec2 pos = {static_cast<float>(width) * 0.07f, static_cast<float>(height) * 0.14f};
+	vec2 pos = {(float)aperture.x(), (float)aperture.y()};
 	obs_sceneitem_set_pos(replay, &pos);
 }
 

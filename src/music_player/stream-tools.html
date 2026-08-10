@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <style>
-*{box-sizing:border-box}body{margin:0;background:#111821;color:#e6e8eb;font:15px Sora,Segoe UI,sans-serif}.intro,p{color:#aebdcc;line-height:1.5}.intro{margin:0 0 18px}.grid{display:grid;grid-template-columns:repeat(2,minmax(320px,1fr));gap:16px}.card{border:1px solid #303b4a;border-radius:15px;background:#151e29;padding:20px}.wide{grid-column:1/-1}h2,h3{margin:0 0 8px}.row{display:flex;gap:10px;align-items:end;margin-top:10px}.row>*{flex:1}button,input,select{width:100%;font:inherit;color:#e6e8eb;background:#1e2633;border:1px solid #3b4a60;border-radius:9px;padding:11px 13px}button{font-weight:700;cursor:pointer}button:hover{border-color:#00d4ff;background:#063847}.primary{background:#007f91;border-color:#00d4ff}.danger{color:#ff9caa}.small{width:auto;flex:0 0 auto}label{display:block;color:#8fb9e8;font-size:12px;margin:12px 0 6px}.status{margin-top:13px;color:#7f95ad;font-size:13px}.preview{min-height:88px;display:grid;place-items:center;margin-top:12px;border:1px solid #303b4a;border-radius:10px;background:#0b0f14;overflow:hidden}.presets{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}.presets button{width:auto}.check{display:flex;align-items:center;gap:8px;color:#b9c9da}.check input{width:auto}.program{display:grid;grid-template-columns:1fr auto auto auto;gap:8px;align-items:center;padding:8px 0;border-bottom:1px solid #293546}.program span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.colour{display:grid;grid-template-columns:44px 1fr;gap:8px}.colour input[type=color]{height:43px;padding:3px}.duration{display:grid;grid-template-columns:1fr 1fr;gap:8px}.hint{font-size:12px;color:#7f95ad;margin-top:8px}@media(max-width:900px){.grid{grid-template-columns:1fr}.wide{grid-column:auto}.row{flex-wrap:wrap}}
+*{box-sizing:border-box}body{margin:0;background:#111821;color:#e6e8eb;font:15px Sora,Segoe UI,sans-serif}.intro,p{color:#aebdcc;line-height:1.5}.intro{margin:0 0 18px}.grid{display:grid;grid-template-columns:repeat(2,minmax(320px,1fr));gap:16px}.card{border:1px solid #303b4a;border-radius:15px;background:#151e29;padding:20px}.wide{grid-column:1/-1}h2,h3{margin:0 0 8px}.row{display:flex;gap:10px;align-items:end;margin-top:10px}.row>*{flex:1}button,input,select{width:100%;font:inherit;color:#e6e8eb;background:#1e2633;border:1px solid #3b4a60;border-radius:9px;padding:11px 13px}button{font-weight:700;cursor:pointer}button:hover{border-color:#00d4ff;background:#063847}.primary{background:#007f91;border-color:#00d4ff}.danger{color:#ff9caa}.small{width:auto;flex:0 0 auto}label{display:block;color:#8fb9e8;font-size:12px;margin:12px 0 6px}.status{margin-top:13px;color:#7f95ad;font-size:13px}.preview{min-height:88px;display:grid;place-items:center;margin-top:12px;border:1px solid #303b4a;border-radius:10px;background:#0b0f14;overflow:hidden}.presets{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}.presets button{width:auto}.check{display:flex;align-items:center;gap:8px;color:#b9c9da}.check input{width:auto}.program{display:grid;grid-template-columns:1fr auto auto auto;gap:8px;align-items:center;padding:8px 0;border-bottom:1px solid #293546}.program span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.colour{display:grid;grid-template-columns:44px 1fr;gap:8px}.colour input[type=color]{height:43px;padding:3px}.duration{display:grid;grid-template-columns:1fr 1fr;gap:8px}.hint{font-size:12px;color:#7f95ad;margin-top:8px}.subcard{margin-top:18px;padding:16px;border:1px solid #2b3747;border-radius:12px;background:#111923}.replay-layout{display:grid;grid-template-columns:minmax(360px,1fr) minmax(360px,1fr);gap:18px}.replay-preview{position:relative;aspect-ratio:16/9;margin-top:12px;overflow:hidden;border:1px solid #39475a;background:#080b10}.replay-aperture{position:absolute;left:7%;top:14%;width:86%;height:76%;background:linear-gradient(135deg,#25344a,#111821);display:grid;place-items:center;color:#8092a8}.replay-heading{position:absolute;left:7%;top:2.5%;white-space:nowrap;max-width:86%;overflow:hidden;text-overflow:ellipsis;font-weight:800}.range-value{display:flex;justify-content:space-between;color:#8fb9e8;font-size:12px;margin-top:5px}@media(max-width:900px){.grid,.replay-layout{grid-template-columns:1fr}.wide{grid-column:auto}.row{flex-wrap:wrap}}
 </style>
 </head>
 <body>
@@ -33,20 +33,31 @@
 </div>
 <div id="browserStatus" class="status">Ready.</div>
 </section>
-<section class="card">
+<section class="card wide">
 <h2>Instant Replay</h2>
-<p>Save the Replay Buffer and play it through the framed replay source.</p>
-<div class="row">
-<button data-action="triggerReplay" class="primary">Save & play</button>
-<button data-action="hideReplay">Hide replay</button>
+<p>The Hub owns the Replay Buffer, its OBS sources and the frame viewers see. Design changes update live.</p>
+<div class="replay-layout">
+<div>
+<div class="subcard"><h3>Replay Buffer</h3>
+<div class="row"><div><label>Replay duration (seconds)</label><input id="replaySeconds" type="number" min="2" max="300" value="10"></div>
+<label class="check"><input id="replayAutoStart" type="checkbox">Start buffer with OBS</label>
+<label class="check"><input id="replayAutoHide" type="checkbox" checked>Hide replay when playback ends</label></div>
+<div class="row"><button data-action="replayStart" class="primary">Start buffer</button><button data-action="replayStop">Stop buffer</button><button data-action="triggerReplay" class="primary">Save &amp; play</button></div>
 </div>
-<label>Optional replay folder</label>
-<div class="row">
-<input id="replayFolder" readonly placeholder="Use OBS replay folder">
-<button id="browseReplay" class="small">Choose folder…</button>
-<button id="clearReplayFolder" class="small">Use OBS folder</button>
+<div class="subcard"><h3>OBS source</h3>
+<div class="row"><button data-action="replayRepair">Create / repair</button><button data-action="replayShow">Show</button><button data-action="hideReplay">Hide</button></div>
+<label>Optional replay folder</label><div class="row"><input id="replayFolder" readonly placeholder="Use OBS replay folder"><button id="browseReplay" class="small">Choose folder…</button><button id="clearReplayFolder" class="small">Use OBS folder</button></div>
+<div class="status">Leave blank to use OBS's configured Replay Buffer folder.</div></div>
 </div>
-<div class="status">Replay frame design will move here as its own design surface.</div>
+<div class="subcard"><h3>Frame Designer</h3>
+<label>Heading</label><input id="replayTitle" value="INSTANT REPLAY">
+<div class="row"><div><label>Font</label><select id="replayFont"></select></div><div><label>Heading size</label><input id="replayTitleSize" type="number" min="12" max="160" value="52"></div></div>
+<div class="row"><div><label>Frame colour</label><div class="colour"><input id="replayBackground" type="color" value="#0b0f14"><input id="replayBackgroundHex" value="#0b0f14" maxlength="7"></div></div><div><label>Border colour</label><div class="colour"><input id="replayAccent" type="color" value="#00d4ff"><input id="replayAccentHex" value="#00d4ff" maxlength="7"></div></div><div><label>Heading colour</label><div class="colour"><input id="replayTextColour" type="color" value="#e6e8eb"><input id="replayTextColourHex" value="#e6e8eb" maxlength="7"></div></div></div>
+<div class="row"><div><label>Frame width</label><input id="replayFrameWidth" type="number" min="320" max="3840" value="1280"></div><div><label>Frame height</label><input id="replayFrameHeight" type="number" min="180" max="2160" value="720"></div><div><label>Position X</label><input id="replayFrameX" type="number" min="0" max="3840" value="320"></div><div><label>Position Y</label><input id="replayFrameY" type="number" min="0" max="2160" value="180"></div></div>
+<div class="row"><div><label>Frame opacity</label><input id="replayOpacity" type="range" min="0" max="100" value="92"><div class="range-value"><span>Transparent</span><span id="replayOpacityValue">92%</span></div></div><div><label>Border width</label><input id="replayBorderWidth" type="range" min="0" max="48" value="12"><div class="range-value"><span>None</span><span id="replayBorderValue">12 px</span></div></div><div><label>Corner radius</label><input id="replayRadius" type="range" min="0" max="100" value="28"><div class="range-value"><span>Square</span><span id="replayRadiusValue">28 px</span></div></div></div>
+<div id="replayPreview" class="replay-preview"><div class="replay-aperture">Replay video area</div><div id="replayPreviewTitle" class="replay-heading">INSTANT REPLAY</div></div>
+</div>
+</div>
 </section>
 <section class="card wide">
 <h2>Quick Text</h2>
@@ -159,6 +170,51 @@ byId('browseReplay').onclick=()=>post('pickReplayFolder');
 byId('clearReplayFolder').onclick=()=>{byId('replayFolder').value='';post('saveReplayFolder','')};
 window.rsSelectedProgram=path=>{byId('programPath').value=path||''};
 window.rsSelectedReplayFolder=path=>{byId('replayFolder').value=path||'';post('saveReplayFolder',path||'')};})();
+</script>
+<script>
+(()=>{
+const byId=id=>document.getElementById(id),post=(action,value='')=>parent.rsNativePost(JSON.stringify({page:'tools',action,value}));
+const fonts=['Sora','Arial','Segoe UI','Calibri','Verdana','Tahoma','Trebuchet MS','Georgia','Times New Roman','Impact','Comic Sans MS'];
+fonts.forEach(font=>{const option=document.createElement('option');option.textContent=font;byId('replayFont').appendChild(option)});
+let ready=false,saveTimer=0;
+const validHex=value=>/^#[0-9a-f]{6}$/i.test(value);
+const rgba=(hex,opacity)=>{const value=parseInt(hex.slice(1),16);return `rgba(${value>>16},${value>>8&255},${value&255},${opacity/100})`};
+const bufferConfig=()=>({
+ seconds:Math.max(2,Math.min(300,+byId('replaySeconds').value||10)),
+ autoStart:byId('replayAutoStart').checked,
+ autoHide:byId('replayAutoHide').checked
+});
+const frameConfig=()=>({
+ title:byId('replayTitle').value||'INSTANT REPLAY',font:byId('replayFont').value||'Sora',
+ titleSize:Math.max(12,Math.min(160,+byId('replayTitleSize').value||52)),
+ background:byId('replayBackground').value,accent:byId('replayAccent').value,textColour:byId('replayTextColour').value,
+ opacity:+byId('replayOpacity').value,borderWidth:+byId('replayBorderWidth').value,radius:+byId('replayRadius').value,
+ frameWidth:Math.max(320,Math.min(3840,+byId('replayFrameWidth').value||1280)),frameHeight:Math.max(180,Math.min(2160,+byId('replayFrameHeight').value||720)),frameX:Math.max(0,+byId('replayFrameX').value||0),frameY:Math.max(0,+byId('replayFrameY').value||0)
+});
+function preview(){
+ const config=frameConfig(),preview=byId('replayPreview'),aperture=preview.querySelector('.replay-aperture'),title=byId('replayPreviewTitle');
+ const outerRadius=Math.max(config.radius,config.borderWidth+8),innerRadius=Math.max(0,outerRadius-config.borderWidth);
+ preview.style.background=rgba(config.background,config.opacity);preview.style.border=`${config.borderWidth}px solid ${config.accent}`;preview.style.borderRadius=`${outerRadius}px`;preview.style.aspectRatio=`${config.frameWidth}/${config.frameHeight}`;
+ aperture.style.borderRadius=`${innerRadius}px`;
+ title.textContent=config.title;title.style.color=config.textColour;title.style.fontFamily=config.font;title.style.fontSize=`${Math.max(12,config.titleSize*.42)}px`;
+ byId('replayOpacityValue').textContent=`${config.opacity}%`;byId('replayBorderValue').textContent=`${config.borderWidth} px`;byId('replayRadiusValue').textContent=`${config.radius} px`;
+}
+function save(){preview();if(!ready)return;clearTimeout(saveTimer);saveTimer=setTimeout(()=>{post('replayBufferConfig',bufferConfig());post('replayFrameConfig',frameConfig())},120)}
+function pair(colour,hex){byId(colour).oninput=()=>{byId(hex).value=byId(colour).value;save()};byId(hex).oninput=()=>{if(validHex(byId(hex).value)){byId(colour).value=byId(hex).value;save()}}}
+pair('replayBackground','replayBackgroundHex');pair('replayAccent','replayAccentHex');pair('replayTextColour','replayTextColourHex');
+['replaySeconds','replayAutoStart','replayAutoHide','replayTitle','replayFont','replayTitleSize','replayOpacity','replayBorderWidth','replayRadius','replayFrameWidth','replayFrameHeight','replayFrameX','replayFrameY'].forEach(id=>{byId(id).oninput=save;byId(id).onchange=save});
+const priorApply=window.rsApplyTools;
+window.rsApplyTools=config=>{
+ if(priorApply)priorApply(config);ready=false;
+ byId('replaySeconds').value=config.replaySeconds??10;byId('replayAutoStart').checked=!!config.replayAutoStart;byId('replayAutoHide').checked=config.replayAutoHide!==false;
+ byId('replayTitle').value=config.replayTitle||'INSTANT REPLAY';byId('replayFont').value=config.replayFont||'Sora';byId('replayTitleSize').value=config.replayTitleSize??52;
+ byId('replayBackground').value=byId('replayBackgroundHex').value=config.replayBackground||'#0b0f14';byId('replayAccent').value=byId('replayAccentHex').value=config.replayAccent||'#00d4ff';byId('replayTextColour').value=byId('replayTextColourHex').value=config.replayTextColour||'#e6e8eb';
+ byId('replayOpacity').value=config.replayOpacity??92;byId('replayBorderWidth').value=config.replayBorderWidth??12;byId('replayRadius').value=config.replayRadius??28;
+ byId('replayFrameWidth').value=config.replayFrameWidth??1280;byId('replayFrameHeight').value=config.replayFrameHeight??720;byId('replayFrameX').value=config.replayFrameX??320;byId('replayFrameY').value=config.replayFrameY??180;
+ preview();ready=true;
+};
+preview();
+})();
 </script>
 </body>
 </html>

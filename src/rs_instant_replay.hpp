@@ -47,8 +47,9 @@ public:
 	static void stopReplayBuffer();
 	static void showReplaySource();
 	static void repairReplaySource();
-	static void configureReplayFrame(const QString &title, const QString &font, int titleSize,
-					 const QString &background, const QString &accent, int opacity,
-					 int borderWidth, int radius);
+    static void configureReplayFrame(const QString &title, const QString &font, int titleSize,
+                                     const QString &background, const QString &accent,
+                                     const QString &textColour, int opacity, int borderWidth, int radius,
+                                     int frameWidth, int frameHeight, int frameX, int frameY);
 };
 

@@ -1102,7 +1102,7 @@ static void replayHotkeyCallback(void *, obs_hotkey_id, obs_hotkey_t *, bool pre
 	obs_frontend_add_event_callback(onFrontendEvent, nullptr);
 
 	// Register hotkey
-	s_replayHotkey = obs_hotkey_register_frontend("rs_instant_replay_trigger", "RearSilver: Trigger Instant Replay",
+	s_replayHotkey = obs_hotkey_register_frontend("rs_instant_replay_trigger", "RearSilver Stream Suite | Trigger Instant Replay",
 						      replayHotkeyCallback, nullptr);
 	s_frontendCallbacksRegistered = true;
 }

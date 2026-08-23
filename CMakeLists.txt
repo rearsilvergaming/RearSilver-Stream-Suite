@@ -203,8 +203,6 @@ add_library(${PROJECT_NAME} MODULE
     src/enhancements/rs_timer.hpp
     src/enhancements/rs_auto_start.cpp
     src/enhancements/rs_auto_start.hpp
-    src/enhancements/rs_instant_replay.cpp
-    src/enhancements/rs_instant_replay.hpp
     src/rs_instant_replay.cpp
     src/rs_instant_replay.hpp
 

@@ -22,7 +22,6 @@
 #include "rs_music/rs_music_tls_probe.hpp"
 #include "rs_music/rs_music_pcm_source.hpp"
 #include "enhancements/rs_auto_start.hpp"
-#include "enhancements/rs_instant_replay.hpp"
 #include "rs_instant_replay.hpp"
 
 // ---------------------------------------------
@@ -191,7 +190,6 @@ void obs_module_unload(void)
 
 	obs_frontend_remove_event_callback(frontend_event_callback, nullptr);
 	hub_replay::RsInstantReplay::shutdown();
-	RsInstantReplay::shutdown();
 	RsAutoStart::shutdown();
 	rsMusicPcmStopOutput();
 	rsMusicShutdown();

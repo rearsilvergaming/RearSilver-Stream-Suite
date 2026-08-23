@@ -1044,7 +1044,8 @@ static int g_page = 7;
 static std::string g_streamerAuthState = "disconnected", g_streamerLogin;
 static std::string g_botAuthState = "disconnected", g_botLogin, g_authSender = "streamer";
 static bool g_captureExists = false, g_playerAutoStart = false, g_hostPipeConnected = false,
-	g_replayBufferActive = false, g_replaySetupComplete = false;
+	g_replayBufferActive = false, g_replaySceneExists = false;
+static std::atomic<bool> g_replaySetupPending{false};
 static std::atomic<uint64_t> g_accountsRevision{0};
 static bool externalActive();
 static void sendTwitchMessage(const std::string &message)
@@ -1627,7 +1628,7 @@ public:
 										return S_OK;
 									}
 									if(action=="triggerReplay"||action=="replayShow"){
-										const bool setupComplete=g_replaySetupComplete||musicBool(L"tool.replaySetupCompleted",false);
+										const bool setupComplete=g_replaySceneExists&&musicBool(L"tool.replaySetupCompleted",false);
 										if(!setupComplete){
 											m_webView->ExecuteScript(L"window.rsReplaySetupRequired&&window.rsReplaySetupRequired()",nullptr);
 											return S_OK;
@@ -1637,6 +1638,7 @@ public:
 										g_hostEvents.push_back("HOST\tTOOL\t"+action+"\t\"\"\n");
 										return S_OK;
 									}
+									if(action=="replayRepair")g_replaySetupPending.store(true);
 									std::string value;
 									if(object->HasKey("value")){CefRefPtr<CefValue>v=object->GetValue("value");value=CefWriteJSON(v,JSON_WRITER_DEFAULT).ToString();}
 									// Optional applications belong to the Control Hub. OBS starts/stops
@@ -1781,7 +1783,7 @@ private:
 		d->SetBool("replayAutoStart",musicBool(L"tool.replayAutoStart",false));
 		d->SetBool("replayAutoHide",musicBool(L"tool.replayAutoHide",true));
 		d->SetBool("replayBufferActive",g_replayBufferActive);
-		d->SetBool("replaySetupComplete",g_replaySetupComplete||musicBool(L"tool.replaySetupCompleted",false));
+		d->SetBool("replaySetupComplete",g_replaySceneExists&&musicBool(L"tool.replaySetupCompleted",false));
 		d->SetString("replayTitle",wideToUtf8(musicSetting(L"tool.replayTitle",L"INSTANT REPLAY")));
 		d->SetString("replayFont",wideToUtf8(musicSetting(L"tool.replayFont",L"Sora")));
 		d->SetString("replayAlignment",wideToUtf8(musicSetting(L"tool.replayAlignment",L"left")));
@@ -2809,7 +2811,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int)
 					if (line.rfind("SETUP_STATE\t", 0) == 0) {
 						const size_t tab=line.find('\t',12);if(tab!=std::string::npos){g_captureExists=line.substr(12,tab-12)=="true";g_playerAutoStart=line.substr(tab+1)=="true";if(g_overlayDesigner)g_overlayDesigner->refresh();}
 					} else if (line.rfind("REPLAY_STATE\t", 0) == 0) {
-						CefRefPtr<CefValue>state=CefParseJSON(line.substr(13),JSON_PARSER_RFC);if(state&&state->GetType()==VTYPE_DICTIONARY){g_replayBufferActive=state->GetDictionary()->GetBool("bufferActive");const bool nativeSetup=state->GetDictionary()->GetBool("setupComplete");if(nativeSetup)setMusicSetting(L"tool.replaySetupCompleted",L"true");g_replaySetupComplete=nativeSetup||musicBool(L"tool.replaySetupCompleted",false);if(g_overlayDesigner)g_overlayDesigner->refresh();}
+						CefRefPtr<CefValue>state=CefParseJSON(line.substr(13),JSON_PARSER_RFC);if(state&&state->GetType()==VTYPE_DICTIONARY){g_replayBufferActive=state->GetDictionary()->GetBool("bufferActive");g_replaySceneExists=state->GetDictionary()->GetBool("sceneExists");const bool setupResponse=g_replaySetupPending.exchange(false);if(setupResponse&&g_replaySceneExists)setMusicSetting(L"tool.replaySetupCompleted",L"true");if(g_overlayDesigner)g_overlayDesigner->refresh();}
 					} else if (line.rfind("HUB_IMPORT\t", 0) == 0) {
 						const std::string url = line.substr(11);
 						std::thread([window, url] { auto *result = new HubPlaylistResult(resolveHubPlaylist(url));

@@ -683,10 +683,10 @@ void RsInstantReplay::configureReplayFrame(const QString &title, const QString &
 QJsonObject RsInstantReplay::replayState()
 {
 	obs_source_t *serviceSource = findReplaySceneSource();
-	const bool setupComplete = serviceSource != nullptr;
+	const bool sceneExists = serviceSource != nullptr;
 	if (serviceSource)
 		obs_source_release(serviceSource);
-	return {{"bufferActive", replayBufferActive()}, {"setupComplete", setupComplete},
+	return {{"bufferActive", replayBufferActive()}, {"sceneExists", sceneExists},
 		{"seconds", replaySeconds()}, {"autoStart", replayAutoStart()}, {"autoHide", replayAutoHide()},
 		{"sizeStep", s_replaySizeStep}, {"borderStep", s_replayBorderStep},
 		{"radiusStep", s_replayRadiusStep}, {"alignment", s_replayAlignment}};

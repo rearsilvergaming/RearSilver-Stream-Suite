@@ -2,6 +2,7 @@
 
 #include <QWidget>
 #include <QString>
+#include <QJsonObject>
 
 extern "C" {
 #include <obs.h>
@@ -13,6 +14,8 @@ class RsMainDock;
 // ------------------------------------------------------------
 // Instant Replay helper + UI
 // ------------------------------------------------------------
+namespace hub_replay {
+
 class RsInstantReplay {
 public:
 	// Ensure the replay media source exists in the current scene
@@ -47,9 +50,11 @@ public:
 	static void stopReplayBuffer();
 	static void showReplaySource();
 	static void repairReplaySource();
-    static void configureReplayFrame(const QString &title, const QString &font, int titleSize,
-                                     const QString &background, const QString &accent,
-                                     const QString &textColour, int opacity, int borderWidth, int radius,
-                                     int frameWidth, int frameHeight, int frameX, int frameY);
+	static void configureReplayFrame(const QString &title, const QString &font, const QString &alignment,
+					 const QString &background, const QString &accent,
+					 const QString &textColour, int opacity,
+					 const QString &sizeStep, const QString &borderStep, const QString &radiusStep);
+	static QJsonObject replayState();
 };
 
+} // namespace hub_replay

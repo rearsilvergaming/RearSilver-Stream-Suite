@@ -8,7 +8,7 @@
 #include "enhancements/rs_browser_refresh.hpp"
 #include "enhancements/rs_quick_text.hpp"
 #include "enhancements/rs_timer.hpp"
-#include "enhancements/rs_instant_replay.hpp"
+#include "rs_instant_replay.hpp"
 
 #include <QDateTime>
 #include <QFileInfo>

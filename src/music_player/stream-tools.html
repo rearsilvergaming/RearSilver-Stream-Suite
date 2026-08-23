@@ -51,10 +51,10 @@
 </div>
 <div class="subcard"><h3>Frame Designer</h3>
 <label>Heading</label><input id="replayTitle" value="INSTANT REPLAY">
-<div class="row"><div><label>Font</label><select id="replayFont"></select></div><div><label>Heading size</label><input id="replayTitleSize" type="number" min="12" max="160" value="52"></div></div>
+<div class="row"><div><label>Font</label><select id="replayFont"></select></div><div><label>Heading alignment</label><select id="replayAlignment"><option value="left">Left</option><option value="center">Centre</option><option value="right">Right</option></select></div></div>
 <div class="row"><div><label>Frame colour</label><div class="colour"><input id="replayBackground" type="color" value="#0b0f14"><input id="replayBackgroundHex" value="#0b0f14" maxlength="7"></div></div><div><label>Border colour</label><div class="colour"><input id="replayAccent" type="color" value="#00d4ff"><input id="replayAccentHex" value="#00d4ff" maxlength="7"></div></div><div><label>Heading colour</label><div class="colour"><input id="replayTextColour" type="color" value="#e6e8eb"><input id="replayTextColourHex" value="#e6e8eb" maxlength="7"></div></div></div>
-<div class="row"><div><label>Frame width</label><input id="replayFrameWidth" type="number" min="320" max="3840" value="1280"></div><div><label>Frame height</label><input id="replayFrameHeight" type="number" min="180" max="2160" value="720"></div><div><label>Position X</label><input id="replayFrameX" type="number" min="0" max="3840" value="320"></div><div><label>Position Y</label><input id="replayFrameY" type="number" min="0" max="2160" value="180"></div></div>
-<div class="row"><div><label>Frame opacity</label><input id="replayOpacity" type="range" min="0" max="100" value="92"><div class="range-value"><span>Transparent</span><span id="replayOpacityValue">92%</span></div></div><div><label>Border width</label><input id="replayBorderWidth" type="range" min="0" max="48" value="12"><div class="range-value"><span>None</span><span id="replayBorderValue">12 px</span></div></div><div><label>Corner radius</label><input id="replayRadius" type="range" min="0" max="100" value="28"><div class="range-value"><span>Square</span><span id="replayRadiusValue">28 px</span></div></div></div>
+<div><label>Replay size</label><input id="replayScale" type="range" min="0" max="3" step="1" value="2"><div class="range-value"><span>Small</span><strong id="replayScaleValue">Large</strong><span>Full screen</span></div></div>
+<div class="row"><div><label>Frame opacity</label><input id="replayOpacity" type="range" min="0" max="100" value="92"><div class="range-value"><span>Transparent</span><span id="replayOpacityValue">92%</span></div></div><div><label>Border width</label><input id="replayBorderWidth" type="range" min="0" max="3" step="1" value="2"><div class="range-value"><span>None</span><span id="replayBorderValue">Medium</span></div></div><div><label>Corner radius</label><input id="replayRadius" type="range" min="0" max="3" step="1" value="2"><div class="range-value"><span>Square</span><span id="replayRadiusValue">Rounded</span></div></div></div>
 <div id="replayPreview" class="replay-preview"><div class="replay-aperture">Replay video area</div><div id="replayPreviewTitle" class="replay-heading">INSTANT REPLAY</div></div>
 </div>
 </div>
@@ -184,33 +184,55 @@ const bufferConfig=()=>({
  autoStart:byId('replayAutoStart').checked,
  autoHide:byId('replayAutoHide').checked
 });
-const frameConfig=()=>({
- title:byId('replayTitle').value||'INSTANT REPLAY',font:byId('replayFont').value||'Sora',
- titleSize:Math.max(12,Math.min(160,+byId('replayTitleSize').value||52)),
- background:byId('replayBackground').value,accent:byId('replayAccent').value,textColour:byId('replayTextColour').value,
- opacity:+byId('replayOpacity').value,borderWidth:+byId('replayBorderWidth').value,radius:+byId('replayRadius').value,
- frameWidth:Math.max(320,Math.min(3840,+byId('replayFrameWidth').value||1280)),frameHeight:Math.max(180,Math.min(2160,+byId('replayFrameHeight').value||720)),frameX:Math.max(0,+byId('replayFrameX').value||0),frameY:Math.max(0,+byId('replayFrameY').value||0)
-});
-function preview(){
- const config=frameConfig(),preview=byId('replayPreview'),aperture=preview.querySelector('.replay-aperture'),title=byId('replayPreviewTitle');
- const outerRadius=Math.max(config.radius,config.borderWidth+8),innerRadius=Math.max(0,outerRadius-config.borderWidth);
- preview.style.background=rgba(config.background,config.opacity);preview.style.border=`${config.borderWidth}px solid ${config.accent}`;preview.style.borderRadius=`${outerRadius}px`;preview.style.aspectRatio=`${config.frameWidth}/${config.frameHeight}`;
- aperture.style.borderRadius=`${innerRadius}px`;
- title.textContent=config.title;title.style.color=config.textColour;title.style.fontFamily=config.font;title.style.fontSize=`${Math.max(12,config.titleSize*.42)}px`;
- byId('replayOpacityValue').textContent=`${config.opacity}%`;byId('replayBorderValue').textContent=`${config.borderWidth} px`;byId('replayRadiusValue').textContent=`${config.radius} px`;
+const replaySizeSteps=[{id:'small',label:'Small',scale:40,titleSize:28},{id:'medium',label:'Medium',scale:60,titleSize:36},{id:'large',label:'Large',scale:80,titleSize:46},{id:'fullscreen',label:'Full screen',scale:100,titleSize:56}];
+const replayBorderSteps=[{id:'none',label:'None',value:0},{id:'thin',label:'Thin',value:4},{id:'medium',label:'Medium',value:8},{id:'thick',label:'Thick',value:12}];
+const replayRadiusSteps=[{id:'square',label:'Square',value:0},{id:'subtle',label:'Subtle',value:10},{id:'rounded',label:'Rounded',value:20},{id:'soft',label:'Soft',value:32}];
+const stepAt=(steps,id)=>steps[Math.max(0,Math.min(steps.length-1,+byId(id).value||0))];
+const nearestStep=(steps,value,key='value')=>{let best=0;steps.forEach((step,index)=>{if(Math.abs(step[key]-value)<Math.abs(steps[best][key]-value))best=index});return best};
+const configuredStepIndex=(steps,id,legacy,key='value')=>{const index=steps.findIndex(step=>step.id===id);return index>=0?index:nearestStep(steps,legacy,key)};
+const frameConfig=()=>{
+ const size=stepAt(replaySizeSteps,'replayScale'),border=stepAt(replayBorderSteps,'replayBorderWidth'),radius=stepAt(replayRadiusSteps,'replayRadius');
+ return {title:byId('replayTitle').value||'INSTANT REPLAY',font:byId('replayFont').value||'Sora',
+  alignment:byId('replayAlignment').value||'left',background:byId('replayBackground').value,accent:byId('replayAccent').value,
+  textColour:byId('replayTextColour').value,opacity:+byId('replayOpacity').value,sizeStep:size.id,borderStep:border.id,radiusStep:radius.id};
+};
+ const replayLayout=config=>{
+  const canvasWidth=1920,canvasHeight=1080;
+  let fullWidth=canvasWidth,fullHeight=Math.floor(fullWidth*9/16);
+  if(fullHeight>canvasHeight){fullHeight=canvasHeight;fullWidth=Math.floor(fullHeight*16/9)}
+  const size=replaySizeSteps.find(step=>step.id===config.sizeStep)||replaySizeSteps[2],borderStep=replayBorderSteps.find(step=>step.id===config.borderStep)||replayBorderSteps[2],radiusStep=replayRadiusSteps.find(step=>step.id===config.radiusStep)||replayRadiusSteps[2];
+  const width=Math.max(1,Math.round(fullWidth*size.scale/100)),height=Math.max(1,Math.floor(width*9/16));
+  const border=borderStep.value,outerRadius=Math.min(Math.max(radiusStep.value,border+8),Math.floor(Math.min(width,height)/2)),innerRadius=Math.max(0,outerRadius-border);
+  const shortEdge=Math.min(width,height),padding=Math.max(border+16,Math.round(shortEdge*.035)),header=Math.max(Math.round(size.titleSize*1.45),Math.round(height*.11));
+  const apertureTop=Math.min(height-padding-1,padding+header),availableWidth=Math.max(1,width-padding*2),availableHeight=Math.max(1,height-apertureTop-padding);
+  let apertureWidth=availableWidth,apertureHeight=Math.floor(apertureWidth*9/16);
+  if(apertureHeight>availableHeight){apertureHeight=availableHeight;apertureWidth=Math.floor(apertureHeight*16/9)}
+  return {width,height,border,outerRadius,innerRadius,padding,apertureTop,apertureWidth,apertureHeight,
+   apertureLeft:padding+Math.floor((availableWidth-apertureWidth)/2),apertureY:apertureTop+Math.floor((availableHeight-apertureHeight)/2)};
+ };
+ function preview(){
+  const config=frameConfig(),layout=replayLayout(config),preview=byId('replayPreview'),aperture=preview.querySelector('.replay-aperture'),title=byId('replayPreviewTitle');
+  const size=replaySizeSteps.find(step=>step.id===config.sizeStep)||replaySizeSteps[2];preview.style.background=rgba(config.background,config.opacity);preview.style.aspectRatio='16 / 9';preview.style.width=`${size.scale}%`;preview.style.maxWidth='100%';preview.style.margin='0 auto';
+  const applyGeometry=()=>{const displayWidth=preview.getBoundingClientRect().width;if(!displayWidth)return;const ratio=displayWidth/layout.width;
+   preview.style.border=`${layout.border*ratio}px solid ${config.accent}`;preview.style.borderRadius=`${layout.outerRadius*ratio}px`;
+   aperture.style.left=`${layout.apertureLeft/layout.width*100}%`;aperture.style.top=`${layout.apertureY/layout.height*100}%`;aperture.style.width=`${layout.apertureWidth/layout.width*100}%`;aperture.style.height=`${layout.apertureHeight/layout.height*100}%`;aperture.style.borderRadius=`${layout.innerRadius*ratio}px`;
+   title.style.left=`${layout.padding/layout.width*100}%`;title.style.top=`${layout.padding/layout.height*100}%`;title.style.width=`${(layout.width-layout.padding*2)/layout.width*100}%`;title.style.height=`${Math.max(1,layout.apertureTop-layout.padding)/layout.height*100}%`;title.style.maxWidth='none';title.style.display='flex';title.style.alignItems='center';title.style.justifyContent=config.alignment==='right'?'flex-end':config.alignment==='center'?'center':'flex-start';title.style.textAlign=config.alignment;title.style.fontSize=`${Math.max(1,size.titleSize*ratio)}px`;
+  };
+  title.textContent=config.title;title.style.color=config.textColour;title.style.fontFamily=config.font;requestAnimationFrame(applyGeometry);
+byId('replayOpacityValue').textContent=`${config.opacity}%`;byId('replayBorderValue').textContent=stepAt(replayBorderSteps,'replayBorderWidth').label;byId('replayRadiusValue').textContent=stepAt(replayRadiusSteps,'replayRadius').label;byId('replayScaleValue').textContent=stepAt(replaySizeSteps,'replayScale').label;
 }
 function save(){preview();if(!ready)return;clearTimeout(saveTimer);saveTimer=setTimeout(()=>{post('replayBufferConfig',bufferConfig());post('replayFrameConfig',frameConfig())},120)}
 function pair(colour,hex){byId(colour).oninput=()=>{byId(hex).value=byId(colour).value;save()};byId(hex).oninput=()=>{if(validHex(byId(hex).value)){byId(colour).value=byId(hex).value;save()}}}
 pair('replayBackground','replayBackgroundHex');pair('replayAccent','replayAccentHex');pair('replayTextColour','replayTextColourHex');
-['replaySeconds','replayAutoStart','replayAutoHide','replayTitle','replayFont','replayTitleSize','replayOpacity','replayBorderWidth','replayRadius','replayFrameWidth','replayFrameHeight','replayFrameX','replayFrameY'].forEach(id=>{byId(id).oninput=save;byId(id).onchange=save});
+['replaySeconds','replayAutoStart','replayAutoHide','replayTitle','replayFont','replayAlignment','replayOpacity','replayBorderWidth','replayRadius','replayScale'].forEach(id=>{byId(id).oninput=save;byId(id).onchange=save});
 const priorApply=window.rsApplyTools;
 window.rsApplyTools=config=>{
  if(priorApply)priorApply(config);ready=false;
  byId('replaySeconds').value=config.replaySeconds??10;byId('replayAutoStart').checked=!!config.replayAutoStart;byId('replayAutoHide').checked=config.replayAutoHide!==false;
- byId('replayTitle').value=config.replayTitle||'INSTANT REPLAY';byId('replayFont').value=config.replayFont||'Sora';byId('replayTitleSize').value=config.replayTitleSize??52;
+byId('replayTitle').value=config.replayTitle||'INSTANT REPLAY';byId('replayFont').value=config.replayFont||'Sora';byId('replayAlignment').value=config.replayAlignment||config.alignment||'left';
  byId('replayBackground').value=byId('replayBackgroundHex').value=config.replayBackground||'#0b0f14';byId('replayAccent').value=byId('replayAccentHex').value=config.replayAccent||'#00d4ff';byId('replayTextColour').value=byId('replayTextColourHex').value=config.replayTextColour||'#e6e8eb';
- byId('replayOpacity').value=config.replayOpacity??92;byId('replayBorderWidth').value=config.replayBorderWidth??12;byId('replayRadius').value=config.replayRadius??28;
- byId('replayFrameWidth').value=config.replayFrameWidth??1280;byId('replayFrameHeight').value=config.replayFrameHeight??720;byId('replayFrameX').value=config.replayFrameX??320;byId('replayFrameY').value=config.replayFrameY??180;
+ byId('replayOpacity').value=config.replayOpacity??92;byId('replayBorderWidth').value=configuredStepIndex(replayBorderSteps,config.replayBorderStep||config.borderStep,+(config.replayBorderWidth??8));byId('replayRadius').value=configuredStepIndex(replayRadiusSteps,config.replayRadiusStep||config.radiusStep,+(config.replayRadius??20));
+ byId('replayScale').value=configuredStepIndex(replaySizeSteps,config.replaySizeStep||config.sizeStep,+(config.replayScale??80),'scale');
  preview();ready=true;
 };
 preview();
@@ -218,4 +240,3 @@ preview();
 </script>
 </body>
 </html>
-

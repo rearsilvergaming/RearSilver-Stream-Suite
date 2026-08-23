@@ -1043,7 +1043,7 @@ static bool g_closeRequested = false;
 static int g_page = 7;
 static std::string g_streamerAuthState = "disconnected", g_streamerLogin;
 static std::string g_botAuthState = "disconnected", g_botLogin, g_authSender = "streamer";
-static bool g_captureExists = false, g_playerAutoStart = false, g_hostPipeConnected = false;
+static bool g_captureExists = false, g_playerAutoStart = false, g_hostPipeConnected = false, g_replayBufferActive = false;
 static std::atomic<uint64_t> g_accountsRevision{0};
 static bool externalActive();
 static void sendTwitchMessage(const std::string &message)
@@ -1334,6 +1334,11 @@ static constexpr const wchar_t *kMusicSettingsRegistry = L"Software\\RearSilver\
 static std::wstring musicSetting(const wchar_t *name,const wchar_t *fallback){HKEY key{};if(RegOpenKeyExW(HKEY_CURRENT_USER,kMusicSettingsRegistry,0,KEY_READ,&key)!=ERROR_SUCCESS)return fallback;wchar_t value[1024]{};DWORD type=0,bytes=sizeof(value);const LSTATUS result=RegQueryValueExW(key,name,nullptr,&type,reinterpret_cast<BYTE*>(value),&bytes);RegCloseKey(key);return result==ERROR_SUCCESS&&type==REG_SZ?value:fallback;}
 static void setMusicSetting(const wchar_t *name,const std::wstring &value){HKEY key{};DWORD d=0;if(RegCreateKeyExW(HKEY_CURRENT_USER,kMusicSettingsRegistry,0,nullptr,0,KEY_WRITE,nullptr,&key,&d)!=ERROR_SUCCESS)return;RegSetValueExW(key,name,0,REG_SZ,reinterpret_cast<const BYTE*>(value.c_str()),DWORD((value.size()+1)*sizeof(wchar_t)));RegCloseKey(key);}
 static bool musicBool(const wchar_t *name,bool fallback){const auto value=musicSetting(name,fallback?L"true":L"false");return value==L"true"||value==L"1";}
+static std::wstring replaySizeStep(){const auto step=musicSetting(L"tool.replaySizeStep",L"");if(step==L"small"||step==L"medium"||step==L"large"||step==L"fullscreen")return step;const int value=_wtoi(musicSetting(L"tool.replayScale",L"80").c_str());return value<50?L"small":value<70?L"medium":value<90?L"large":L"fullscreen";}
+static std::wstring replayBorderStep(){const auto step=musicSetting(L"tool.replayBorderStep",L"");if(step==L"none"||step==L"thin"||step==L"medium"||step==L"thick")return step;const int value=_wtoi(musicSetting(L"tool.replayBorderWidth",L"8").c_str());return value<2?L"none":value<6?L"thin":value<10?L"medium":L"thick";}
+static std::wstring replayRadiusStep(){const auto step=musicSetting(L"tool.replayRadiusStep",L"");if(step==L"square"||step==L"subtle"||step==L"rounded"||step==L"soft")return step;const int value=_wtoi(musicSetting(L"tool.replayRadius",L"20").c_str());return value<5?L"square":value<15?L"subtle":value<26?L"rounded":L"soft";}
+static std::string replayConfigJson(bool frame){CefRefPtr<CefDictionaryValue>d=CefDictionaryValue::Create();if(frame){d->SetString("title",wideToUtf8(musicSetting(L"tool.replayTitle",L"INSTANT REPLAY")));d->SetString("font",wideToUtf8(musicSetting(L"tool.replayFont",L"Sora")));d->SetString("alignment",wideToUtf8(musicSetting(L"tool.replayAlignment",L"left")));d->SetString("background",wideToUtf8(musicSetting(L"tool.replayBackground",L"#0b0f14")));d->SetString("accent",wideToUtf8(musicSetting(L"tool.replayAccent",L"#00d4ff")));d->SetString("textColour",wideToUtf8(musicSetting(L"tool.replayTextColour",L"#e6e8eb")));d->SetInt("opacity",_wtoi(musicSetting(L"tool.replayOpacity",L"92").c_str()));d->SetString("sizeStep",wideToUtf8(replaySizeStep()));d->SetString("borderStep",wideToUtf8(replayBorderStep()));d->SetString("radiusStep",wideToUtf8(replayRadiusStep()));}else{d->SetInt("seconds",_wtoi(musicSetting(L"tool.replaySeconds",L"10").c_str()));d->SetBool("autoStart",musicBool(L"tool.replayAutoStart",false));d->SetBool("autoHide",musicBool(L"tool.replayAutoHide",true));}CefRefPtr<CefValue>root=CefValue::Create();root->SetDictionary(d);return CefWriteJSON(root,JSON_WRITER_DEFAULT).ToString();}
+static void queueReplayConfiguration(){std::lock_guard<std::mutex>lock(g_hostEventMutex);g_hostEvents.push_back("HOST\tTOOL\treplayBufferConfig\t"+replayConfigJson(false)+"\n");g_hostEvents.push_back("HOST\tTOOL\treplayFrameConfig\t"+replayConfigJson(true)+"\n");g_hostEvents.push_back("HOST\tTOOL\treplayStatus\t\"\"\n");}
 
 static std::wstring normalisedProgramPath(std::wstring path)
 {
@@ -1648,7 +1653,7 @@ public:
 										if(v){setMusicSetting(L"tool.replaySeconds",std::to_wstring(v->GetInt("seconds")));setMusicSetting(L"tool.replayAutoStart",v->GetBool("autoStart")?L"true":L"false");setMusicSetting(L"tool.replayAutoHide",v->GetBool("autoHide")?L"true":L"false");}
 									}else if(action=="replayFrameConfig"){
 										CefRefPtr<CefDictionaryValue>v=object->GetDictionary("value");
-										if(v){setMusicSetting(L"tool.replayTitle",utf8ToWide(v->GetString("title").ToString()));setMusicSetting(L"tool.replayFont",utf8ToWide(v->GetString("font").ToString()));setMusicSetting(L"tool.replayTitleSize",std::to_wstring(v->GetInt("titleSize")));setMusicSetting(L"tool.replayBackground",utf8ToWide(v->GetString("background").ToString()));setMusicSetting(L"tool.replayAccent",utf8ToWide(v->GetString("accent").ToString()));setMusicSetting(L"tool.replayTextColour",utf8ToWide(v->GetString("textColour").ToString()));setMusicSetting(L"tool.replayOpacity",std::to_wstring(v->GetInt("opacity")));setMusicSetting(L"tool.replayBorderWidth",std::to_wstring(v->GetInt("borderWidth")));setMusicSetting(L"tool.replayRadius",std::to_wstring(v->GetInt("radius")));setMusicSetting(L"tool.replayFrameWidth",std::to_wstring(v->GetInt("frameWidth")));setMusicSetting(L"tool.replayFrameHeight",std::to_wstring(v->GetInt("frameHeight")));setMusicSetting(L"tool.replayFrameX",std::to_wstring(v->GetInt("frameX")));setMusicSetting(L"tool.replayFrameY",std::to_wstring(v->GetInt("frameY")));}
+							if(v){setMusicSetting(L"tool.replayTitle",utf8ToWide(v->GetString("title").ToString()));setMusicSetting(L"tool.replayFont",utf8ToWide(v->GetString("font").ToString()));setMusicSetting(L"tool.replayAlignment",utf8ToWide(v->GetString("alignment").ToString()));setMusicSetting(L"tool.replayBackground",utf8ToWide(v->GetString("background").ToString()));setMusicSetting(L"tool.replayAccent",utf8ToWide(v->GetString("accent").ToString()));setMusicSetting(L"tool.replayTextColour",utf8ToWide(v->GetString("textColour").ToString()));setMusicSetting(L"tool.replayOpacity",std::to_wstring(v->GetInt("opacity")));setMusicSetting(L"tool.replaySizeStep",utf8ToWide(v->GetString("sizeStep").ToString()));setMusicSetting(L"tool.replayBorderStep",utf8ToWide(v->GetString("borderStep").ToString()));setMusicSetting(L"tool.replayRadiusStep",utf8ToWide(v->GetString("radiusStep").ToString()));}
 									}
 									else if(action=="saveQuickPresets")setMusicSetting(L"tool.quickPresets",utf8ToWide(value));
 									return S_OK;
@@ -1763,19 +1768,17 @@ private:
 		d->SetInt("replaySeconds",_wtoi(musicSetting(L"tool.replaySeconds",L"10").c_str()));
 		d->SetBool("replayAutoStart",musicBool(L"tool.replayAutoStart",false));
 		d->SetBool("replayAutoHide",musicBool(L"tool.replayAutoHide",true));
+		d->SetBool("replayBufferActive",g_replayBufferActive);
 		d->SetString("replayTitle",wideToUtf8(musicSetting(L"tool.replayTitle",L"INSTANT REPLAY")));
 		d->SetString("replayFont",wideToUtf8(musicSetting(L"tool.replayFont",L"Sora")));
-		d->SetInt("replayTitleSize",_wtoi(musicSetting(L"tool.replayTitleSize",L"52").c_str()));
+		d->SetString("replayAlignment",wideToUtf8(musicSetting(L"tool.replayAlignment",L"left")));
 		d->SetString("replayBackground",wideToUtf8(musicSetting(L"tool.replayBackground",L"#0b0f14")));
 		d->SetString("replayAccent",wideToUtf8(musicSetting(L"tool.replayAccent",L"#00d4ff")));
 		d->SetString("replayTextColour",wideToUtf8(musicSetting(L"tool.replayTextColour",L"#e6e8eb")));
 		d->SetInt("replayOpacity",_wtoi(musicSetting(L"tool.replayOpacity",L"92").c_str()));
-		d->SetInt("replayBorderWidth",_wtoi(musicSetting(L"tool.replayBorderWidth",L"12").c_str()));
-		d->SetInt("replayRadius",_wtoi(musicSetting(L"tool.replayRadius",L"28").c_str()));
-		d->SetInt("replayFrameWidth",_wtoi(musicSetting(L"tool.replayFrameWidth",L"1280").c_str()));
-		d->SetInt("replayFrameHeight",_wtoi(musicSetting(L"tool.replayFrameHeight",L"720").c_str()));
-		d->SetInt("replayFrameX",_wtoi(musicSetting(L"tool.replayFrameX",L"320").c_str()));
-		d->SetInt("replayFrameY",_wtoi(musicSetting(L"tool.replayFrameY",L"180").c_str()));
+		d->SetString("replaySizeStep",wideToUtf8(replaySizeStep()));
+		d->SetString("replayBorderStep",wideToUtf8(replayBorderStep()));
+		d->SetString("replayRadiusStep",wideToUtf8(replayRadiusStep()));
 		auto applyArray=[&](const char*key,const wchar_t*setting,const wchar_t*fallback){
 			CefRefPtr<CefValue>parsed=CefParseJSON(wideToUtf8(musicSetting(setting,fallback)),JSON_PARSER_RFC);
 			if(parsed&&parsed->GetType()==VTYPE_LIST)d->SetList(key,parsed->GetList());
@@ -2780,7 +2783,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int)
 			if(br!=lastChatBotRevision||streamerChanged||lastChatSender!=g_authSender){lastChatBotRevision=br;lastChatSender=g_authSender;g_twitchSender.disconnect();if(streamer.connected&&bot.connected&&g_authSender=="bot")g_twitchSender.connect(bot.login,g_botTwitch.accessToken(),streamer.login,streamer.userId);}
 		};
 		syncChat();
-		if (!connected) { connected = ConnectNamedPipe(pipe, nullptr) || GetLastError() == ERROR_PIPE_CONNECTED; g_hostPipeConnected=connected; if (connected) { send(pipe, player.status()); lastStreamerRevision=lastBotRevision=0; } }
+		if (!connected) { connected = ConnectNamedPipe(pipe, nullptr) || GetLastError() == ERROR_PIPE_CONNECTED; g_hostPipeConnected=connected; if (connected) { send(pipe, player.status()); queueReplayConfiguration(); lastStreamerRevision=lastBotRevision=0; } }
 		publishTwitch("streamer",g_streamerTwitch,lastStreamerRevision);publishTwitch("bot",g_botTwitch,lastBotRevision);
 		if (connected) {
 			{ std::lock_guard<std::mutex> lock(g_hostEventMutex); for(const auto &event:g_hostEvents)send(pipe,event); g_hostEvents.clear(); }
@@ -2792,6 +2795,8 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int)
 					if (line == "SHUTDOWN") { running = false; break; }
 					if (line.rfind("SETUP_STATE\t", 0) == 0) {
 						const size_t tab=line.find('\t',12);if(tab!=std::string::npos){g_captureExists=line.substr(12,tab-12)=="true";g_playerAutoStart=line.substr(tab+1)=="true";if(g_overlayDesigner)g_overlayDesigner->refresh();}
+					} else if (line.rfind("REPLAY_STATE\t", 0) == 0) {
+						CefRefPtr<CefValue>state=CefParseJSON(line.substr(13),JSON_PARSER_RFC);if(state&&state->GetType()==VTYPE_DICTIONARY){g_replayBufferActive=state->GetDictionary()->GetBool("bufferActive");if(g_overlayDesigner)g_overlayDesigner->refresh();}
 					} else if (line.rfind("HUB_IMPORT\t", 0) == 0) {
 						const std::string url = line.substr(11);
 						std::thread([window, url] { auto *result = new HubPlaylistResult(resolveHubPlaylist(url));

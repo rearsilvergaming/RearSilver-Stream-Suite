@@ -1,5 +1,5 @@
 #include "rs_instant_replay.hpp"
-#include "../rs_main_dock.hpp"
+#include "rs_main_dock.hpp"
 
 #include <QFileInfo>
 #include <QWidget>
@@ -24,7 +24,10 @@
 #include <QStandardPaths>
 #include <QColor>
 #include <QRect>
+#include <QCoreApplication>
+#include <QHash>
 
+#include <atomic>
 #include <vector>
 #include <cstring>
 #include <obs.h>
@@ -32,13 +35,12 @@
 #include <util/platform.h>
 #include <util/config-file.h>
 
+namespace hub_replay {
+
 // ------------------------------------------------------------
 // Constants
 // ------------------------------------------------------------
 static const char *kReplaySourceName = "RS Instant Replay";
-static const char *kReplaySecondsKey = "RSInstantReplaySeconds";
-static const char *kReplayAutoStartKey = "RSInstantReplayAutoStart";
-static const char *kReplayAutoHideKey = "RSInstantReplayAutoHide";
 static const char *kReplayBgSourceName = "RS Instant Replay Background";
 static const char *kReplayBgImageKey = "RSInstantReplayBgImage";
 
@@ -50,6 +52,17 @@ static qint64 s_lastReplayRequestTime = 0;
 static qint64 s_replayBufferStartTime = 0;
 static bool s_waitingForRequestedReplay = false;
 static QString s_visibleReplaySceneName;
+static std::atomic<quint64> s_replayPlaybackGeneration{0};
+static std::atomic<quint64> s_replayStartedGeneration{0};
+static obs_source_t *s_replaySignalSource = nullptr;
+static QString s_replaySizeStep = QStringLiteral("large");
+static QString s_replayBorderStep = QStringLiteral("medium");
+static QString s_replayRadiusStep = QStringLiteral("rounded");
+static QString s_replayAlignment = QStringLiteral("left");
+static QString s_replayFolderOverride;
+static int s_replaySeconds = 10;
+static bool s_replayAutoStart = false;
+static bool s_replayAutoHide = true;
 
 struct ReplayFrameLayout {
 	int width = 1280;
@@ -65,8 +78,7 @@ struct ReplayFrameLayout {
 
 static ReplayFrameLayout s_replayFrameLayout;
 
-static ReplayFrameLayout makeReplayFrameLayout(int requestedWidth, int requestedHeight,
-						 int requestedX, int requestedY, int requestedBorder,
+static ReplayFrameLayout makeReplayFrameLayout(int requestedScale, int requestedBorder,
 						 int requestedRadius, int titleSize)
 {
 	obs_video_info ovi = {};
@@ -75,10 +87,17 @@ static ReplayFrameLayout makeReplayFrameLayout(int requestedWidth, int requested
 	const int canvasHeight = haveVideo && ovi.base_height ? static_cast<int>(ovi.base_height) : 1080;
 
 	ReplayFrameLayout layout;
-	layout.width = qBound(320, requestedWidth, canvasWidth);
-	layout.height = qBound(180, requestedHeight, canvasHeight);
-	layout.x = qBound(0, requestedX, qMax(0, canvasWidth - layout.width));
-	layout.y = qBound(0, requestedY, qMax(0, canvasHeight - layout.height));
+	int fullWidth = canvasWidth;
+	int fullHeight = (fullWidth * 9) / 16;
+	if (fullHeight > canvasHeight) {
+		fullHeight = canvasHeight;
+		fullWidth = (fullHeight * 16) / 9;
+	}
+	const double scale = qBound(25, requestedScale, 100) / 100.0;
+	layout.width = qMax(1, qRound(fullWidth * scale));
+	layout.height = qMax(1, (layout.width * 9) / 16);
+	layout.x = qMax(0, (canvasWidth - layout.width) / 2);
+	layout.y = qMax(0, (canvasHeight - layout.height) / 2);
 	layout.border = qBound(0, requestedBorder, 64);
 	const int maxRadius = qMax(0, qMin(layout.width, layout.height) / 2);
 	// Keep the inner edge rounded even when a thick border is selected.
@@ -89,9 +108,17 @@ static ReplayFrameLayout makeReplayFrameLayout(int requestedWidth, int requested
 	const int padding = qMax(layout.border + 16, qRound(shortEdge * 0.035));
 	const int header = qMax(qRound(qBound(12, titleSize, 180) * 1.45), qRound(layout.height * 0.11));
 	const int apertureTop = qMin(layout.height - padding - 1, padding + header);
-	layout.aperture = QRect(padding, apertureTop,
-		qMax(1, layout.width - (padding * 2)),
-		qMax(1, layout.height - apertureTop - padding));
+	const int availableWidth = qMax(1, layout.width - (padding * 2));
+	const int availableHeight = qMax(1, layout.height - apertureTop - padding);
+	int apertureWidth = availableWidth;
+	int apertureHeight = (apertureWidth * 9) / 16;
+	if (apertureHeight > availableHeight) {
+		apertureHeight = availableHeight;
+		apertureWidth = (apertureHeight * 16) / 9;
+	}
+	layout.aperture = QRect(padding + (availableWidth - apertureWidth) / 2,
+		apertureTop + (availableHeight - apertureHeight) / 2,
+		qMax(1, apertureWidth), qMax(1, apertureHeight));
 	layout.titleRect = QRect(padding, padding, layout.width - (padding * 2),
 		qMax(1, apertureTop - padding));
 	return layout;
@@ -105,28 +132,16 @@ static bool s_frontendCallbacksRegistered = false;
 
 
 // ------------------------------------------------------------
-// Replay folder override (profile config)
+// Replay settings are supplied by the Control Hub for this process lifetime.
 // ------------------------------------------------------------
-static const char *kReplayFolderKey = "RSInstantReplayFolder";
-
 QString RsInstantReplay::replayFolderOverride()
 {
-	config_t *cfg = obs_frontend_get_profile_config();
-	if (!cfg)
-		return QString();
-
-	const char *path = config_get_string(cfg, "RearSilver", kReplayFolderKey);
-	return path ? QString::fromUtf8(path) : QString();
+	return s_replayFolderOverride;
 }
 
 void RsInstantReplay::setReplayFolderOverride(const QString &path)
 {
-	config_t *cfg = obs_frontend_get_profile_config();
-	if (!cfg)
-		return;
-
-	config_set_string(cfg, "RearSilver", kReplayFolderKey, path.toUtf8().constData());
-	config_save(cfg);
+	s_replayFolderOverride = path;
 }
 
 // ------------------------------------------------------------
@@ -135,22 +150,12 @@ void RsInstantReplay::setReplayFolderOverride(const QString &path)
 
 static int loadReplaySeconds()
 {
-	config_t *cfg = obs_frontend_get_profile_config();
-	if (!cfg)
-		return 10;
-
-	int v = (int)config_get_int(cfg, "RearSilver", kReplaySecondsKey);
-	return v > 0 ? v : 10;
+	return s_replaySeconds;
 }
 
 static void saveReplaySeconds(int seconds)
 {
-	config_t *cfg = obs_frontend_get_profile_config();
-	if (!cfg)
-		return;
-
-	config_set_int(cfg, "RearSilver", kReplaySecondsKey, seconds);
-	config_save(cfg);
+	s_replaySeconds = qBound(2, seconds, 300);
 }
 // ------------------------------------------------------------
 // Load / Save replay auto-start
@@ -158,21 +163,12 @@ static void saveReplaySeconds(int seconds)
 
 static bool loadReplayAutoStart()
 {
-	config_t *cfg = obs_frontend_get_profile_config();
-	if (!cfg)
-		return false;
-
-	return config_get_bool(cfg, "RearSilver", kReplayAutoStartKey);
+	return s_replayAutoStart;
 }
 
 static void saveReplayAutoStart(bool enabled)
 {
-	config_t *cfg = obs_frontend_get_profile_config();
-	if (!cfg)
-		return;
-
-	config_set_bool(cfg, "RearSilver", kReplayAutoStartKey, enabled);
-	config_save(cfg);
+	s_replayAutoStart = enabled;
 }
 
 // ------------------------------------------------------------
@@ -181,21 +177,12 @@ static void saveReplayAutoStart(bool enabled)
 
 static bool loadReplayAutoHide()
 {
-	config_t *cfg = obs_frontend_get_profile_config();
-	if (!cfg)
-		return true; // sensible default: ON
-
-	return config_get_bool(cfg, "RearSilver", kReplayAutoHideKey);
+	return s_replayAutoHide;
 }
 
 static void saveReplayAutoHide(bool enabled)
 {
-	config_t *cfg = obs_frontend_get_profile_config();
-	if (!cfg)
-		return;
-
-	config_set_bool(cfg, "RearSilver", kReplayAutoHideKey, enabled);
-	config_save(cfg);
+	s_replayAutoHide = enabled;
 }
 
 // ------------------------------------------------------------
@@ -283,6 +270,54 @@ static obs_sceneitem_t *findReplayBgItem(obs_scene_t *scene)
 static obs_source_t *getReplaySource()
 {
 	return obs_get_source_by_name(kReplaySourceName);
+}
+
+static void disconnectReplayMediaSignals();
+
+static void onReplayMediaStarted(void *, calldata_t *data)
+{
+	if (calldata_ptr(data, "source") == s_replaySignalSource)
+		s_replayStartedGeneration.store(s_replayPlaybackGeneration.load());
+}
+
+static void onReplayMediaEnded(void *, calldata_t *data)
+{
+	if (calldata_ptr(data, "source") != s_replaySignalSource)
+		return;
+	const quint64 generation = s_replayStartedGeneration.exchange(0);
+	if (!generation || generation != s_replayPlaybackGeneration.load())
+		return;
+	if (QObject *context = QCoreApplication::instance()) {
+		QTimer::singleShot(0, context, [generation]() {
+			if (generation == s_replayPlaybackGeneration.load())
+				RsInstantReplay::hideReplaySource();
+		});
+	}
+}
+
+static void connectReplayMediaSignals(obs_source_t *source)
+{
+	if (source == s_replaySignalSource)
+		return;
+	disconnectReplayMediaSignals();
+	if (!source)
+		return;
+	s_replaySignalSource = obs_source_get_ref(source);
+	signal_handler_t *handler = obs_source_get_signal_handler(s_replaySignalSource);
+	signal_handler_connect(handler, "media_started", onReplayMediaStarted, nullptr);
+	signal_handler_connect(handler, "media_ended", onReplayMediaEnded, nullptr);
+}
+
+static void disconnectReplayMediaSignals()
+{
+	if (!s_replaySignalSource)
+		return;
+	signal_handler_t *handler = obs_source_get_signal_handler(s_replaySignalSource);
+	signal_handler_disconnect(handler, "media_started", onReplayMediaStarted, nullptr);
+	signal_handler_disconnect(handler, "media_ended", onReplayMediaEnded, nullptr);
+	obs_source_release(s_replaySignalSource);
+	s_replaySignalSource = nullptr;
+	s_replayStartedGeneration.store(0);
 }
 
 static void initReplayGroupTransform(obs_sceneitem_t *group)
@@ -403,27 +438,60 @@ void RsInstantReplay::showReplaySource()
 		obs_sceneitem_t *group = findReplayGroup(scene);
 		if (group) {
 			obs_sceneitem_set_visible(group, true);
+			obs_scene_t *groupScene = obs_sceneitem_group_get_scene(group);
+			if (groupScene) {
+				if (obs_sceneitem_t *background = obs_scene_find_source(groupScene, kReplayBgSourceName))
+					obs_sceneitem_set_visible(background, true);
+				if (obs_sceneitem_t *replay = obs_scene_find_source(groupScene, kReplaySourceName))
+					obs_sceneitem_set_visible(replay, true);
+			}
 			s_visibleReplaySceneName = QString::fromUtf8(obs_source_get_name(sceneSrc));
 		}
 	}
 	obs_source_release(sceneSrc);
 }
 
+static void fitReplayInsideBackground(obs_scene_t *groupScene);
+
 void RsInstantReplay::repairReplaySource()
 {
 	ensureReplayBgSource();
 	ensureReplaySource();
+
+	obs_source_t *sceneSource = obs_frontend_get_current_scene();
+	if (!sceneSource)
+		return;
+
+	obs_scene_t *scene = obs_scene_from_source(sceneSource);
+	obs_sceneitem_t *group = findReplayGroup(scene);
+	if (group) {
+		obs_source_t *groupSource = obs_sceneitem_get_source(group);
+		obs_scene_t *groupScene = groupSource ? obs_group_from_source(groupSource) : nullptr;
+		fitReplayInsideBackground(groupScene);
+		initReplayGroupTransform(group);
+	}
+
+	obs_source_release(sceneSource);
 }
 
-static void fitReplayInsideBackground(obs_scene_t *groupScene);
-
-void RsInstantReplay::configureReplayFrame(const QString &title, const QString &font, int titleSize,
+void RsInstantReplay::configureReplayFrame(const QString &title, const QString &font, const QString &alignment,
 					     const QString &background, const QString &accent,
-					     const QString &textColour, int opacity, int borderWidth,
-					     int radius, int frameWidth, int frameHeight, int frameX, int frameY)
+					     const QString &textColour, int opacity,
+					     const QString &sizeStep, const QString &borderStep, const QString &radiusStep)
 {
-	s_replayFrameLayout = makeReplayFrameLayout(frameWidth, frameHeight, frameX, frameY,
-						       borderWidth, radius, titleSize);
+	static const QHash<QString, int> sizeScales{{"small", 40}, {"medium", 60}, {"large", 80}, {"fullscreen", 100}};
+	static const QHash<QString, int> titleSizes{{"small", 28}, {"medium", 36}, {"large", 46}, {"fullscreen", 56}};
+	static const QHash<QString, int> borderWidths{{"none", 0}, {"thin", 4}, {"medium", 8}, {"thick", 12}};
+	static const QHash<QString, int> radii{{"square", 0}, {"subtle", 10}, {"rounded", 20}, {"soft", 32}};
+	s_replaySizeStep = sizeScales.contains(sizeStep) ? sizeStep : QStringLiteral("large");
+	s_replayBorderStep = borderWidths.contains(borderStep) ? borderStep : QStringLiteral("medium");
+	s_replayRadiusStep = radii.contains(radiusStep) ? radiusStep : QStringLiteral("rounded");
+	s_replayAlignment = alignment == "center" || alignment == "right" ? alignment : QStringLiteral("left");
+	const int titleSize = titleSizes.value(s_replaySizeStep);
+	const int borderWidth = borderWidths.value(s_replayBorderStep);
+	const int radius = radii.value(s_replayRadiusStep);
+	const int frameScale = sizeScales.value(s_replaySizeStep);
+	s_replayFrameLayout = makeReplayFrameLayout(frameScale, borderWidth, radius, titleSize);
 	const ReplayFrameLayout &layout = s_replayFrameLayout;
 	QColor bg(background);
 	QColor edge(accent);
@@ -452,13 +520,21 @@ void RsInstantReplay::configureReplayFrame(const QString &title, const QString &
 	headingFont.setBold(true);
 	painter.setFont(headingFont);
 	painter.setPen(headingColour);
-	painter.drawText(layout.titleRect,
-			 Qt::AlignLeft | Qt::AlignVCenter, heading);
+	Qt::Alignment titleAlignment = Qt::AlignVCenter;
+	if (s_replayAlignment == QStringLiteral("center"))
+		titleAlignment |= Qt::AlignHCenter;
+	else if (s_replayAlignment == QStringLiteral("right"))
+		titleAlignment |= Qt::AlignRight;
+	else
+		titleAlignment |= Qt::AlignLeft;
+	painter.drawText(layout.titleRect, titleAlignment, heading);
 	painter.end();
 
 	const QString dir = QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation) + "/Replay";
 	QDir().mkpath(dir);
-	const QString path = dir + "/replay-frame.png";
+	static bool alternateFrameFile = false;
+	alternateFrameFile = !alternateFrameFile;
+	const QString path = dir + (alternateFrameFile ? "/replay-frame-a.png" : "/replay-frame-b.png");
 	if (!image.save(path, "PNG"))
 		return;
 	saveReplayBgImage(path);
@@ -475,6 +551,14 @@ void RsInstantReplay::configureReplayFrame(const QString &title, const QString &
 		}
 		obs_source_release(sceneSource);
 	}
+}
+
+QJsonObject RsInstantReplay::replayState()
+{
+	return {{"bufferActive", replayBufferActive()},
+		{"seconds", replaySeconds()}, {"autoStart", replayAutoStart()}, {"autoHide", replayAutoHide()},
+		{"sizeStep", s_replaySizeStep}, {"borderStep", s_replayBorderStep},
+		{"radiusStep", s_replayRadiusStep}, {"alignment", s_replayAlignment}};
 }
 
 static void fitReplayInsideBackground(obs_scene_t *groupScene)
@@ -718,6 +802,9 @@ void RsInstantReplay::playReplay(const QString &filePath)
 	if (!fi.exists())
 		return;
 
+	const quint64 playbackGeneration = s_replayPlaybackGeneration.fetch_add(1) + 1;
+	s_replayStartedGeneration.store(0);
+
 	ensureReplayBgSource(); // must exist first (goes underneath)
 	ensureReplaySource();   // created second (goes on top)
 
@@ -726,6 +813,7 @@ void RsInstantReplay::playReplay(const QString &filePath)
 	obs_source_t *src = getReplaySource();
 	if (!src)
 		return;
+	connectReplayMediaSignals(src);
 
 	obs_data_t *settings = obs_source_get_settings(src);
 
@@ -773,16 +861,18 @@ obs_sceneitem_t *group = findOrCreateReplayGroup(scene);
 				}
 			}
 
+			// Save & Play owns playback visibility regardless of any earlier
+			// manual Show/Hide action. Restart explicitly because activating an
+			// already-visible media source does not trigger restart_on_activate.
+			obs_source_media_restart(src);
 
 			// Auto-hide after replay duration
 			if (loadReplayAutoHide()) {
-				int replaySeconds = loadReplaySeconds();
-
-				// OBS replay files are ~2 seconds shorter than requested
-				int effectiveSeconds = qMax(1, replaySeconds - 2);
-
-				QTimer::singleShot(effectiveSeconds * 1000,
-						   []() { RsInstantReplay::hideReplaySource(); });
+				const int replayMilliseconds = qMax(1, loadReplaySeconds()) * 1000;
+				QTimer::singleShot(replayMilliseconds + 250, [playbackGeneration]() {
+					if (playbackGeneration == s_replayPlaybackGeneration)
+						RsInstantReplay::hideReplaySource();
+				});
 			}
 
 		}
@@ -797,11 +887,15 @@ obs_sceneitem_t *group = findOrCreateReplayGroup(scene);
 // ------------------------------------------------------------
 void RsInstantReplay::hideReplaySource()
 {
+	s_replayStartedGeneration.store(0);
 	obs_source_t *sceneSrc = s_visibleReplaySceneName.isEmpty()
 				 ? obs_frontend_get_current_scene()
 				 : obs_get_source_by_name(s_visibleReplaySceneName.toUtf8().constData());
-	if (!sceneSrc)
+	if (!sceneSrc) {
+		s_visibleReplaySceneName.clear();
+		disconnectReplayMediaSignals();
 		return;
+	}
 
 	obs_scene_t *scene = obs_scene_from_source(sceneSrc);
 	if (!scene) {
@@ -816,6 +910,7 @@ void RsInstantReplay::hideReplaySource()
 
 	obs_source_release(sceneSrc);
 	s_visibleReplaySceneName.clear();
+	disconnectReplayMediaSignals();
 }
 
 
@@ -931,12 +1026,6 @@ static void replayHotkeyCallback(void *, obs_hotkey_id, obs_hotkey_t *, bool pre
 	s_replayHotkey = obs_hotkey_register_frontend("rs_instant_replay_trigger", "RearSilver: Trigger Instant Replay",
 						      replayHotkeyCallback, nullptr);
 	s_frontendCallbacksRegistered = true;
-	if (loadReplayAutoStart()) {
-		QTimer::singleShot(500, []() {
-			if (!obs_frontend_replay_buffer_active())
-				obs_frontend_replay_buffer_start();
-		});
-	}
 }
 
 void RsInstantReplay::shutdown()
@@ -950,6 +1039,8 @@ void RsInstantReplay::shutdown()
 		obs_hotkey_unregister(s_replayHotkey);
 		s_replayHotkey = OBS_INVALID_HOTKEY_ID;
 	}
+	disconnectReplayMediaSignals();
+	s_replayPlaybackGeneration.fetch_add(1);
 }
 
 // ------------------------------------------------------------
@@ -1328,4 +1419,4 @@ QWidget *RsInstantReplay::createPage(RsMainDock *dock, QWidget *parent)
 	(void)dock;
 	return scroll;
 }
-
+} // namespace hub_replay

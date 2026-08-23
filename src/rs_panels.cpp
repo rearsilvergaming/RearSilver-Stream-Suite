@@ -22,7 +22,7 @@
 #include "enhancements/rs_quick_text.hpp"
 #include "enhancements/rs_timer.hpp"
 #include "enhancements/rs_auto_start.hpp"
-#include "enhancements/rs_instant_replay.hpp"
+#include "rs_instant_replay.hpp"
 
 // MUSIC UI panels (NEW)
 #include "rs_music/state/rs_music_state.hpp"
@@ -199,7 +199,7 @@ void RsMainDock::createPanels()
 	m_pageQuickText = RsQuickText::createPage(this, m_contentCard);
 
 	// Instant Replay (Enhancements tab)
-	m_pageInstantReplay = RsInstantReplay::createPage(this, m_contentCard);
+	m_pageInstantReplay = hub_replay::RsInstantReplay::createPage(this, m_contentCard);
 
 	// Auto Start (Enhancements tab)
 	m_pageAutoStart = RsAutoStart::createPage(this, m_contentCard);

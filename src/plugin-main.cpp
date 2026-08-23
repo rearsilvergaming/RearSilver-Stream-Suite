@@ -23,6 +23,7 @@
 #include "rs_music/rs_music_pcm_source.hpp"
 #include "enhancements/rs_auto_start.hpp"
 #include "enhancements/rs_instant_replay.hpp"
+#include "rs_instant_replay.hpp"
 
 // ---------------------------------------------
 // OBS module boilerplate
@@ -176,6 +177,7 @@ bool obs_module_load(void)
 	// it from the dock constructor is too late because the dock itself is
 	// created in response to that event.
 	RsAutoStart::ensureObsEventHook();
+	hub_replay::RsInstantReplay::registerFrontendCallbacks();
 	obs_frontend_add_event_callback(frontend_event_callback, nullptr);
 
 	LOG_INFO_MSG("plugin load finished");
@@ -188,6 +190,7 @@ void obs_module_unload(void)
 	LOG_INFO_MSG("plugin unload");
 
 	obs_frontend_remove_event_callback(frontend_event_callback, nullptr);
+	hub_replay::RsInstantReplay::shutdown();
 	RsInstantReplay::shutdown();
 	RsAutoStart::shutdown();
 	rsMusicPcmStopOutput();
@@ -200,4 +203,3 @@ void obs_module_unload(void)
 	// DO NOT delete g_dock — OBS owns it
 	g_dock = nullptr;
 }
-

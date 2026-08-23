@@ -8,7 +8,7 @@
 #include "enhancements/rs_browser_refresh.hpp"
 #include "enhancements/rs_quick_text.hpp"
 #include "enhancements/rs_timer.hpp"
-#include "enhancements/rs_instant_replay.hpp"
+#include "rs_instant_replay.hpp"
 
 #include <QDateTime>
 #include <QFileInfo>
@@ -36,6 +36,10 @@ RsMusicController::RsMusicController(RsMusicState *state, QObject *parent) : QOb
 			const bool autoStart = !player.isEmpty();
 			RsMusicLocalPlayer::instance().sendUiCommand("SETUP_STATE",
 				QString("%1\t%2").arg(captureExists ? "true" : "false", autoStart ? "true" : "false"));
+		};
+		auto publishReplayState = []() {
+			const QByteArray json = QJsonDocument(hub_replay::RsInstantReplay::replayState()).toJson(QJsonDocument::Compact);
+			RsMusicLocalPlayer::instance().sendUiCommand("REPLAY_STATE", QString::fromUtf8(json));
 		};
 		if (command == "SETUP_STATUS") { publishSetupState(); return; }
 		// The Control Hub is mandatory infrastructure now. Legacy AUTOSTART
@@ -97,15 +101,16 @@ RsMusicController::RsMusicController(RsMusicState *state, QObject *parent) : QOb
 			else if (action == "timerReset") RsTimer::reset();
 			else if (action == "timerShow") RsTimer::setVisible(true);
 			else if (action == "timerHide") RsTimer::setVisible(false);
-			else if (action == "triggerReplay") RsInstantReplay::triggerReplay();
-			else if (action == "hideReplay") RsInstantReplay::hideReplaySource();
-			else if (action == "replayShow") RsInstantReplay::showReplaySource();
-			else if (action == "replayRepair") RsInstantReplay::repairReplaySource();
-			else if (action == "replayStart") RsInstantReplay::startReplayBuffer();
-			else if (action == "replayStop") RsInstantReplay::stopReplayBuffer();
-			else if (action == "replayBufferConfig") { const QJsonObject o=value.toObject(); RsInstantReplay::configureReplayBuffer(o.value("seconds").toInt(10),o.value("autoStart").toBool(false),o.value("autoHide").toBool(true)); }
-			else if (action == "replayFrameConfig") { const QJsonObject o=value.toObject(); RsInstantReplay::configureReplayFrame(o.value("title").toString("INSTANT REPLAY"),o.value("font").toString("Sora"),o.value("titleSize").toInt(52),o.value("background").toString("#0b0f14"),o.value("accent").toString("#00d4ff"),o.value("opacity").toInt(92),o.value("borderWidth").toInt(12),o.value("radius").toInt(28)); }
-			else if (action == "saveReplayFolder") RsInstantReplay::setReplayFolderOverride(value.toString());
+			else if (action == "triggerReplay") hub_replay::RsInstantReplay::triggerReplay();
+			else if (action == "hideReplay") hub_replay::RsInstantReplay::hideReplaySource();
+			else if (action == "replayShow") hub_replay::RsInstantReplay::showReplaySource();
+			else if (action == "replayRepair") hub_replay::RsInstantReplay::repairReplaySource();
+			else if (action == "replayStart") hub_replay::RsInstantReplay::startReplayBuffer();
+			else if (action == "replayStop") hub_replay::RsInstantReplay::stopReplayBuffer();
+			else if (action == "replayBufferConfig") { const QJsonObject o=value.toObject(); hub_replay::RsInstantReplay::configureReplayBuffer(o.value("seconds").toInt(10),o.value("autoStart").toBool(false),o.value("autoHide").toBool(true)); }
+			else if (action == "replayFrameConfig") { const QJsonObject o=value.toObject(); hub_replay::RsInstantReplay::configureReplayFrame(o.value("title").toString("INSTANT REPLAY"),o.value("font").toString("Sora"),o.value("alignment").toString("left"),o.value("background").toString("#0b0f14"),o.value("accent").toString("#00d4ff"),o.value("textColour").toString("#e6e8eb"),o.value("opacity").toInt(92),o.value("sizeStep").toString("large"),o.value("borderStep").toString("medium"),o.value("radiusStep").toString("rounded")); }
+			else if (action == "saveReplayFolder") hub_replay::RsInstantReplay::setReplayFolderOverride(value.toString());
+			if (action.startsWith("replay") || action == "triggerReplay" || action == "hideReplay" || action == "saveReplayFolder") publishReplayState();
 			return;
 		}
 		if (command.startsWith("REQUEST_ACCEPTED\t")) {

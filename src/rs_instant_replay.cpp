@@ -40,9 +40,19 @@ namespace hub_replay {
 // ------------------------------------------------------------
 // Constants
 // ------------------------------------------------------------
-static const char *kReplaySourceName = "RS Instant Replay";
-static const char *kReplayBgSourceName = "RS Instant Replay Background";
+static const char *kReplaySceneName = "RearSilver Stream Suite | Instant Replay";
+static const char *kReplayGroupName = "Instant Replay Layout";
+static const char *kReplaySourceName = "Instant Replay Video";
+static const char *kReplayBgSourceName = "Instant Replay Frame";
 static const char *kReplayBgImageKey = "RSInstantReplayBgImage";
+static const char *kOwnerKey = "rearsilver_stream_suite_owner";
+static const char *kRoleKey = "rearsilver_stream_suite_role";
+static const char *kOwnerValue = "instant_replay";
+static const char *kSceneRole = "service_scene";
+static const char *kGroupRole = "layout_group";
+static const char *kFrameRole = "frame";
+static const char *kVideoRole = "video";
+static const char *kParentItemRole = "scene_instance";
 
 // ------------------------------------------------------------S
 // Replay state
@@ -51,7 +61,6 @@ static QString s_lastReplayFile;
 static qint64 s_lastReplayRequestTime = 0;
 static qint64 s_replayBufferStartTime = 0;
 static bool s_waitingForRequestedReplay = false;
-static QString s_visibleReplaySceneName;
 static std::atomic<quint64> s_replayPlaybackGeneration{0};
 static std::atomic<quint64> s_replayStartedGeneration{0};
 static obs_source_t *s_replaySignalSource = nullptr;
@@ -225,59 +234,177 @@ static obs_sceneitem_t *findReplayGroup(obs_scene_t *scene);
 static bool trySetReplayBufferSeconds(int seconds);
 static bool tryStartReplayBuffer();
 
-static obs_sceneitem_t *findReplayItem(obs_scene_t *scene)
+static bool hasManagedRole(obs_data_t *settings, const char *role)
+{
+	if (!settings)
+		return false;
+	const char *owner = obs_data_get_string(settings, kOwnerKey);
+	const char *storedRole = obs_data_get_string(settings, kRoleKey);
+	return owner && storedRole && strcmp(owner, kOwnerValue) == 0 && strcmp(storedRole, role) == 0;
+}
+
+static bool sourceHasManagedRole(obs_source_t *source, const char *role)
+{
+	if (!source)
+		return false;
+	obs_data_t *settings = obs_source_get_private_settings(source);
+	const bool matches = hasManagedRole(settings, role);
+	obs_data_release(settings);
+	return matches;
+}
+
+static void markManagedSource(obs_source_t *source, const char *role)
+{
+	if (!source)
+		return;
+	obs_data_t *settings = obs_source_get_private_settings(source);
+	obs_data_set_string(settings, kOwnerKey, kOwnerValue);
+	obs_data_set_string(settings, kRoleKey, role);
+	obs_data_release(settings);
+}
+
+static void markManagedItem(obs_sceneitem_t *item, const char *role)
+{
+	if (!item)
+		return;
+	obs_data_t *settings = obs_sceneitem_get_private_settings(item);
+	obs_data_set_string(settings, kOwnerKey, kOwnerValue);
+	obs_data_set_string(settings, kRoleKey, role);
+	obs_data_release(settings);
+}
+
+static obs_sceneitem_t *findManagedItem(obs_scene_t *scene, const char *role)
 {
 	if (!scene)
 		return nullptr;
-
-	// Look for the replay item inside the group scene
-	obs_sceneitem_t *groupItem = findReplayGroup(scene);
-	if (!groupItem)
-		return nullptr;
-
-	obs_source_t *groupSrc = obs_sceneitem_get_source(groupItem);
-	if (!groupSrc)
-		return nullptr;
-
-	obs_scene_t *groupScene = obs_group_from_source(groupSrc);
-	if (!groupScene)
-		return nullptr;
-
-	return obs_scene_find_source(groupScene, kReplaySourceName);
+	struct Search {
+		const char *role;
+		obs_sceneitem_t *item;
+	} search{role, nullptr};
+	obs_scene_enum_items(
+		scene,
+		[](obs_scene_t *, obs_sceneitem_t *item, void *param) {
+			auto *search = static_cast<Search *>(param);
+			if (sourceHasManagedRole(obs_sceneitem_get_source(item), search->role)) {
+				search->item = item;
+				return false;
+			}
+			return true;
+		},
+		&search);
+	return search.item;
 }
 
-static obs_sceneitem_t *findReplayBgItem(obs_scene_t *scene)
+static obs_source_t *findReplaySceneSource()
 {
-	if (!scene)
-		return nullptr;
-
-	// Look for the background item inside the group scene
-	obs_sceneitem_t *groupItem = findReplayGroup(scene);
-	if (!groupItem)
-		return nullptr;
-
-	obs_source_t *groupSrc = obs_sceneitem_get_source(groupItem);
-	if (!groupSrc)
-		return nullptr;
-
-	obs_scene_t *groupScene = obs_group_from_source(groupSrc);
-	if (!groupScene)
-		return nullptr;
-
-	return obs_scene_find_source(groupScene, kReplayBgSourceName);
+	obs_frontend_source_list scenes = {};
+	obs_frontend_get_scenes(&scenes);
+	obs_source_t *result = nullptr;
+	for (size_t i = 0; i < scenes.sources.num; ++i) {
+		obs_source_t *source = scenes.sources.array[i];
+		if (sourceHasManagedRole(source, kSceneRole)) {
+			result = obs_source_get_ref(source);
+			break;
+		}
+	}
+	obs_frontend_source_list_free(&scenes);
+	return result;
 }
 
-static obs_source_t *getReplaySource()
+static obs_source_t *ensureReplaySceneSource()
 {
-	return obs_get_source_by_name(kReplaySourceName);
+	if (obs_source_t *managed = findReplaySceneSource())
+		return managed;
+
+	obs_source_t *named = obs_get_source_by_name(kReplaySceneName);
+	if (named) {
+		if (sourceHasManagedRole(named, kSceneRole) && obs_scene_from_source(named))
+			return named;
+		blog(LOG_ERROR,
+		     "[RearSilver Stream Suite] Instant Replay cannot create its service scene because an unmanaged source named '%s' already exists. Rename that source and try again.",
+		     kReplaySceneName);
+		obs_source_release(named);
+		return nullptr;
+	}
+
+	obs_scene_t *scene = obs_scene_create(kReplaySceneName);
+	if (!scene) {
+		blog(LOG_ERROR, "[RearSilver Stream Suite] Failed to create the Instant Replay service scene");
+		return nullptr;
+	}
+	obs_source_t *source = obs_scene_get_source(scene);
+	markManagedSource(source, kSceneRole);
+	obs_source_t *result = obs_source_get_ref(source);
+	obs_scene_release(scene);
+	return result;
+}
+
+static obs_sceneitem_t *findSceneInstance(obs_scene_t *scene, obs_source_t *serviceSource)
+{
+	if (!scene || !serviceSource)
+		return nullptr;
+	struct Search {
+		obs_source_t *source;
+		obs_sceneitem_t *item;
+	} search{serviceSource, nullptr};
+	obs_scene_enum_items(
+		scene,
+		[](obs_scene_t *, obs_sceneitem_t *item, void *param) {
+			auto *search = static_cast<Search *>(param);
+			if (obs_sceneitem_get_source(item) == search->source) {
+				search->item = item;
+				return false;
+			}
+			return true;
+		},
+		&search);
+	return search.item;
+}
+
+static obs_sceneitem_t *ensureSceneInstance(obs_scene_t *parentScene, obs_source_t *serviceSource)
+{
+	if (!parentScene || !serviceSource || obs_scene_get_source(parentScene) == serviceSource)
+		return nullptr;
+	obs_sceneitem_t *item = findSceneInstance(parentScene, serviceSource);
+	if (!item)
+		item = obs_scene_add(parentScene, serviceSource);
+	if (!item) {
+		blog(LOG_ERROR, "[RearSilver Stream Suite] Failed to add the Instant Replay service scene to the active scene");
+		return nullptr;
+	}
+	markManagedItem(item, kParentItemRole);
+	obs_sceneitem_set_alignment(item, OBS_ALIGN_LEFT | OBS_ALIGN_TOP);
+	obs_sceneitem_set_bounds_type(item, OBS_BOUNDS_NONE);
+	vec2 scale = {1.0f, 1.0f};
+	vec2 pos = {0.0f, 0.0f};
+	obs_sceneitem_set_scale(item, &scale);
+	obs_sceneitem_set_pos(item, &pos);
+	obs_sceneitem_set_visible(item, true);
+	return item;
 }
 
 static void disconnectReplayMediaSignals();
 
 static void onReplayMediaStarted(void *, calldata_t *data)
 {
-	if (calldata_ptr(data, "source") == s_replaySignalSource)
-		s_replayStartedGeneration.store(s_replayPlaybackGeneration.load());
+	if (calldata_ptr(data, "source") != s_replaySignalSource)
+		return;
+	const quint64 generation = s_replayPlaybackGeneration.load();
+	s_replayStartedGeneration.store(generation);
+	if (QObject *context = QCoreApplication::instance()) {
+		QTimer::singleShot(0, context, [generation]() {
+			if (generation != s_replayPlaybackGeneration.load())
+				return;
+			obs_source_t *serviceSource = findReplaySceneSource();
+			obs_scene_t *serviceScene = serviceSource ? obs_scene_from_source(serviceSource) : nullptr;
+			obs_sceneitem_t *group = findReplayGroup(serviceScene);
+			obs_scene_t *groupScene = group ? obs_sceneitem_group_get_scene(group) : nullptr;
+			if (obs_sceneitem_t *video = findManagedItem(groupScene, kVideoRole))
+				obs_sceneitem_set_visible(video, true);
+			if (serviceSource)
+				obs_source_release(serviceSource);
+		});
+	}
 }
 
 static void onReplayMediaEnded(void *, calldata_t *data)
@@ -338,24 +465,7 @@ static void initReplayGroupTransform(obs_sceneitem_t *group)
 
 static obs_sceneitem_t *findReplayGroup(obs_scene_t *scene)
 {
-	if (!scene)
-		return nullptr;
-
-	obs_sceneitem_t *item = nullptr;
-
-	obs_scene_enum_items(
-		scene,
-		[](obs_scene_t *, obs_sceneitem_t *item, void *param) {
-			const char *name = obs_source_get_name(obs_sceneitem_get_source(item));
-			if (name && strcmp(name, "RS Instant Replay Group") == 0) {
-				*static_cast<obs_sceneitem_t **>(param) = item;
-				return false; // stop enumeration
-			}
-			return true;
-		},
-		&item);
-
-	return item;
+	return findManagedItem(scene, kGroupRole);
 }
 
 static obs_sceneitem_t *findOrCreateReplayGroup(obs_scene_t *scene)
@@ -367,16 +477,21 @@ static obs_sceneitem_t *findOrCreateReplayGroup(obs_scene_t *scene)
 	if (existing)
 		return existing;
 
-	// Create a group source
-	obs_source_t *groupSrc = obs_source_create("group", "RS Instant Replay Group", nullptr, nullptr);
-	if (!groupSrc)
+	obs_source_t *named = obs_get_source_by_name(kReplayGroupName);
+	if (named) {
+		blog(LOG_ERROR,
+		     "[RearSilver Stream Suite] Instant Replay cannot create its layout because an unmanaged source named '%s' already exists.",
+		     kReplayGroupName);
+		obs_source_release(named);
 		return nullptr;
+	}
 
-	obs_sceneitem_t *groupItem = obs_scene_add(scene, groupSrc);
-	obs_source_release(groupSrc);
+	obs_sceneitem_t *groupItem = obs_scene_add_group(scene, kReplayGroupName);
 
 	if (!groupItem)
 		return nullptr;
+	markManagedSource(obs_sceneitem_get_source(groupItem), kGroupRole);
+	markManagedItem(groupItem, kGroupRole);
 
 	// 🔧 CRITICAL: initialise transform ON CREATION
 	initReplayGroupTransform(groupItem);
@@ -385,19 +500,6 @@ static obs_sceneitem_t *findOrCreateReplayGroup(obs_scene_t *scene)
 	obs_sceneitem_set_visible(groupItem, false);
 
 	return groupItem;
-}
-
-static void centreItemInGroup(obs_sceneitem_t *item)
-{
-	if (!item)
-		return;
-
-	obs_sceneitem_set_alignment(item, OBS_ALIGN_CENTER);
-
-	vec2 pos = {0.0f, 0.0f};
-	obs_sceneitem_set_pos(item, &pos);
-
-	obs_sceneitem_set_bounds_type(item, OBS_BOUNDS_NONE);
 }
 
 int RsInstantReplay::replaySeconds() { return loadReplaySeconds(); }
@@ -430,48 +532,68 @@ void RsInstantReplay::stopReplayBuffer()
 
 void RsInstantReplay::showReplaySource()
 {
-	obs_source_t *sceneSrc = obs_frontend_get_current_scene();
-	if (!sceneSrc)
+	obs_source_t *serviceSource = ensureReplaySceneSource();
+	obs_source_t *parentSource = obs_frontend_get_current_scene();
+	if (!serviceSource || !parentSource) {
+		if (serviceSource)
+			obs_source_release(serviceSource);
+		if (parentSource)
+			obs_source_release(parentSource);
 		return;
-	obs_scene_t *scene = obs_scene_from_source(sceneSrc);
-	if (scene) {
-		obs_sceneitem_t *group = findReplayGroup(scene);
-		if (group) {
+	}
+	obs_scene_t *serviceScene = obs_scene_from_source(serviceSource);
+	obs_scene_t *parentScene = obs_scene_from_source(parentSource);
+	const bool alreadyInServiceScene = parentSource == serviceSource;
+	if (serviceScene && parentScene &&
+	    (alreadyInServiceScene || ensureSceneInstance(parentScene, serviceSource))) {
+		ensureReplayBgSource();
+		ensureReplaySource();
+		if (obs_sceneitem_t *group = findReplayGroup(serviceScene)) {
 			obs_sceneitem_set_visible(group, true);
 			obs_scene_t *groupScene = obs_sceneitem_group_get_scene(group);
-			if (groupScene) {
-				if (obs_sceneitem_t *background = obs_scene_find_source(groupScene, kReplayBgSourceName))
-					obs_sceneitem_set_visible(background, true);
-				if (obs_sceneitem_t *replay = obs_scene_find_source(groupScene, kReplaySourceName))
-					obs_sceneitem_set_visible(replay, true);
-			}
-			s_visibleReplaySceneName = QString::fromUtf8(obs_source_get_name(sceneSrc));
+			if (obs_sceneitem_t *background = findManagedItem(groupScene, kFrameRole))
+				obs_sceneitem_set_visible(background, true);
+			if (obs_sceneitem_t *video = findManagedItem(groupScene, kVideoRole))
+				obs_sceneitem_set_visible(video, true);
 		}
 	}
-	obs_source_release(sceneSrc);
+	obs_source_release(parentSource);
+	obs_source_release(serviceSource);
 }
 
 static void fitReplayInsideBackground(obs_scene_t *groupScene);
 
 void RsInstantReplay::repairReplaySource()
 {
+	obs_source_t *serviceSource = ensureReplaySceneSource();
+	obs_source_t *parentSource = obs_frontend_get_current_scene();
+	if (!serviceSource || !parentSource) {
+		if (serviceSource)
+			obs_source_release(serviceSource);
+		if (parentSource)
+			obs_source_release(parentSource);
+		return;
+	}
+	obs_scene_t *serviceScene = obs_scene_from_source(serviceSource);
+	obs_scene_t *parentScene = obs_scene_from_source(parentSource);
+	const bool alreadyInServiceScene = parentSource == serviceSource;
+	if (!serviceScene || !parentScene ||
+	    (!alreadyInServiceScene && !ensureSceneInstance(parentScene, serviceSource))) {
+		obs_source_release(parentSource);
+		obs_source_release(serviceSource);
+		return;
+	}
 	ensureReplayBgSource();
 	ensureReplaySource();
-
-	obs_source_t *sceneSource = obs_frontend_get_current_scene();
-	if (!sceneSource)
-		return;
-
-	obs_scene_t *scene = obs_scene_from_source(sceneSource);
-	obs_sceneitem_t *group = findReplayGroup(scene);
+	obs_sceneitem_t *group = findReplayGroup(serviceScene);
 	if (group) {
 		obs_source_t *groupSource = obs_sceneitem_get_source(group);
 		obs_scene_t *groupScene = groupSource ? obs_group_from_source(groupSource) : nullptr;
 		fitReplayInsideBackground(groupScene);
 		initReplayGroupTransform(group);
 	}
-
-	obs_source_release(sceneSource);
+	obs_source_release(parentSource);
+	obs_source_release(serviceSource);
 }
 
 void RsInstantReplay::configureReplayFrame(const QString &title, const QString &font, const QString &alignment,
@@ -511,7 +633,8 @@ void RsInstantReplay::configureReplayFrame(const QString &title, const QString &
 	outer.addRoundedRect(outerRect, layout.outerRadius, layout.outerRadius);
 	QPainterPath inner;
 	inner.addRoundedRect(QRectF(layout.aperture), layout.innerRadius, layout.innerRadius);
-	painter.fillPath(outer.subtracted(inner), bg);
+	painter.fillPath(outer, bg);
+	painter.fillPath(inner, QColor("#080b10"));
 	painter.setPen(QPen(edge, layout.border));
 	painter.drawRoundedRect(outerRect, layout.outerRadius, layout.outerRadius);
 
@@ -539,17 +662,17 @@ void RsInstantReplay::configureReplayFrame(const QString &title, const QString &
 		return;
 	saveReplayBgImage(path);
 	ensureReplayBgSource();
-	obs_source_t *sceneSource = obs_frontend_get_current_scene();
-	if (sceneSource) {
-		obs_scene_t *scene = obs_scene_from_source(sceneSource);
-		obs_sceneitem_t *group = findReplayGroup(scene);
+	obs_source_t *serviceSource = findReplaySceneSource();
+	if (serviceSource) {
+		obs_scene_t *serviceScene = obs_scene_from_source(serviceSource);
+		obs_sceneitem_t *group = findReplayGroup(serviceScene);
 		if (group) {
 			obs_source_t *groupSource = obs_sceneitem_get_source(group);
 			obs_scene_t *groupScene = groupSource ? obs_group_from_source(groupSource) : nullptr;
 			fitReplayInsideBackground(groupScene);
 			initReplayGroupTransform(group);
 		}
-		obs_source_release(sceneSource);
+		obs_source_release(serviceSource);
 	}
 }
 
@@ -565,8 +688,8 @@ static void fitReplayInsideBackground(obs_scene_t *groupScene)
 {
 	if (!groupScene)
 		return;
-	obs_sceneitem_t *replay = obs_scene_find_source(groupScene, kReplaySourceName);
-	obs_sceneitem_t *background = obs_scene_find_source(groupScene, kReplayBgSourceName);
+	obs_sceneitem_t *replay = findManagedItem(groupScene, kVideoRole);
+	obs_sceneitem_t *background = findManagedItem(groupScene, kFrameRole);
 	if (!replay || !background)
 		return;
 
@@ -645,73 +768,56 @@ static QString replayBufferStatusText()
 // ------------------------------------------------------------
 void RsInstantReplay::ensureReplaySource()
 {
-	obs_source_t *sceneSrc = obs_frontend_get_current_scene();
-	if (!sceneSrc)
+	obs_source_t *serviceSource = ensureReplaySceneSource();
+	if (!serviceSource)
 		return;
-
-	obs_scene_t *scene = obs_scene_from_source(sceneSrc);
-	if (!scene) {
-		obs_source_release(sceneSrc);
-		return;
-	}
-
-// If replay exists, nothing to do
-	if (findReplayItem(scene)) {
-		obs_source_release(sceneSrc);
+	obs_scene_t *serviceScene = obs_scene_from_source(serviceSource);
+	if (!serviceScene) {
+		obs_source_release(serviceSource);
 		return;
 	}
 
-	// IMPORTANT:
-	// Background MUST exist before replay so replay is top-most
+	obs_sceneitem_t *groupItem = findOrCreateReplayGroup(serviceScene);
+	obs_scene_t *groupScene = groupItem ? obs_sceneitem_group_get_scene(groupItem) : nullptr;
+	if (!groupScene) {
+		obs_source_release(serviceSource);
+		return;
+	}
+	if (findManagedItem(groupScene, kVideoRole)) {
+		obs_source_release(serviceSource);
+		return;
+	}
+
 	ensureReplayBgSource();
 
+	obs_source_t *named = obs_get_source_by_name(kReplaySourceName);
+	if (named) {
+		blog(LOG_ERROR,
+		     "[RearSilver Stream Suite] Instant Replay cannot create its video source because an unmanaged source named '%s' already exists.",
+		     kReplaySourceName);
+		obs_source_release(named);
+		obs_source_release(serviceSource);
+		return;
+	}
 
-	// Create empty media source (file set later)
 	obs_data_t *settings = obs_data_create();
-
 	obs_data_set_bool(settings, "looping", false);
 	obs_data_set_bool(settings, "restart_on_activate", true);
 	obs_data_set_bool(settings, "close_when_inactive", false);
-
 	obs_source_t *src = obs_source_create("ffmpeg_source", kReplaySourceName, settings, nullptr);
 	obs_data_release(settings);
-
 	if (!src) {
-		obs_source_release(sceneSrc);
+		obs_source_release(serviceSource);
 		return;
 	}
-
-	// Add to current scene
-	obs_sceneitem_t *groupItem = findOrCreateReplayGroup(scene);
-	if (!groupItem) {
-		obs_source_release(src);
-		obs_source_release(sceneSrc);
-		return;
-	}
-
-	obs_source_t *groupSrc = obs_sceneitem_get_source(groupItem);
-	if (!groupSrc) {
-		obs_source_release(src);
-		obs_source_release(sceneSrc);
-		return;
-	}
-
-	obs_scene_t *groupScene = obs_group_from_source(groupSrc);
-	if (!groupScene) {
-		obs_source_release(src);
-		obs_source_release(sceneSrc);
-		return;
-	}
-
-	// Add the replay source INSIDE the group scene
+	markManagedSource(src, kVideoRole);
 	obs_sceneitem_t *item = obs_scene_add(groupScene, src);
 	if (item) {
-		centreItemInGroup(item);
+		markManagedItem(item, kVideoRole);
 		obs_sceneitem_set_visible(item, false);
 	}
-
 	obs_source_release(src);
-	obs_source_release(sceneSrc);
+	obs_source_release(serviceSource);
 }
 
 void RsInstantReplay::ensureReplayBgSource()
@@ -720,18 +826,22 @@ void RsInstantReplay::ensureReplayBgSource()
 	if (imgPath.isEmpty())
 		return;
 
-	obs_source_t *sceneSrc = obs_frontend_get_current_scene();
-	if (!sceneSrc)
+	obs_source_t *serviceSource = ensureReplaySceneSource();
+	if (!serviceSource)
 		return;
-
-	obs_scene_t *scene = obs_scene_from_source(sceneSrc);
-	if (!scene) {
-		obs_source_release(sceneSrc);
+	obs_scene_t *serviceScene = obs_scene_from_source(serviceSource);
+	if (!serviceScene) {
+		obs_source_release(serviceSource);
+		return;
+	}
+	obs_sceneitem_t *groupItem = findOrCreateReplayGroup(serviceScene);
+	obs_scene_t *groupScene = groupItem ? obs_sceneitem_group_get_scene(groupItem) : nullptr;
+	if (!groupScene) {
+		obs_source_release(serviceSource);
 		return;
 	}
 
-	// If background already exists → UPDATE its file
-	obs_sceneitem_t *existingItem = findReplayBgItem(scene);
+	obs_sceneitem_t *existingItem = findManagedItem(groupScene, kFrameRole);
 	if (existingItem) {
 		obs_source_t *src = obs_sceneitem_get_source(existingItem);
 		if (src) {
@@ -741,53 +851,36 @@ void RsInstantReplay::ensureReplayBgSource()
 			obs_data_release(settings);
 		}
 
-		obs_source_release(sceneSrc);
+		obs_source_release(serviceSource);
 		return;
 	}
 
-	// Otherwise → create it
+	obs_source_t *named = obs_get_source_by_name(kReplayBgSourceName);
+	if (named) {
+		blog(LOG_ERROR,
+		     "[RearSilver Stream Suite] Instant Replay cannot create its frame source because an unmanaged source named '%s' already exists.",
+		     kReplayBgSourceName);
+		obs_source_release(named);
+		obs_source_release(serviceSource);
+		return;
+	}
+
 	obs_data_t *settings = obs_data_create();
 	obs_data_set_string(settings, "file", imgPath.toUtf8().constData());
-
 	obs_source_t *src = obs_source_create("image_source", kReplayBgSourceName, settings, nullptr);
 	obs_data_release(settings);
-
 	if (!src) {
-		obs_source_release(sceneSrc);
+		obs_source_release(serviceSource);
 		return;
 	}
-
-	obs_sceneitem_t *groupItem = findOrCreateReplayGroup(scene);
-	if (!groupItem) {
-		obs_source_release(src);
-		obs_source_release(sceneSrc);
-		return;
-	}
-
-	obs_source_t *groupSrc = obs_sceneitem_get_source(groupItem);
-	if (!groupSrc) {
-		obs_source_release(src);
-		obs_source_release(sceneSrc);
-		return;
-	}
-
-	obs_scene_t *groupScene = obs_group_from_source(groupSrc);
-	if (!groupScene) {
-		obs_source_release(src);
-		obs_source_release(sceneSrc);
-		return;
-	}
-
-	// Add the background source INSIDE the group scene
+	markManagedSource(src, kFrameRole);
 	obs_sceneitem_t *bgItem = obs_scene_add(groupScene, src);
 	if (bgItem) {
-		centreItemInGroup(bgItem);
+		markManagedItem(bgItem, kFrameRole);
 		obs_sceneitem_set_visible(bgItem, false);
 	}
-
-
 	obs_source_release(src);
-	obs_source_release(sceneSrc);
+	obs_source_release(serviceSource);
 }
 
 // ------------------------------------------------------------
@@ -805,14 +898,36 @@ void RsInstantReplay::playReplay(const QString &filePath)
 	const quint64 playbackGeneration = s_replayPlaybackGeneration.fetch_add(1) + 1;
 	s_replayStartedGeneration.store(0);
 
-	ensureReplayBgSource(); // must exist first (goes underneath)
-	ensureReplaySource();   // created second (goes on top)
-
-
-
-	obs_source_t *src = getReplaySource();
-	if (!src)
+	obs_source_t *serviceSource = ensureReplaySceneSource();
+	obs_source_t *parentSource = obs_frontend_get_current_scene();
+	if (!serviceSource || !parentSource) {
+		if (serviceSource)
+			obs_source_release(serviceSource);
+		if (parentSource)
+			obs_source_release(parentSource);
 		return;
+	}
+	obs_scene_t *serviceScene = obs_scene_from_source(serviceSource);
+	obs_scene_t *parentScene = obs_scene_from_source(parentSource);
+	const bool alreadyInServiceScene = parentSource == serviceSource;
+	if (!serviceScene || !parentScene ||
+	    (!alreadyInServiceScene && !ensureSceneInstance(parentScene, serviceSource))) {
+		obs_source_release(parentSource);
+		obs_source_release(serviceSource);
+		return;
+	}
+	ensureReplayBgSource();
+	ensureReplaySource();
+	obs_sceneitem_t *group = findReplayGroup(serviceScene);
+	obs_scene_t *groupScene = group ? obs_sceneitem_group_get_scene(group) : nullptr;
+	obs_sceneitem_t *videoItem = findManagedItem(groupScene, kVideoRole);
+	obs_sceneitem_t *frameItem = findManagedItem(groupScene, kFrameRole);
+	obs_source_t *src = videoItem ? obs_sceneitem_get_source(videoItem) : nullptr;
+	if (!group || !groupScene || !src) {
+		obs_source_release(parentSource);
+		obs_source_release(serviceSource);
+		return;
+	}
 	connectReplayMediaSignals(src);
 
 	obs_data_t *settings = obs_source_get_settings(src);
@@ -827,59 +942,23 @@ void RsInstantReplay::playReplay(const QString &filePath)
 	obs_source_update(src, settings);
 	obs_data_release(settings);
 
-	// Show source
-	obs_source_t *sceneSrc = obs_frontend_get_current_scene();
-	if (sceneSrc) {
-		const char *sceneName = obs_source_get_name(sceneSrc);
-		s_visibleReplaySceneName = sceneName ? QString::fromUtf8(sceneName) : QString();
-		obs_scene_t *scene = obs_scene_from_source(sceneSrc);
-		if (scene) {
+	initReplayGroupTransform(group);
+	fitReplayInsideBackground(groupScene);
+	obs_sceneitem_set_visible(videoItem, true);
+	if (frameItem)
+		obs_sceneitem_set_visible(frameItem, true);
+	obs_sceneitem_set_visible(group, true);
+	obs_source_media_restart(src);
 
-obs_sceneitem_t *group = findOrCreateReplayGroup(scene);
-			if (group) {
-				initReplayGroupTransform(group);
-
-				// Force group visible
-				obs_sceneitem_set_visible(group, true);
-
-				// ALSO force child items visible (OBS does NOT auto-propagate)
-				obs_source_t *groupSrc = obs_sceneitem_get_source(group);
-				if (groupSrc) {
-					obs_scene_t *groupScene = obs_group_from_source(groupSrc);
-					if (groupScene) {
-						obs_sceneitem_t *bg =
-							obs_scene_find_source(groupScene, kReplayBgSourceName);
-						if (bg)
-							obs_sceneitem_set_visible(bg, true);
-
-						obs_sceneitem_t *replay =
-							obs_scene_find_source(groupScene, kReplaySourceName);
-						if (replay)
-							obs_sceneitem_set_visible(replay, true);
-						fitReplayInsideBackground(groupScene);
-					}
-				}
-			}
-
-			// Save & Play owns playback visibility regardless of any earlier
-			// manual Show/Hide action. Restart explicitly because activating an
-			// already-visible media source does not trigger restart_on_activate.
-			obs_source_media_restart(src);
-
-			// Auto-hide after replay duration
-			if (loadReplayAutoHide()) {
-				const int replayMilliseconds = qMax(1, loadReplaySeconds()) * 1000;
-				QTimer::singleShot(replayMilliseconds + 250, [playbackGeneration]() {
-					if (playbackGeneration == s_replayPlaybackGeneration)
-						RsInstantReplay::hideReplaySource();
-				});
-			}
-
-		}
-		obs_source_release(sceneSrc);
+	if (loadReplayAutoHide()) {
+		const int replayMilliseconds = qMax(1, loadReplaySeconds()) * 1000;
+		QTimer::singleShot(replayMilliseconds + 250, [playbackGeneration]() {
+			if (playbackGeneration == s_replayPlaybackGeneration)
+				RsInstantReplay::hideReplaySource();
+		});
 	}
-
-	obs_source_release(src);
+	obs_source_release(parentSource);
+	obs_source_release(serviceSource);
 }
 
 // ------------------------------------------------------------
@@ -888,28 +967,20 @@ obs_sceneitem_t *group = findOrCreateReplayGroup(scene);
 void RsInstantReplay::hideReplaySource()
 {
 	s_replayStartedGeneration.store(0);
-	obs_source_t *sceneSrc = s_visibleReplaySceneName.isEmpty()
-				 ? obs_frontend_get_current_scene()
-				 : obs_get_source_by_name(s_visibleReplaySceneName.toUtf8().constData());
-	if (!sceneSrc) {
-		s_visibleReplaySceneName.clear();
+	obs_source_t *serviceSource = findReplaySceneSource();
+	if (!serviceSource) {
 		disconnectReplayMediaSignals();
 		return;
 	}
-
-	obs_scene_t *scene = obs_scene_from_source(sceneSrc);
-	if (!scene) {
-		obs_source_release(sceneSrc);
-		return;
-	}
-
-	// Hiding must never create replay sources in a different scene.
-	obs_sceneitem_t *group = findReplayGroup(scene);
-	if (group)
+	obs_scene_t *serviceScene = obs_scene_from_source(serviceSource);
+	obs_sceneitem_t *group = findReplayGroup(serviceScene);
+	if (group) {
+		obs_scene_t *groupScene = obs_sceneitem_group_get_scene(group);
+		if (obs_sceneitem_t *video = findManagedItem(groupScene, kVideoRole))
+			obs_sceneitem_set_visible(video, false);
 		obs_sceneitem_set_visible(group, false);
-
-	obs_source_release(sceneSrc);
-	s_visibleReplaySceneName.clear();
+	}
+	obs_source_release(serviceSource);
 	disconnectReplayMediaSignals();
 }
 

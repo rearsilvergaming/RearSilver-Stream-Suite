@@ -35,7 +35,7 @@
 </section>
 <section class="card wide">
 <h2>Instant Replay</h2>
-<p>The Hub owns the Replay Buffer, its OBS sources and the frame viewers see. Design changes update live.</p>
+<p>The Hub owns the Replay Buffer, its OBS sources and the frame viewers see. Set up the replay scene once before first use; later changes and repairs remain Hub-managed.</p>
 <div class="replay-layout">
 <div>
 <div class="subcard"><h3>Replay Buffer</h3>
@@ -45,7 +45,8 @@
 <div class="row"><button data-action="replayStart" class="primary">Start buffer</button><button data-action="replayStop">Stop buffer</button><button data-action="triggerReplay" class="primary">Save &amp; play</button></div>
 </div>
 <div class="subcard"><h3>OBS source</h3>
-<div class="row"><button data-action="replayRepair">Create / repair</button><button data-action="replayShow">Show</button><button data-action="hideReplay">Hide</button></div>
+<div class="row"><button id="replaySetupButton" data-action="replayRepair">Set up replay scene</button><button data-action="replayShow">Show</button><button data-action="hideReplay">Hide</button></div>
+<div id="replaySetupStatus" class="status">Set up the managed replay scene before using Save &amp; play.</div>
 <label>Optional replay folder</label><div class="row"><input id="replayFolder" readonly placeholder="Use OBS replay folder"><button id="browseReplay" class="small">Choose folder…</button><button id="clearReplayFolder" class="small">Use OBS folder</button></div>
 <div class="status">Leave blank to use OBS's configured Replay Buffer folder.</div></div>
 </div>
@@ -177,6 +178,8 @@ const byId=id=>document.getElementById(id),post=(action,value='')=>parent.rsNati
 const fonts=['Sora','Arial','Segoe UI','Calibri','Verdana','Tahoma','Trebuchet MS','Georgia','Times New Roman','Impact','Comic Sans MS'];
 fonts.forEach(font=>{const option=document.createElement('option');option.textContent=font;byId('replayFont').appendChild(option)});
 let ready=false,saveTimer=0;
+byId('replaySetupButton').addEventListener('click',()=>{byId('replaySetupStatus').textContent='Setting up or repairing the managed replay scene…'});
+window.rsReplaySetupRequired=()=>{byId('replaySetupStatus').textContent='Set up the replay scene before using Save & play.';byId('replaySetupButton').focus()};
 const validHex=value=>/^#[0-9a-f]{6}$/i.test(value);
 const rgba=(hex,opacity)=>{const value=parseInt(hex.slice(1),16);return `rgba(${value>>16},${value>>8&255},${value&255},${opacity/100})`};
 const bufferConfig=()=>({
@@ -228,6 +231,9 @@ pair('replayBackground','replayBackgroundHex');pair('replayAccent','replayAccent
 const priorApply=window.rsApplyTools;
 window.rsApplyTools=config=>{
  if(priorApply)priorApply(config);ready=false;
+ const setupComplete=!!config.replaySetupComplete;
+ byId('replaySetupButton').textContent=setupComplete?'Repair replay scene':'Set up replay scene';
+ byId('replaySetupStatus').textContent=setupComplete?'Replay scene is set up. Do not rename the managed scene or its sources.':'Set up the managed replay scene before using Save & play.';
  byId('replaySeconds').value=config.replaySeconds??10;byId('replayAutoStart').checked=!!config.replayAutoStart;byId('replayAutoHide').checked=config.replayAutoHide!==false;
 byId('replayTitle').value=config.replayTitle||'INSTANT REPLAY';byId('replayFont').value=config.replayFont||'Sora';byId('replayAlignment').value=config.replayAlignment||config.alignment||'left';
  byId('replayBackground').value=byId('replayBackgroundHex').value=config.replayBackground||'#0b0f14';byId('replayAccent').value=byId('replayAccentHex').value=config.replayAccent||'#00d4ff';byId('replayTextColour').value=byId('replayTextColourHex').value=config.replayTextColour||'#e6e8eb';

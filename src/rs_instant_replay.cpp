@@ -661,8 +661,12 @@ void RsInstantReplay::configureReplayFrame(const QString &title, const QString &
 	if (!image.save(path, "PNG"))
 		return;
 	saveReplayBgImage(path);
-	ensureReplayBgSource();
 	obs_source_t *serviceSource = findReplaySceneSource();
+	if (serviceSource) {
+		obs_source_release(serviceSource);
+		ensureReplayBgSource();
+		serviceSource = findReplaySceneSource();
+	}
 	if (serviceSource) {
 		obs_scene_t *serviceScene = obs_scene_from_source(serviceSource);
 		obs_sceneitem_t *group = findReplayGroup(serviceScene);
@@ -678,7 +682,11 @@ void RsInstantReplay::configureReplayFrame(const QString &title, const QString &
 
 QJsonObject RsInstantReplay::replayState()
 {
-	return {{"bufferActive", replayBufferActive()},
+	obs_source_t *serviceSource = findReplaySceneSource();
+	const bool setupComplete = serviceSource != nullptr;
+	if (serviceSource)
+		obs_source_release(serviceSource);
+	return {{"bufferActive", replayBufferActive()}, {"setupComplete", setupComplete},
 		{"seconds", replaySeconds()}, {"autoStart", replayAutoStart()}, {"autoHide", replayAutoHide()},
 		{"sizeStep", s_replaySizeStep}, {"borderStep", s_replayBorderStep},
 		{"radiusStep", s_replayRadiusStep}, {"alignment", s_replayAlignment}};
@@ -1119,6 +1127,16 @@ void RsInstantReplay::shutdown()
 // ------------------------------------------------------------
 void RsInstantReplay::triggerReplay()
 {
+	// First-time provisioning belongs to the explicit Hub setup action. The Hub
+	// repairs an already-configured replay scene before forwarding Save & Play.
+	obs_source_t *serviceSource = findReplaySceneSource();
+	if (!serviceSource) {
+		blog(LOG_WARNING,
+		     "[RearSilver Stream Suite] Instant Replay setup is required before Save & Play or its hotkey can run");
+		return;
+	}
+	obs_source_release(serviceSource);
+
 	// Mark the moment THIS replay was requested
 	s_lastReplayRequestTime = QDateTime::currentMSecsSinceEpoch();
 	s_lastReplayFile.clear();

@@ -16,7 +16,6 @@ void RsMainDock::setActiveButton(QToolButton *button)
 		// ENHANCEMENTS
 		m_btnBrowserRefresh,
 		m_btnQuickText,
-		m_btnInstantReplay,
 		m_btnAutoStart,
 		m_btnTimer,
 		m_btnUiSettings,
@@ -84,15 +83,6 @@ void RsMainDock::showQuickText()
 		m_lastEnhancementsPage = m_stack->currentIndex();
 	}
 	setActiveButton(m_btnQuickText);
-}
-
-void RsMainDock::showInstantReplay()
-{
-	if (m_stack && m_pageInstantReplay) {
-		m_stack->setCurrentWidget(m_pageInstantReplay);
-		m_lastEnhancementsPage = m_stack->currentIndex();
-	}
-	setActiveButton(m_btnInstantReplay);
 }
 
 void RsMainDock::showAutoStart()

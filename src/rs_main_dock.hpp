@@ -43,7 +43,6 @@ private slots:
 
 	void showBrowserRefresh();
 	void showQuickText();
-	void showInstantReplay();
 	void showAutoStart();
 	void showTimer();
 	void showUiSettings();
@@ -197,7 +196,6 @@ private:
 
 	QToolButton *m_btnBrowserRefresh = nullptr;
 	QToolButton *m_btnQuickText = nullptr;
-	QToolButton *m_btnInstantReplay = nullptr;
 	QToolButton *m_btnAutoStart = nullptr;
 	QToolButton *m_btnTimer = nullptr;
 	QToolButton *m_btnUiSettings = nullptr;
@@ -216,7 +214,6 @@ private:
 	QWidget *m_pageStats = nullptr;
 	QWidget *m_pageBrowserRefresh = nullptr;
 	QWidget *m_pageQuickText = nullptr;
-	QWidget *m_pageInstantReplay = nullptr;
 	QWidget *m_pageAutoStart = nullptr;
 	QWidget *m_pageTimer = nullptr;
 	QWidget *m_pageUiSettings = nullptr;

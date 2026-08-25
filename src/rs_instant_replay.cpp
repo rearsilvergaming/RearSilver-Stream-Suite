@@ -1,26 +1,13 @@
 #include "rs_instant_replay.hpp"
-#include "rs_main_dock.hpp"
-
 #include <QFileInfo>
-#include <QWidget>
-#include <QVBoxLayout>
-#include <QHBoxLayout>
-#include <QGridLayout>
-#include <QLabel>
-#include <QSpinBox>
-#include <QPushButton>
-#include <QGroupBox>
-#include <QCheckBox>
-#include <QLineEdit>
 #include <QDir>  
-#include <QFileDialog>
 #include <QTimer>
 #include <QDateTime>
-#include <QScrollArea>
 #include <QImage>
 #include <QPainter>
 #include <QPainterPath>
 #include <QFont>
+#include <QFontDatabase>
 #include <QStandardPaths>
 #include <QColor>
 #include <QRect>
@@ -68,8 +55,11 @@ static QString s_replaySizeStep = QStringLiteral("large");
 static QString s_replayBorderStep = QStringLiteral("medium");
 static QString s_replayRadiusStep = QStringLiteral("rounded");
 static QString s_replayAlignment = QStringLiteral("left");
+static QString s_replayFontWeight = QStringLiteral("bold");
 static QString s_replayFolderOverride;
 static int s_replaySeconds = 10;
+static bool s_hasReplayBufferConfiguration = false;
+static bool s_restartReplayBufferAfterStop = false;
 static bool s_replayAutoStart = false;
 static bool s_replayAutoHide = true;
 
@@ -81,14 +71,16 @@ struct ReplayFrameLayout {
 	int border = 12;
 	int outerRadius = 28;
 	int innerRadius = 16;
+	int scalePercent = 80;
+	int titlePixelSize = 46;
 	QRect aperture;
 	QRect titleRect;
 };
 
 static ReplayFrameLayout s_replayFrameLayout;
 
-static ReplayFrameLayout makeReplayFrameLayout(int requestedScale, int requestedBorder,
-						 int requestedRadius, int titleSize)
+static ReplayFrameLayout makeReplayFrameLayout(int requestedScale, int borderPermille,
+						 int radiusPermille, int titleSize)
 {
 	obs_video_info ovi = {};
 	const bool haveVideo = obs_get_video_info(&ovi);
@@ -107,13 +99,14 @@ static ReplayFrameLayout makeReplayFrameLayout(int requestedScale, int requested
 	layout.height = qMax(1, (layout.width * 9) / 16);
 	layout.x = qMax(0, (canvasWidth - layout.width) / 2);
 	layout.y = qMax(0, (canvasHeight - layout.height) / 2);
-	layout.border = qBound(0, requestedBorder, 64);
+	layout.scalePercent = qBound(25, requestedScale, 100);
+	layout.titlePixelSize = qBound(12, titleSize, 180);
+	const int shortEdge = qMin(layout.width, layout.height);
+	layout.border = qBound(0, qRound(shortEdge * qBound(0, borderPermille, 100) / 1000.0), 96);
 	const int maxRadius = qMax(0, qMin(layout.width, layout.height) / 2);
-	// Keep the inner edge rounded even when a thick border is selected.
-	layout.outerRadius = qBound(0, qMax(requestedRadius, layout.border + 8), maxRadius);
+	layout.outerRadius = qBound(0, qRound(shortEdge * qBound(0, radiusPermille, 500) / 1000.0), maxRadius);
 	layout.innerRadius = qMax(0, layout.outerRadius - layout.border);
 
-	const int shortEdge = qMin(layout.width, layout.height);
 	const int padding = qMax(layout.border + 16, qRound(shortEdge * 0.035));
 	const int header = qMax(qRound(qBound(12, titleSize, 180) * 1.45), qRound(layout.height * 0.11));
 	const int apertureTop = qMin(layout.height - padding - 1, padding + header);
@@ -217,15 +210,6 @@ static void saveReplayBgImage(const QString &path)
 	config_set_string(cfg, "RearSilver", kReplayBgImageKey, path.toUtf8().constData());
 	config_save(cfg);
 }
-
-static void refreshReplayBufferStatus(QLabel *label)
-{
-	if (!label)
-		return;
-
-	label->setText(QString("Status: %1").arg(obs_frontend_replay_buffer_active() ? "Active" : "Inactive"));
-}
-
 
 // ------------------------------------------------------------
 // Helpers: scene/source
@@ -510,12 +494,18 @@ bool RsInstantReplay::replayBufferActive() { return obs_frontend_replay_buffer_a
 void RsInstantReplay::configureReplayBuffer(int seconds, bool autoStart, bool autoHide)
 {
 	seconds = qBound(2, seconds, 300);
+	const bool durationChanged = !s_hasReplayBufferConfiguration || seconds != loadReplaySeconds();
 	saveReplaySeconds(seconds);
+	s_hasReplayBufferConfiguration = true;
 	saveReplayAutoStart(autoStart);
 	saveReplayAutoHide(autoHide);
 	trySetReplayBufferSeconds(seconds);
-	if (autoStart && !obs_frontend_replay_buffer_active())
+	if (durationChanged && obs_frontend_replay_buffer_active()) {
+		s_restartReplayBufferAfterStop = true;
+		obs_frontend_replay_buffer_stop();
+	} else if (autoStart && !obs_frontend_replay_buffer_active()) {
 		tryStartReplayBuffer();
+	}
 }
 
 void RsInstantReplay::startReplayBuffer()
@@ -596,24 +586,29 @@ void RsInstantReplay::repairReplaySource()
 	obs_source_release(serviceSource);
 }
 
-void RsInstantReplay::configureReplayFrame(const QString &title, const QString &font, const QString &alignment,
+void RsInstantReplay::configureReplayFrame(const QString &title, const QString &font, const QString &fontWeight,
+					     const QString &alignment,
 					     const QString &background, const QString &accent,
 					     const QString &textColour, int opacity,
 					     const QString &sizeStep, const QString &borderStep, const QString &radiusStep)
 {
 	static const QHash<QString, int> sizeScales{{"small", 40}, {"medium", 60}, {"large", 80}, {"fullscreen", 100}};
 	static const QHash<QString, int> titleSizes{{"small", 28}, {"medium", 36}, {"large", 46}, {"fullscreen", 56}};
-	static const QHash<QString, int> borderWidths{{"none", 0}, {"thin", 4}, {"medium", 8}, {"thick", 12}};
-	static const QHash<QString, int> radii{{"square", 0}, {"subtle", 10}, {"rounded", 20}, {"soft", 32}};
+	static const QHash<QString, int> borderPermille{{"none", 0}, {"subtle", 5}, {"medium", 10},
+		{"bold", 18}, {"statement", 25}};
+	static const QHash<QString, int> radiusPermille{{"square", 0}, {"subtle", 20}, {"rounded", 50},
+		{"soft", 90}, {"dramatic", 140}};
+	static const QHash<QString, QFont::Weight> fontWeights{{"regular", QFont::Normal}, {"medium", QFont::Medium},
+		{"semibold", QFont::DemiBold}, {"bold", QFont::Bold}, {"extrabold", QFont::ExtraBold}};
 	s_replaySizeStep = sizeScales.contains(sizeStep) ? sizeStep : QStringLiteral("large");
-	s_replayBorderStep = borderWidths.contains(borderStep) ? borderStep : QStringLiteral("medium");
-	s_replayRadiusStep = radii.contains(radiusStep) ? radiusStep : QStringLiteral("rounded");
+	s_replayBorderStep = borderPermille.contains(borderStep) ? borderStep : QStringLiteral("medium");
+	s_replayRadiusStep = radiusPermille.contains(radiusStep) ? radiusStep : QStringLiteral("rounded");
 	s_replayAlignment = alignment == "center" || alignment == "right" ? alignment : QStringLiteral("left");
+	s_replayFontWeight = fontWeights.contains(fontWeight) ? fontWeight : QStringLiteral("bold");
 	const int titleSize = titleSizes.value(s_replaySizeStep);
-	const int borderWidth = borderWidths.value(s_replayBorderStep);
-	const int radius = radii.value(s_replayRadiusStep);
 	const int frameScale = sizeScales.value(s_replaySizeStep);
-	s_replayFrameLayout = makeReplayFrameLayout(frameScale, borderWidth, radius, titleSize);
+	s_replayFrameLayout = makeReplayFrameLayout(frameScale, borderPermille.value(s_replayBorderStep),
+		radiusPermille.value(s_replayRadiusStep), titleSize);
 	const ReplayFrameLayout &layout = s_replayFrameLayout;
 	QColor bg(background);
 	QColor edge(accent);
@@ -639,8 +634,12 @@ void RsInstantReplay::configureReplayFrame(const QString &title, const QString &
 	painter.drawRoundedRect(outerRect, layout.outerRadius, layout.outerRadius);
 
 	const QString heading = title.trimmed().isEmpty() ? QStringLiteral("INSTANT REPLAY") : title.trimmed();
-	QFont headingFont(font.trimmed().isEmpty() ? QStringLiteral("Sora") : font, qBound(12, titleSize, 180));
-	headingFont.setBold(true);
+	const QString requestedFont = font.trimmed().isEmpty() ? QStringLiteral("Sora") : font.trimmed();
+	const QString headingFamily = QFontDatabase::families().contains(requestedFont, Qt::CaseInsensitive)
+		? requestedFont : QStringLiteral("Sora");
+	QFont headingFont(headingFamily);
+	headingFont.setPixelSize(layout.titlePixelSize);
+	headingFont.setWeight(fontWeights.value(s_replayFontWeight));
 	painter.setFont(headingFont);
 	painter.setPen(headingColour);
 	Qt::Alignment titleAlignment = Qt::AlignVCenter;
@@ -686,10 +685,19 @@ QJsonObject RsInstantReplay::replayState()
 	const bool sceneExists = serviceSource != nullptr;
 	if (serviceSource)
 		obs_source_release(serviceSource);
+	const ReplayFrameLayout &layout = s_replayFrameLayout;
+	QJsonObject geometry{{"width", layout.width}, {"height", layout.height}, {"scalePercent", layout.scalePercent},
+		{"titlePixelSize", layout.titlePixelSize}, {"border", layout.border},
+		{"outerRadius", layout.outerRadius}, {"innerRadius", layout.innerRadius},
+		{"apertureX", layout.aperture.x()}, {"apertureY", layout.aperture.y()},
+		{"apertureWidth", layout.aperture.width()}, {"apertureHeight", layout.aperture.height()},
+		{"titleX", layout.titleRect.x()}, {"titleY", layout.titleRect.y()},
+		{"titleWidth", layout.titleRect.width()}, {"titleHeight", layout.titleRect.height()}};
 	return {{"bufferActive", replayBufferActive()}, {"sceneExists", sceneExists},
 		{"seconds", replaySeconds()}, {"autoStart", replayAutoStart()}, {"autoHide", replayAutoHide()},
 		{"sizeStep", s_replaySizeStep}, {"borderStep", s_replayBorderStep},
-		{"radiusStep", s_replayRadiusStep}, {"alignment", s_replayAlignment}};
+		{"radiusStep", s_replayRadiusStep}, {"alignment", s_replayAlignment},
+		{"fontWeight", s_replayFontWeight}, {"geometry", geometry}};
 }
 
 static void fitReplayInsideBackground(obs_scene_t *groupScene)
@@ -761,14 +769,6 @@ static bool tryStartReplayBuffer()
 	}
 
 	return obs_frontend_replay_buffer_active();
-}
-
-static QString replayBufferStatusText()
-{
-	// We can reliably detect active/inactive.
-	// "Configured correctly" is harder without reading exact OBS settings schema,
-	// so we don't pretend we know more than we do.
-	return obs_frontend_replay_buffer_active() ? "Active" : "Inactive";
 }
 
 // ------------------------------------------------------------
@@ -1063,6 +1063,11 @@ static void playReplayAfterRename(int attempt)
 // ------------------------------------------------------------
 static void onFrontendEvent(enum obs_frontend_event event, void *)
 {
+	if (event == OBS_FRONTEND_EVENT_REPLAY_BUFFER_STOPPED && s_restartReplayBufferAfterStop) {
+		s_restartReplayBufferAfterStop = false;
+		tryStartReplayBuffer();
+		return;
+	}
 	if (event != OBS_FRONTEND_EVENT_REPLAY_BUFFER_SAVED)
 		return;
 	if (!s_waitingForRequestedReplay)
@@ -1165,347 +1170,5 @@ void RsInstantReplay::triggerReplay()
 	} else {
 		obs_frontend_replay_buffer_save();
 	}
-}
-
-// ------------------------------------------------------------
-// UI Page
-// ------------------------------------------------------------
-QWidget *RsInstantReplay::createPage(RsMainDock *dock, QWidget *parent)
-{
-	// Outer scroll wrapper (matches System pages behaviour)
-	auto *scroll = new QScrollArea(parent);
-	scroll->setFrameShape(QFrame::NoFrame);
-	scroll->setWidgetResizable(true);
-
-	// Actual page content
-	QWidget *page = new QWidget();
-	page->setObjectName("rs-card");
-
-	scroll->setWidget(page);
-
-	// Register OBS replay callback ONCE (safe here)
-	RsInstantReplay::registerFrontendCallbacks();
-
-	auto *root = new QVBoxLayout(page);
-	root->setContentsMargins(10, 10, 10, 10);
-	root->setSpacing(12);
-
-	// --------------------------------------------------------
-	// Top: What this is + primary action FIRST
-	// --------------------------------------------------------
-	QPushButton *btnReplay = nullptr;
-	QLabel *statusLine = nullptr;
-
-	{
-
-			// Header
-		auto *title = new QLabel("Instant Replay", page);
-		QFont f = title->font();
-		f.setBold(true);
-		f.setPointSize(f.pointSize() + 1);
-		title->setFont(f);
-		root->addWidget(title);
-		title->setMaximumHeight(title->sizeHint().height());
-
-
-		auto *box = new QGroupBox("How it works:");
-		box->setObjectName("rs-card");
-
-		auto *v = new QVBoxLayout(box);
-		v->setContentsMargins(10, 10, 10, 10);
-		v->setSpacing(10);
-
-		auto *desc = new QLabel("Replay the last X seconds of your stream back on stream.\n"
-					"\n"
-					"• Uses OBS Replay Buffer to continuously keep the last moments.\n"
-					"• When triggered, the latest clip is saved and played back on stream.\n"
-					"• Playback uses a dedicated replay source (styling comes later).");
-		desc->setWordWrap(true);
-		desc->setStyleSheet("opacity: 0.9;");
-		v->addWidget(desc);
-
-		btnReplay = new QPushButton("Play Instant Replay");
-		btnReplay->setObjectName("rs-primary-button");
-		btnReplay->setMinimumHeight(32);
-		v->addWidget(btnReplay);
-
-		// Small, helpful note directly under the action button
-		auto *actionHint = new QLabel("Tip: For best results, keep Replay Buffer running while you stream.");
-		actionHint->setWordWrap(true);
-		actionHint->setStyleSheet("opacity: 0.65; font-size: 11px;");
-		v->addWidget(actionHint);
-
-		root->addWidget(box);
-	}
-
-	// --------------------------------------------------------
-	// Replay Buffer Setup
-	// --------------------------------------------------------
-	QSpinBox *seconds = nullptr;
-	QCheckBox *chkAutoEnable = nullptr;
-	QCheckBox *chkAutoDuration = nullptr;
-	QLineEdit *replayFolderEdit = nullptr;
-
-	{
-		auto *box = new QGroupBox("Replay Buffer");
-		box->setObjectName("rs-card");
-
-		auto *grid = new QGridLayout(box);
-		grid->setContentsMargins(10, 10, 10, 10);
-		grid->setHorizontalSpacing(8);
-		grid->setVerticalSpacing(8);
-		grid->setColumnStretch(0, 0);
-		grid->setColumnStretch(1, 1);
-
-		int row = 0;
-
-		// Status (full width)
-		statusLine = new QLabel(QString("Status: %1").arg(replayBufferStatusText()));
-		statusLine->setStyleSheet("opacity: 0.85;");
-		statusLine->setWordWrap(true);
-		grid->addWidget(statusLine, row++, 0, 1, 2);
-
-		chkAutoEnable = new QCheckBox("Auto-enable Replay Buffer when needed");
-		chkAutoEnable->setChecked(loadReplayAutoStart());
-		QObject::connect(chkAutoEnable, &QCheckBox::toggled, page, [](bool on) { saveReplayAutoStart(on); });
-		grid->addWidget(chkAutoEnable, row++, 0, 1, 2);
-
-		// Replay last (label + control)
-		grid->addWidget(new QLabel("Replay last:"), row, 0);
-
-		seconds = new QSpinBox();
-		seconds->setRange(2, 300);
-		int savedSeconds = loadReplaySeconds();
-		seconds->setValue(savedSeconds);
-		trySetReplayBufferSeconds(savedSeconds);
-		seconds->setSuffix(" seconds");
-		grid->addWidget(seconds, row++, 1);
-
-		chkAutoDuration = new QCheckBox("Match Replay Buffer duration to “Replay last”");
-		chkAutoDuration->setChecked(true);
-		grid->addWidget(chkAutoDuration, row++, 0, 1, 2);
-
-		auto *hint = new QLabel("If auto-setup fails, enable it manually in:\n"
-					"OBS Settings → Output → Replay Buffer\n"
-					"Then set Maximum Replay Time to match “Replay last”.");
-		hint->setWordWrap(true);
-		hint->setStyleSheet("opacity: 0.65; font-size: 11px;");
-		grid->addWidget(hint, row++, 0, 1, 2);
-
-		// Replay folder explanation
-		auto *folderExplainer = new QLabel("Replay folder\n"
-						   "This must match the folder where OBS saves Replay Buffer clips.\n"
-						   "Instant Replay looks here to find the latest saved clip.");
-		folderExplainer->setWordWrap(true);
-		folderExplainer->setStyleSheet("opacity: 0.85;");
-		grid->addWidget(folderExplainer, row++, 0, 1, 2);
-
-		auto *folderLabel = new QLabel("Replay clip location");
-		folderLabel->setStyleSheet("font-weight: 600;");
-		grid->addWidget(folderLabel, row++, 0, 1, 2);
-
-		// Folder picker: label is above (explainer), then control row
-		{
-			auto *h = new QHBoxLayout();
-			h->setSpacing(8);
-
-			replayFolderEdit = new QLineEdit();
-			replayFolderEdit->setText(RsInstantReplay::replayFolderOverride());
-			replayFolderEdit->setPlaceholderText("Select replay save folder…");
-			replayFolderEdit->setMinimumHeight(30);
-			h->addWidget(replayFolderEdit, 1);
-
-			auto *btnBrowse = new QPushButton("Browse…");
-			btnBrowse->setObjectName("rs-secondary-button");
-			btnBrowse->setMinimumHeight(30);
-			h->addWidget(btnBrowse);
-
-			grid->addLayout(h, row++, 0, 1, 2);
-
-			QObject::connect(btnBrowse, &QPushButton::clicked, page, [=]() {
-				QString dir = QFileDialog::getExistingDirectory(page, "Select Replay Folder",
-										replayFolderEdit->text());
-				if (!dir.isEmpty()) {
-					replayFolderEdit->setText(dir);
-					RsInstantReplay::setReplayFolderOverride(dir);
-				}
-			});
-
-			QObject::connect(replayFolderEdit, &QLineEdit::editingFinished, page,
-					 [=]() { RsInstantReplay::setReplayFolderOverride(replayFolderEdit->text()); });
-		}
-
-		// Apply button
-		auto *btnApply = new QPushButton("Apply Replay Buffer Settings Now");
-		btnApply->setObjectName("rs-secondary-button");
-		btnApply->setMinimumHeight(30);
-		grid->addWidget(btnApply, row++, 0, 1, 2);
-
-		QObject::connect(btnApply, &QPushButton::clicked, page, [=]() {
-			if (chkAutoEnable && chkAutoEnable->isChecked())
-				tryStartReplayBuffer();
-
-			if (statusLine)
-				statusLine->setText(QString("Status: %1").arg(replayBufferStatusText()));
-		});
-
-		// Keep status fresh
-		QTimer::singleShot(1000, page, [=]() { refreshReplayBufferStatus(statusLine); });
-
-		root->addWidget(box);
-	}
-
-	// --------------------------------------------------------
-	// Wire up behaviour (kept identical, just organised)
-	// --------------------------------------------------------
-	QObject::connect(seconds, QOverload<int>::of(&QSpinBox::valueChanged), page, [=](int v) {
-		saveReplaySeconds(v);
-
-		if (chkAutoDuration && chkAutoDuration->isChecked()) {
-			trySetReplayBufferSeconds(v);
-		}
-	});
-
-	QObject::connect(btnReplay, &QPushButton::clicked, page, [=]() {
-		if (chkAutoEnable && chkAutoEnable->isChecked()) {
-			if (chkAutoDuration && chkAutoDuration->isChecked() && seconds)
-				trySetReplayBufferSeconds(seconds->value());
-
-			tryStartReplayBuffer();
-
-			if (statusLine)
-				statusLine->setText(QString("Status: %1").arg(replayBufferStatusText()));
-		}
-
-		RsInstantReplay::triggerReplay();
-	});
-
-	// --------------------------------------------------------
-	// Hotkey Setup (info only; NO settings button)
-	// --------------------------------------------------------
-	{
-		auto *box = new QGroupBox("Hotkey");
-		box->setObjectName("rs-card");
-
-		auto *v = new QVBoxLayout(box);
-		v->setContentsMargins(10, 10, 10, 10);
-		v->setSpacing(6);
-
-		auto *desc = new QLabel("Instant Replay supports a global hotkey.\n"
-					"\n"
-					"To assign it:\n"
-					"OBS Settings → Hotkeys → RearSilver Stream Suite → Trigger Instant Replay");
-		desc->setWordWrap(true);
-		desc->setStyleSheet("opacity: 0.8;");
-		v->addWidget(desc);
-
-		root->addWidget(box);
-	}
-
-	// --------------------------------------------------------
-	// Options (behaviour toggles)
-	// --------------------------------------------------------
-	{
-		auto *box = new QGroupBox("Options");
-		box->setObjectName("rs-card");
-
-		auto *v = new QVBoxLayout(box);
-		v->setContentsMargins(10, 10, 10, 10);
-		v->setSpacing(6);
-
-		auto *chkAutoHide = new QCheckBox("Hide replay source when finished");
-		chkAutoHide->setChecked(loadReplayAutoHide());
-		QObject::connect(chkAutoHide, &QCheckBox::toggled, page, [](bool on) { saveReplayAutoHide(on); });
-
-		v->addWidget(chkAutoHide);
-
-		root->addWidget(box);
-	}
-
-	// --------------------------------------------------------
-	// Replay Frame Styling (Background image is REAL, not a placeholder)
-	// --------------------------------------------------------
-	{
-		auto *box = new QGroupBox("Replay Frame");
-		box->setObjectName("rs-card");
-
-		auto *grid = new QGridLayout(box);
-		grid->setContentsMargins(10, 10, 10, 10);
-		grid->setHorizontalSpacing(8);
-		grid->setVerticalSpacing(8);
-		grid->setColumnStretch(0, 1);
-
-		int row = 0;
-
-		auto *explainer = new QLabel("Background image\n"
-					     "This image is shown behind the replay video (inside the replay group).\n"
-					     "Use it for a frame, branding, or a themed replay backdrop.");
-		explainer->setWordWrap(true);
-		explainer->setStyleSheet("opacity: 0.85;");
-		grid->addWidget(explainer, row++, 0, 1, 1);
-
-		auto *bgLabel = new QLabel("Replay background image");
-		bgLabel->setStyleSheet("font-weight: 600;");
-		grid->addWidget(bgLabel, row++, 0, 1, 1);
-
-
-		// Background image picker (label above via explainer)
-		QLineEdit *bgPathEdit = nullptr;
-		{
-			auto *h = new QHBoxLayout();
-			h->setSpacing(8);
-
-			bgPathEdit = new QLineEdit();
-			bgPathEdit->setText(loadReplayBgImage());
-			bgPathEdit->setPlaceholderText("Select image file…");
-			bgPathEdit->setMinimumHeight(30);
-			h->addWidget(bgPathEdit, 1);
-
-			auto *btnBgBrowse = new QPushButton("Browse…");
-			btnBgBrowse->setObjectName("rs-secondary-button");
-			btnBgBrowse->setMinimumHeight(30);
-			h->addWidget(btnBgBrowse);
-
-			grid->addLayout(h, row++, 0, 1, 1);
-
-			QObject::connect(btnBgBrowse, &QPushButton::clicked, page, [=]() {
-				QString file = QFileDialog::getOpenFileName(page, "Select Replay Background Image",
-									    bgPathEdit->text(),
-									    "Images (*.png *.jpg *.jpeg *.webp)");
-
-				if (!file.isEmpty()) {
-					bgPathEdit->setText(file);
-					saveReplayBgImage(file);
-					RsInstantReplay::ensureReplayBgSource();
-				}
-			});
-
-			QObject::connect(bgPathEdit, &QLineEdit::editingFinished, page, [=]() {
-				saveReplayBgImage(bgPathEdit->text());
-				RsInstantReplay::ensureReplayBgSource();
-			});
-		}
-
-		// Other controls are still placeholders (honestly labelled)
-		auto *placeholderNote = new QLabel(
-			"More frame styling controls will be added here later (colour, border, padding, label, etc.).");
-		placeholderNote->setWordWrap(true);
-		placeholderNote->setStyleSheet("opacity: 0.65; font-size: 11px;");
-		grid->addWidget(placeholderNote, row++, 0, 1, 1);
-
-		root->addWidget(box);
-	}
-
-	// ========================================================
-	// FOOTER
-	// ========================================================
-	auto *hint = new QLabel("Tip: Keep Replay Buffer running while streaming for best results.");
-	hint->setWordWrap(true);
-	hint->setStyleSheet("opacity: 0.65; font-size: 11px;");
-	root->addWidget(hint);
-
-	root->addStretch(1);
-	(void)dock;
-	return scroll;
 }
 } // namespace hub_replay

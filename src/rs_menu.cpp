@@ -96,8 +96,6 @@ void RsMainDock::createSidebarMenus()
 	m_btnBrowserRefresh =
 		makeButton("Browser Refresh", "Reload browser sources without hiding them", "view-refresh", "🔄");
 	m_btnQuickText = makeButton("Quick Text", "Drop BRB / Coffee / custom text", "insert-text", "💬");
-	m_btnInstantReplay =
-		makeButton("Instant Replay", "Replay the last moments on stream", "rs-instant-replay", "🎥");
 	m_btnAutoStart =
 		makeButton("Auto-Start Manager", "Launch/close tools with OBS (placeholder)", "system-run", "🚀");
 	m_btnTimer = makeButton("Timer / Countdown", "Quick overlay timer (placeholder)", "appointment-new", "⏱");
@@ -107,8 +105,7 @@ void RsMainDock::createSidebarMenus()
 	m_enhMenuLayout->addWidget(m_btnBrowserRefresh, 0, 0);
 	m_enhMenuLayout->addWidget(m_btnQuickText, 0, 1);
 
-	m_enhMenuLayout->addWidget(m_btnInstantReplay, 1, 0);
-	m_enhMenuLayout->addWidget(m_btnAutoStart, 1, 1);
+	m_enhMenuLayout->addWidget(m_btnAutoStart, 1, 0);
 
 	m_enhMenuLayout->addWidget(m_btnTimer, 2, 0);
 	m_enhMenuLayout->addWidget(m_btnUiSettings, 2, 1);
@@ -146,7 +143,6 @@ void RsMainDock::createSidebarMenus()
 
 	connect(m_btnBrowserRefresh, &QToolButton::clicked, this, &RsMainDock::showBrowserRefresh);
 	connect(m_btnQuickText, &QToolButton::clicked, this, &RsMainDock::showQuickText);
-	connect(m_btnInstantReplay, &QToolButton::clicked, this, &RsMainDock::showInstantReplay);
 	connect(m_btnAutoStart, &QToolButton::clicked, this, &RsMainDock::showAutoStart);
 	connect(m_btnTimer, &QToolButton::clicked, this, &RsMainDock::showTimer);
 	connect(m_btnUiSettings, &QToolButton::clicked, this, &RsMainDock::showUiSettings);

@@ -52,10 +52,10 @@
 </div>
 <div class="subcard"><h3>Frame Designer</h3>
 <label>Heading</label><input id="replayTitle" value="INSTANT REPLAY">
-<div class="row"><div><label>Font</label><select id="replayFont"></select></div><div><label>Heading alignment</label><select id="replayAlignment"><option value="left">Left</option><option value="center">Centre</option><option value="right">Right</option></select></div></div>
+<div class="row"><div><label>Font</label><select id="replayFont"></select></div><div><label>Font weight</label><select id="replayFontWeight"><option value="regular">Regular</option><option value="medium">Medium</option><option value="semibold">Semibold</option><option value="bold">Bold</option><option value="extrabold">Extra Bold</option></select></div><div><label>Heading alignment</label><select id="replayAlignment"><option value="left">Left</option><option value="center">Centre</option><option value="right">Right</option></select></div></div>
 <div class="row"><div><label>Frame colour</label><div class="colour"><input id="replayBackground" type="color" value="#0b0f14"><input id="replayBackgroundHex" value="#0b0f14" maxlength="7"></div></div><div><label>Border colour</label><div class="colour"><input id="replayAccent" type="color" value="#00d4ff"><input id="replayAccentHex" value="#00d4ff" maxlength="7"></div></div><div><label>Heading colour</label><div class="colour"><input id="replayTextColour" type="color" value="#e6e8eb"><input id="replayTextColourHex" value="#e6e8eb" maxlength="7"></div></div></div>
 <div><label>Replay size</label><input id="replayScale" type="range" min="0" max="3" step="1" value="2"><div class="range-value"><span>Small</span><strong id="replayScaleValue">Large</strong><span>Full screen</span></div></div>
-<div class="row"><div><label>Frame opacity</label><input id="replayOpacity" type="range" min="0" max="100" value="92"><div class="range-value"><span>Transparent</span><span id="replayOpacityValue">92%</span></div></div><div><label>Border width</label><input id="replayBorderWidth" type="range" min="0" max="3" step="1" value="2"><div class="range-value"><span>None</span><span id="replayBorderValue">Medium</span></div></div><div><label>Corner radius</label><input id="replayRadius" type="range" min="0" max="3" step="1" value="2"><div class="range-value"><span>Square</span><span id="replayRadiusValue">Rounded</span></div></div></div>
+<div class="row"><div><label>Frame opacity</label><input id="replayOpacity" type="range" min="0" max="100" value="92"><div class="range-value"><span>Transparent</span><span id="replayOpacityValue">92%</span></div></div><div><label>Border width</label><input id="replayBorderWidth" type="range" min="0" max="4" step="1" value="2"><div class="range-value"><span>None</span><span id="replayBorderValue">Medium</span></div></div><div><label>Corner radius</label><input id="replayRadius" type="range" min="0" max="4" step="1" value="2"><div class="range-value"><span>Square</span><span id="replayRadiusValue">Rounded</span></div></div></div>
 <div id="replayPreview" class="replay-preview"><div class="replay-aperture">Replay video area</div><div id="replayPreviewTitle" class="replay-heading">INSTANT REPLAY</div></div>
 </div>
 </div>
@@ -175,8 +175,8 @@ window.rsSelectedReplayFolder=path=>{byId('replayFolder').value=path||'';post('s
 <script>
 (()=>{
 const byId=id=>document.getElementById(id),post=(action,value='')=>parent.rsNativePost(JSON.stringify({page:'tools',action,value}));
-const fonts=['Sora','Arial','Segoe UI','Calibri','Verdana','Tahoma','Trebuchet MS','Georgia','Times New Roman','Impact','Comic Sans MS'];
-fonts.forEach(font=>{const option=document.createElement('option');option.textContent=font;byId('replayFont').appendChild(option)});
+let replayFontFamilies=['Sora'];
+const renderReplayFonts=(selected='Sora')=>{const fonts=[...replayFontFamilies];if(!fonts.some(font=>font.toLowerCase()===selected.toLowerCase()))fonts.push(selected);byId('replayFont').replaceChildren(...fonts.map(font=>new Option(font,font)));byId('replayFont').value=selected};
 let ready=false,saveTimer=0;
 byId('replaySetupButton').addEventListener('click',()=>{byId('replaySetupStatus').textContent='Setting up or repairing the managed replay scene…'});
 window.rsReplaySetupRequired=()=>{byId('replaySetupStatus').textContent='Set up the replay scene before using Save & play.';byId('replaySetupButton').focus()};
@@ -187,47 +187,38 @@ const bufferConfig=()=>({
  autoStart:byId('replayAutoStart').checked,
  autoHide:byId('replayAutoHide').checked
 });
-const replaySizeSteps=[{id:'small',label:'Small',scale:40,titleSize:28},{id:'medium',label:'Medium',scale:60,titleSize:36},{id:'large',label:'Large',scale:80,titleSize:46},{id:'fullscreen',label:'Full screen',scale:100,titleSize:56}];
-const replayBorderSteps=[{id:'none',label:'None',value:0},{id:'thin',label:'Thin',value:4},{id:'medium',label:'Medium',value:8},{id:'thick',label:'Thick',value:12}];
-const replayRadiusSteps=[{id:'square',label:'Square',value:0},{id:'subtle',label:'Subtle',value:10},{id:'rounded',label:'Rounded',value:20},{id:'soft',label:'Soft',value:32}];
+const replaySizeSteps=[{id:'small',label:'Small',scale:40},{id:'medium',label:'Medium',scale:60},{id:'large',label:'Large',scale:80},{id:'fullscreen',label:'Full screen',scale:100}];
+const replayBorderSteps=[{id:'none',label:'None',value:0},{id:'subtle',label:'Subtle',value:5},{id:'medium',label:'Medium',value:10},{id:'bold',label:'Bold',value:18},{id:'statement',label:'Statement',value:25}];
+const replayRadiusSteps=[{id:'square',label:'Square',value:0},{id:'subtle',label:'Subtle',value:20},{id:'rounded',label:'Rounded',value:50},{id:'soft',label:'Soft',value:90},{id:'dramatic',label:'Dramatic',value:140}];
 const stepAt=(steps,id)=>steps[Math.max(0,Math.min(steps.length-1,+byId(id).value||0))];
 const nearestStep=(steps,value,key='value')=>{let best=0;steps.forEach((step,index)=>{if(Math.abs(step[key]-value)<Math.abs(steps[best][key]-value))best=index});return best};
 const configuredStepIndex=(steps,id,legacy,key='value')=>{const index=steps.findIndex(step=>step.id===id);return index>=0?index:nearestStep(steps,legacy,key)};
 const frameConfig=()=>{
  const size=stepAt(replaySizeSteps,'replayScale'),border=stepAt(replayBorderSteps,'replayBorderWidth'),radius=stepAt(replayRadiusSteps,'replayRadius');
- return {title:byId('replayTitle').value||'INSTANT REPLAY',font:byId('replayFont').value||'Sora',
+ return {title:byId('replayTitle').value||'INSTANT REPLAY',font:byId('replayFont').value||'Sora',fontWeight:byId('replayFontWeight').value||'bold',
   alignment:byId('replayAlignment').value||'left',background:byId('replayBackground').value,accent:byId('replayAccent').value,
   textColour:byId('replayTextColour').value,opacity:+byId('replayOpacity').value,sizeStep:size.id,borderStep:border.id,radiusStep:radius.id};
 };
- const replayLayout=config=>{
-  const canvasWidth=1920,canvasHeight=1080;
-  let fullWidth=canvasWidth,fullHeight=Math.floor(fullWidth*9/16);
-  if(fullHeight>canvasHeight){fullHeight=canvasHeight;fullWidth=Math.floor(fullHeight*16/9)}
-  const size=replaySizeSteps.find(step=>step.id===config.sizeStep)||replaySizeSteps[2],borderStep=replayBorderSteps.find(step=>step.id===config.borderStep)||replayBorderSteps[2],radiusStep=replayRadiusSteps.find(step=>step.id===config.radiusStep)||replayRadiusSteps[2];
-  const width=Math.max(1,Math.round(fullWidth*size.scale/100)),height=Math.max(1,Math.floor(width*9/16));
-  const border=borderStep.value,outerRadius=Math.min(Math.max(radiusStep.value,border+8),Math.floor(Math.min(width,height)/2)),innerRadius=Math.max(0,outerRadius-border);
-  const shortEdge=Math.min(width,height),padding=Math.max(border+16,Math.round(shortEdge*.035)),header=Math.max(Math.round(size.titleSize*1.45),Math.round(height*.11));
-  const apertureTop=Math.min(height-padding-1,padding+header),availableWidth=Math.max(1,width-padding*2),availableHeight=Math.max(1,height-apertureTop-padding);
-  let apertureWidth=availableWidth,apertureHeight=Math.floor(apertureWidth*9/16);
-  if(apertureHeight>availableHeight){apertureHeight=availableHeight;apertureWidth=Math.floor(apertureHeight*16/9)}
-  return {width,height,border,outerRadius,innerRadius,padding,apertureTop,apertureWidth,apertureHeight,
-   apertureLeft:padding+Math.floor((availableWidth-apertureWidth)/2),apertureY:apertureTop+Math.floor((availableHeight-apertureHeight)/2)};
- };
+let nativeReplayLayout=null;
  function preview(){
-  const config=frameConfig(),layout=replayLayout(config),preview=byId('replayPreview'),aperture=preview.querySelector('.replay-aperture'),title=byId('replayPreviewTitle');
-  const size=replaySizeSteps.find(step=>step.id===config.sizeStep)||replaySizeSteps[2];preview.style.background=rgba(config.background,config.opacity);preview.style.aspectRatio='16 / 9';preview.style.width=`${size.scale}%`;preview.style.maxWidth='100%';preview.style.margin='0 auto';
+  const config=frameConfig(),layout=nativeReplayLayout,preview=byId('replayPreview'),aperture=preview.querySelector('.replay-aperture'),title=byId('replayPreviewTitle');
+  preview.style.background=rgba(config.background,config.opacity);preview.style.aspectRatio='16 / 9';preview.style.width=`${layout?.scalePercent||80}%`;preview.style.maxWidth='100%';preview.style.margin='0 auto';
+  preview.style.opacity=layout?'1':'.55';aperture.textContent=layout?'Replay video':'Connect OBS to load preview geometry';
+  title.textContent=config.title;title.style.color=config.textColour;title.style.fontFamily=`${config.font}, Sora, sans-serif`;title.style.fontWeight={regular:400,medium:500,semibold:600,bold:700,extrabold:800}[config.fontWeight]||700;
+  byId('replayOpacityValue').textContent=`${config.opacity}%`;byId('replayBorderValue').textContent=stepAt(replayBorderSteps,'replayBorderWidth').label;byId('replayRadiusValue').textContent=stepAt(replayRadiusSteps,'replayRadius').label;byId('replayScaleValue').textContent=stepAt(replaySizeSteps,'replayScale').label;
+  if(!layout){preview.style.border='1px solid #39475a';preview.style.borderRadius='10px';return}
   const applyGeometry=()=>{const displayWidth=preview.getBoundingClientRect().width;if(!displayWidth)return;const ratio=displayWidth/layout.width;
    preview.style.border=`${layout.border*ratio}px solid ${config.accent}`;preview.style.borderRadius=`${layout.outerRadius*ratio}px`;
-   aperture.style.left=`${layout.apertureLeft/layout.width*100}%`;aperture.style.top=`${layout.apertureY/layout.height*100}%`;aperture.style.width=`${layout.apertureWidth/layout.width*100}%`;aperture.style.height=`${layout.apertureHeight/layout.height*100}%`;aperture.style.borderRadius=`${layout.innerRadius*ratio}px`;
-   title.style.left=`${layout.padding/layout.width*100}%`;title.style.top=`${layout.padding/layout.height*100}%`;title.style.width=`${(layout.width-layout.padding*2)/layout.width*100}%`;title.style.height=`${Math.max(1,layout.apertureTop-layout.padding)/layout.height*100}%`;title.style.maxWidth='none';title.style.display='flex';title.style.alignItems='center';title.style.justifyContent=config.alignment==='right'?'flex-end':config.alignment==='center'?'center':'flex-start';title.style.textAlign=config.alignment;title.style.fontSize=`${Math.max(1,size.titleSize*ratio)}px`;
+   aperture.style.left=`${layout.apertureX/layout.width*100}%`;aperture.style.top=`${layout.apertureY/layout.height*100}%`;aperture.style.width=`${layout.apertureWidth/layout.width*100}%`;aperture.style.height=`${layout.apertureHeight/layout.height*100}%`;aperture.style.borderRadius=`${layout.innerRadius*ratio}px`;
+   title.style.left=`${layout.titleX/layout.width*100}%`;title.style.top=`${layout.titleY/layout.height*100}%`;title.style.width=`${layout.titleWidth/layout.width*100}%`;title.style.height=`${layout.titleHeight/layout.height*100}%`;title.style.maxWidth='none';title.style.display='flex';title.style.alignItems='center';title.style.justifyContent=config.alignment==='right'?'flex-end':config.alignment==='center'?'center':'flex-start';title.style.textAlign=config.alignment;title.style.fontSize=`${Math.max(1,layout.titlePixelSize*ratio)}px`;
   };
-  title.textContent=config.title;title.style.color=config.textColour;title.style.fontFamily=config.font;requestAnimationFrame(applyGeometry);
-byId('replayOpacityValue').textContent=`${config.opacity}%`;byId('replayBorderValue').textContent=stepAt(replayBorderSteps,'replayBorderWidth').label;byId('replayRadiusValue').textContent=stepAt(replayRadiusSteps,'replayRadius').label;byId('replayScaleValue').textContent=stepAt(replaySizeSteps,'replayScale').label;
+  requestAnimationFrame(applyGeometry);
 }
 function save(){preview();if(!ready)return;clearTimeout(saveTimer);saveTimer=setTimeout(()=>{post('replayBufferConfig',bufferConfig());post('replayFrameConfig',frameConfig())},120)}
 function pair(colour,hex){byId(colour).oninput=()=>{byId(hex).value=byId(colour).value;save()};byId(hex).oninput=()=>{if(validHex(byId(hex).value)){byId(colour).value=byId(hex).value;save()}}}
 pair('replayBackground','replayBackgroundHex');pair('replayAccent','replayAccentHex');pair('replayTextColour','replayTextColourHex');
-['replaySeconds','replayAutoStart','replayAutoHide','replayTitle','replayFont','replayAlignment','replayOpacity','replayBorderWidth','replayRadius','replayScale'].forEach(id=>{byId(id).oninput=save;byId(id).onchange=save});
+byId('replaySeconds').onchange=save;
+['replayAutoStart','replayAutoHide','replayTitle','replayFont','replayFontWeight','replayAlignment','replayOpacity','replayBorderWidth','replayRadius','replayScale'].forEach(id=>{byId(id).oninput=save;byId(id).onchange=save});
 const priorApply=window.rsApplyTools;
 window.rsApplyTools=config=>{
  if(priorApply)priorApply(config);ready=false;
@@ -236,10 +227,12 @@ window.rsApplyTools=config=>{
  byId('replaySetupStatus').textContent=setupComplete?'Replay scene is set up. Do not rename the managed scene or its sources.':'Set up the managed replay scene before using Save & play.';
  byId('replaySavePlayButton').disabled=!setupComplete;byId('replayShowButton').disabled=!setupComplete;byId('replayHideButton').disabled=!setupComplete;
  byId('replaySeconds').value=config.replaySeconds??10;byId('replayAutoStart').checked=!!config.replayAutoStart;byId('replayAutoHide').checked=config.replayAutoHide!==false;
-byId('replayTitle').value=config.replayTitle||'INSTANT REPLAY';byId('replayFont').value=config.replayFont||'Sora';byId('replayAlignment').value=config.replayAlignment||config.alignment||'left';
+replayFontFamilies=Array.isArray(config.fontFamilies)&&config.fontFamilies.length?config.fontFamilies:['Sora'];const selectedFont=config.replayFont||'Sora';renderReplayFonts(selectedFont);
+byId('replayTitle').value=config.replayTitle||'INSTANT REPLAY';byId('replayFont').title=replayFontFamilies.some(font=>font.toLowerCase()===selectedFont.toLowerCase())?'':`${selectedFont} is unavailable; OBS will use Sora.`;byId('replayFontWeight').value=config.replayFontWeight||'bold';byId('replayAlignment').value=config.replayAlignment||config.alignment||'left';
  byId('replayBackground').value=byId('replayBackgroundHex').value=config.replayBackground||'#0b0f14';byId('replayAccent').value=byId('replayAccentHex').value=config.replayAccent||'#00d4ff';byId('replayTextColour').value=byId('replayTextColourHex').value=config.replayTextColour||'#e6e8eb';
  byId('replayOpacity').value=config.replayOpacity??92;byId('replayBorderWidth').value=configuredStepIndex(replayBorderSteps,config.replayBorderStep||config.borderStep,+(config.replayBorderWidth??8));byId('replayRadius').value=configuredStepIndex(replayRadiusSteps,config.replayRadiusStep||config.radiusStep,+(config.replayRadius??20));
  byId('replayScale').value=configuredStepIndex(replaySizeSteps,config.replaySizeStep||config.sizeStep,+(config.replayScale??80),'scale');
+ nativeReplayLayout=config.replayGeometryAvailable?{width:config.replayLayoutWidth,height:config.replayLayoutHeight,scalePercent:config.replayLayoutScale,titlePixelSize:config.replayTitlePixelSize,border:config.replayLayoutBorder,outerRadius:config.replayLayoutOuterRadius,innerRadius:config.replayLayoutInnerRadius,apertureX:config.replayApertureX,apertureY:config.replayApertureY,apertureWidth:config.replayApertureWidth,apertureHeight:config.replayApertureHeight,titleX:config.replayTitleX,titleY:config.replayTitleY,titleWidth:config.replayTitleWidth,titleHeight:config.replayTitleHeight}:null;
  preview();ready=true;
 };
 preview();

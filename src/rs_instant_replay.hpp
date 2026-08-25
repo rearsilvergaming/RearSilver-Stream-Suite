@@ -9,10 +9,8 @@ extern "C" {
 #include <obs-frontend-api.h>
 }
 
-class RsMainDock;
-
 // ------------------------------------------------------------
-// Instant Replay helper + UI
+// Hub-owned Instant Replay native OBS executor
 // ------------------------------------------------------------
 namespace hub_replay {
 
@@ -26,9 +24,6 @@ public:
 
 	// Hide replay source (safe no-op if missing)
 	static void hideReplaySource();
-
-	// UI page (matches Timer / AutoStart pattern)
-	static QWidget *createPage(RsMainDock *dock, QWidget *parent);
 
 	// Register OBS frontend callbacks (called once)
 	static void registerFrontendCallbacks();
@@ -50,7 +45,8 @@ public:
 	static void stopReplayBuffer();
 	static void showReplaySource();
 	static void repairReplaySource();
-	static void configureReplayFrame(const QString &title, const QString &font, const QString &alignment,
+	static void configureReplayFrame(const QString &title, const QString &font, const QString &fontWeight,
+					 const QString &alignment,
 					 const QString &background, const QString &accent,
 					 const QString &textColour, int opacity,
 					 const QString &sizeStep, const QString &borderStep, const QString &radiusStep);

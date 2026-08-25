@@ -2390,7 +2390,7 @@ static LRESULT CALLBACK windowProc(HWND window, UINT message, WPARAM wParam, LPA
 	g_sidebarToggle = expanded ? RECT{194, 31, 220, 57} : RECT{78, 31, 104, 57};
 	label(graphics, expanded ? L"\u2039" : L"\u203A", heading,
 		RectF(float(g_sidebarToggle.left), float(g_sidebarToggle.top), 26, 26), secondary, StringAlignmentCenter);
-	const wchar_t *pages[] = {L"Now Playing", L"Queue & Requests", L"Library", L"Overlay Designer", L"Settings", L"Accounts", L"Commands", L"Stream Tools"};
+	const wchar_t *pages[] = {L"Now Playing", L"Queue & Requests", L"Library", L"Music Overlay", L"Settings", L"Accounts", L"Commands", L"Stream Tools"};
 	const wchar_t *icons[] = {L"\u25B6", L"\u2261", L"\u266B", L"\u25C7", L"\u2699", L"@", L"!", L"+"};
 	static const int navOrder[] = {7, 0, 1, 2, 3, 4, 5, 6};
 	const float navStart = 104.0f;

@@ -57,6 +57,7 @@ if(WIN32)
 	target_link_libraries(RearSilver-Music-Player PRIVATE
 		gdiplus
 		dwmapi
+		dwrite.lib
 		ole32
 		"${CMAKE_CURRENT_SOURCE_DIR}/third_party/webview2/lib/x64/WebView2Loader.dll.lib"
 		"${RS_CEF_SDK_ROOT}/x64/release/libcef.lib"
@@ -205,6 +206,10 @@ add_library(${PROJECT_NAME} MODULE
     src/enhancements/rs_auto_start.hpp
     src/rs_instant_replay.cpp
     src/rs_instant_replay.hpp
+    src/rs_stream_overlay_server.cpp
+    src/rs_stream_overlay_server.hpp
+    src/rs_stream_overlay_manager.cpp
+    src/rs_stream_overlay_manager.hpp
 
     src/rs_music/rs_music.cpp
     src/rs_music/rs_music.hpp

@@ -9,4 +9,7 @@
     <file alias="splash.png">assets/branding/splash.png</file>
     <file alias="Sora-Variable.ttf">assets/fonts/Sora-Variable.ttf</file>
   </qresource>
+  <qresource prefix="/rs/stream-overlays">
+    <file alias="quick-text.html">assets/overlay/quick-text-overlay.html</file>
+  </qresource>
 </RCC>

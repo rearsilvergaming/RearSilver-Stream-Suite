@@ -23,6 +23,7 @@
 #include "rs_music/rs_music_pcm_source.hpp"
 #include "enhancements/rs_auto_start.hpp"
 #include "rs_instant_replay.hpp"
+#include "rs_stream_overlay_server.hpp"
 
 // ---------------------------------------------
 // OBS module boilerplate
@@ -177,6 +178,7 @@ bool obs_module_load(void)
 	// created in response to that event.
 	RsAutoStart::ensureObsEventHook();
 	hub_replay::RsInstantReplay::registerFrontendCallbacks();
+	RsStreamOverlayServer::instance().start();
 	obs_frontend_add_event_callback(frontend_event_callback, nullptr);
 
 	LOG_INFO_MSG("plugin load finished");
@@ -189,6 +191,7 @@ void obs_module_unload(void)
 	LOG_INFO_MSG("plugin unload");
 
 	obs_frontend_remove_event_callback(frontend_event_callback, nullptr);
+	RsStreamOverlayServer::instance().stop();
 	hub_replay::RsInstantReplay::shutdown();
 	RsAutoStart::shutdown();
 	rsMusicPcmStopOutput();

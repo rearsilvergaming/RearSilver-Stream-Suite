@@ -8,6 +8,7 @@
 #include <objidl.h>
 #include <shobjidl.h>
 #include <gdiplus.h>
+#include <dwrite.h>
 #include <wrl.h>
 
 #include "WebView2.h"
@@ -1045,6 +1046,9 @@ static std::string g_streamerAuthState = "disconnected", g_streamerLogin;
 static std::string g_botAuthState = "disconnected", g_botLogin, g_authSender = "streamer";
 static bool g_captureExists = false, g_playerAutoStart = false, g_hostPipeConnected = false,
 	g_replayBufferActive = false, g_replaySceneExists = false;
+static bool g_quickTextSourceExists = false, g_quickTextPlaced = false,
+	g_quickTextVisible = false, g_quickTextConflict = false;
+static std::string g_quickTextMessage = "Quick Text has not been added to OBS yet.";
 struct ReplayPreviewGeometry {
 	bool available = false;
 	int width = 0, height = 0, scalePercent = 0, titlePixelSize = 0;
@@ -1090,6 +1094,9 @@ static void syncHubQueueView()
 
 static void saveHubState();
 static std::wstring musicSetting(const wchar_t *name, const wchar_t *fallback);
+static void setMusicSetting(const wchar_t *name, const std::wstring &value);
+static std::wstring overlaySetting(const wchar_t *name, const wchar_t *fallback);
+static void setOverlaySetting(const wchar_t *name, const std::wstring &value);
 
 static std::string playerFallbackArtwork()
 {
@@ -1341,29 +1348,139 @@ static constexpr const wchar_t *kOverlayRegistry =
 	L"Software\\RearSilver\\RearSilver-Stream-Suite\\music\\overlay\\main";
 static constexpr const wchar_t *kMusicSettingsRegistry = L"Software\\RearSilver\\RearSilver-Stream-Suite\\music";
 
-static int CALLBACK collectFontFamily(const LOGFONTW *font, const TEXTMETRICW *, DWORD, LPARAM context)
+static std::wstring directWriteLocalizedName(IDWriteLocalizedStrings *names)
 {
-	if (!font || font->lfFaceName[0] == L'@' || !font->lfFaceName[0]) return 1;
-	auto *families = reinterpret_cast<std::vector<std::wstring> *>(context);
-	families->emplace_back(font->lfFaceName);
-	return 1;
+	if (!names || names->GetCount() == 0) return {};
+	UINT32 index = 0;
+	BOOL exists = FALSE;
+	wchar_t locale[LOCALE_NAME_MAX_LENGTH]{};
+	if (GetUserDefaultLocaleName(locale, LOCALE_NAME_MAX_LENGTH))
+		names->FindLocaleName(locale, &index, &exists);
+	if (!exists) names->FindLocaleName(L"en-gb", &index, &exists);
+	if (!exists) names->FindLocaleName(L"en-us", &index, &exists);
+	if (!exists) index = 0;
+	UINT32 length = 0;
+	if (FAILED(names->GetStringLength(index, &length))) return {};
+	std::wstring name(size_t(length) + 1, L'\0');
+	if (FAILED(names->GetString(index, name.data(), length + 1))) return {};
+	name.resize(length);
+	return name;
+}
+
+static ComPtr<IDWriteFont> directWriteRepresentativeFont(IDWriteFontFamily *family)
+{
+	ComPtr<IDWriteFont> font;
+	if (family) family->GetFirstMatchingFont(DWRITE_FONT_WEIGHT_NORMAL,
+		DWRITE_FONT_STRETCH_NORMAL, DWRITE_FONT_STYLE_NORMAL, &font);
+	return font;
+}
+
+static std::wstring directWriteFamilyName(IDWriteFontFamily *family, IDWriteFont *font)
+{
+	if (!family) return {};
+	if (font) {
+		ComPtr<IDWriteLocalizedStrings> typographicNames;
+		BOOL exists = FALSE;
+		if (SUCCEEDED(font->GetInformationalStrings(
+			DWRITE_INFORMATIONAL_STRING_TYPOGRAPHIC_FAMILY_NAMES, &typographicNames, &exists)) &&
+			exists && typographicNames) {
+			const std::wstring name = directWriteLocalizedName(typographicNames.Get());
+			if (!name.empty()) return name;
+		}
+	}
+	ComPtr<IDWriteLocalizedStrings> familyNames;
+	if (FAILED(family->GetFamilyNames(&familyNames)) || !familyNames) return {};
+	return directWriteLocalizedName(familyNames.Get());
+}
+
+static bool directWriteFontRendersText(IDWriteFont *font)
+{
+	if (!font) return false;
+	ComPtr<IDWriteFontFace> face;
+	if (FAILED(font->CreateFontFace(&face)) || !face) return false;
+	static constexpr UINT32 characters[] = {L'A', L'a', L'0'};
+	UINT16 glyphs[3]{};
+	if (FAILED(face->GetGlyphIndices(characters, 3, glyphs))) return false;
+	return glyphs[0] != 0 || glyphs[1] != 0 || glyphs[2] != 0;
+}
+
+static bool directWriteFontMatchesLocale(IDWriteFont *font, IDWriteGdiInterop *gdiInterop, BYTE systemCharset)
+{
+	if (!font || !gdiInterop) return false;
+	LOGFONTW logFont{};
+	BOOL isSystemFont = FALSE;
+	if (FAILED(gdiInterop->ConvertFontToLOGFONT(font, &logFont, &isSystemFont))) return false;
+	if (logFont.lfCharSet == SYMBOL_CHARSET) return false;
+	return logFont.lfCharSet == DEFAULT_CHARSET || logFont.lfCharSet == ANSI_CHARSET ||
+		logFont.lfCharSet == systemCharset;
+}
+
+static bool containsFontFamily(const std::vector<std::wstring> &families, const std::wstring &candidate)
+{
+	return std::any_of(families.begin(), families.end(), [&](const std::wstring &family) {
+		return _wcsicmp(family.c_str(), candidate.c_str()) == 0;
+	});
+}
+
+static std::wstring fontWeightBaseFamily(const std::wstring &family)
+{
+	static constexpr const wchar_t *weightSuffixes[] = {
+		L"BdCn BT", L"Bk BT", L"Hv BT", L"LtCn BT", L"Lt BT",
+		L"MdCn BT", L"Md BT", L"XBlk BT",
+		L"Extra Light", L"ExtraLight", L"Ultra Light", L"UltraLight",
+		L"Semi Light", L"SemiLight", L"Semilight", L"Demi Light", L"DemiLight",
+		L"Extra Bold", L"ExtraBold", L"Ultra Bold", L"UltraBold",
+		L"Semi Bold", L"SemiBold", L"Semibold", L"Demi Bold", L"DemiBold",
+		L"Thin", L"Light", L"Regular", L"Medium", L"Bold", L"Black", L"Heavy"
+	};
+	for (const wchar_t *suffix : weightSuffixes) {
+		const size_t suffixLength = wcslen(suffix);
+		if (family.size() <= suffixLength + 1) continue;
+		const size_t separator = family.size() - suffixLength - 1;
+		if (family[separator] == L' ' &&
+			_wcsicmp(family.c_str() + separator + 1, suffix) == 0)
+			return family.substr(0, separator);
+	}
+	return family;
 }
 
 static const std::vector<std::wstring> &installedFontFamilies()
 {
 	static const std::vector<std::wstring> families = [] {
 		std::vector<std::wstring> found;
-		HDC dc = GetDC(nullptr);
-		if (dc) {
-			LOGFONTW query{};
-			query.lfCharSet = DEFAULT_CHARSET;
-			EnumFontFamiliesExW(dc, &query, reinterpret_cast<FONTENUMPROCW>(collectFontFamily),
-				reinterpret_cast<LPARAM>(&found), 0);
-			ReleaseDC(nullptr, dc);
+		ComPtr<IDWriteFactory> factory;
+		if (SUCCEEDED(DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED, __uuidof(IDWriteFactory),
+			reinterpret_cast<IUnknown **>(factory.GetAddressOf()))) && factory) {
+			ComPtr<IDWriteFontCollection> collection;
+			ComPtr<IDWriteGdiInterop> gdiInterop;
+			factory->GetGdiInterop(&gdiInterop);
+			CHARSETINFO charsetInfo{};
+			DWORD codePage = GetACP();
+			const BYTE systemCharset = TranslateCharsetInfo(&codePage, &charsetInfo, TCI_SRCCODEPAGE)
+				? BYTE(charsetInfo.ciCharset) : ANSI_CHARSET;
+			if (SUCCEEDED(factory->GetSystemFontCollection(&collection, FALSE)) && collection && gdiInterop) {
+				const UINT32 count = collection->GetFontFamilyCount();
+				found.reserve(count + 1);
+				for (UINT32 index = 0; index < count; ++index) {
+					ComPtr<IDWriteFontFamily> family;
+					if (FAILED(collection->GetFontFamily(index, &family))) continue;
+					ComPtr<IDWriteFont> font = directWriteRepresentativeFont(family.Get());
+					if (!directWriteFontRendersText(font.Get()) ||
+						!directWriteFontMatchesLocale(font.Get(), gdiInterop.Get(), systemCharset)) continue;
+					std::wstring name = directWriteFamilyName(family.Get(), font.Get());
+					if (!name.empty() && name.front() != L'@') found.emplace_back(std::move(name));
+				}
+			}
 		}
+		if (found.empty()) found = {L"Arial", L"Calibri", L"Segoe UI", L"Sora"};
 		if (std::none_of(found.begin(), found.end(), [](const std::wstring &family) {
 			return _wcsicmp(family.c_str(), L"Sora") == 0;
 		})) found.emplace_back(L"Sora");
+		const std::vector<std::wstring> installed = found;
+		for (std::wstring &family : found) {
+			const std::wstring base = fontWeightBaseFamily(family);
+			if (base != family && containsFontFamily(installed, base)) family = base;
+		}
 		std::sort(found.begin(), found.end(), [](const std::wstring &left, const std::wstring &right) {
 			return _wcsicmp(left.c_str(), right.c_str()) < 0;
 		});
@@ -1373,6 +1490,28 @@ static const std::vector<std::wstring> &installedFontFamilies()
 		return found;
 	}();
 	return families;
+}
+
+static std::wstring canonicalFontFamily(const std::wstring &family)
+{
+	const std::wstring base = fontWeightBaseFamily(family);
+	return base != family && containsFontFamily(installedFontFamilies(), base) ? base : family;
+}
+
+static std::wstring normalisedMusicFontSetting(const wchar_t *key, const wchar_t *fallback)
+{
+	const std::wstring stored = musicSetting(key, fallback);
+	const std::wstring canonical = canonicalFontFamily(stored);
+	if (canonical != stored) setMusicSetting(key, canonical);
+	return canonical;
+}
+
+static std::wstring normalisedOverlayFontSetting(const wchar_t *key, const wchar_t *fallback)
+{
+	const std::wstring stored = overlaySetting(key, fallback);
+	const std::wstring canonical = canonicalFontFamily(stored);
+	if (canonical != stored) setOverlaySetting(key, canonical);
+	return canonical;
 }
 
 static void setFontFamilies(CefRefPtr<CefDictionaryValue> dictionary, const char *key)
@@ -1392,7 +1531,7 @@ static std::wstring replaySizeStep(){const auto step=musicSetting(L"tool.replayS
 static std::wstring replayBorderStep(){const auto step=musicSetting(L"tool.replayBorderStep",L"");if(step==L"none"||step==L"subtle"||step==L"medium"||step==L"bold"||step==L"statement")return step;if(step==L"thin")return L"subtle";if(step==L"thick")return L"bold";const int value=_wtoi(musicSetting(L"tool.replayBorderWidth",L"8").c_str());return value<2?L"none":value<6?L"subtle":value<10?L"medium":L"bold";}
 static std::wstring replayRadiusStep(){const auto step=musicSetting(L"tool.replayRadiusStep",L"");if(step==L"square"||step==L"subtle"||step==L"rounded"||step==L"soft"||step==L"dramatic")return step;const int value=_wtoi(musicSetting(L"tool.replayRadius",L"20").c_str());return value<5?L"square":value<15?L"subtle":value<26?L"rounded":L"soft";}
 static std::wstring replayFontWeight(){const auto weight=musicSetting(L"tool.replayFontWeight",L"bold");return weight==L"regular"||weight==L"medium"||weight==L"semibold"||weight==L"bold"||weight==L"extrabold"?weight:L"bold";}
-static std::string replayConfigJson(bool frame){CefRefPtr<CefDictionaryValue>d=CefDictionaryValue::Create();if(frame){d->SetString("title",wideToUtf8(musicSetting(L"tool.replayTitle",L"INSTANT REPLAY")));d->SetString("font",wideToUtf8(musicSetting(L"tool.replayFont",L"Sora")));d->SetString("fontWeight",wideToUtf8(replayFontWeight()));d->SetString("alignment",wideToUtf8(musicSetting(L"tool.replayAlignment",L"left")));d->SetString("background",wideToUtf8(musicSetting(L"tool.replayBackground",L"#0b0f14")));d->SetString("accent",wideToUtf8(musicSetting(L"tool.replayAccent",L"#00d4ff")));d->SetString("textColour",wideToUtf8(musicSetting(L"tool.replayTextColour",L"#e6e8eb")));d->SetInt("opacity",_wtoi(musicSetting(L"tool.replayOpacity",L"92").c_str()));d->SetString("sizeStep",wideToUtf8(replaySizeStep()));d->SetString("borderStep",wideToUtf8(replayBorderStep()));d->SetString("radiusStep",wideToUtf8(replayRadiusStep()));}else{d->SetInt("seconds",_wtoi(musicSetting(L"tool.replaySeconds",L"10").c_str()));d->SetBool("autoStart",musicBool(L"tool.replayAutoStart",false));d->SetBool("autoHide",musicBool(L"tool.replayAutoHide",true));}CefRefPtr<CefValue>root=CefValue::Create();root->SetDictionary(d);return CefWriteJSON(root,JSON_WRITER_DEFAULT).ToString();}
+static std::string replayConfigJson(bool frame){CefRefPtr<CefDictionaryValue>d=CefDictionaryValue::Create();if(frame){d->SetString("title",wideToUtf8(musicSetting(L"tool.replayTitle",L"INSTANT REPLAY")));d->SetString("font",wideToUtf8(normalisedMusicFontSetting(L"tool.replayFont",L"Sora")));d->SetString("fontWeight",wideToUtf8(replayFontWeight()));d->SetString("alignment",wideToUtf8(musicSetting(L"tool.replayAlignment",L"left")));d->SetString("background",wideToUtf8(musicSetting(L"tool.replayBackground",L"#0b0f14")));d->SetString("accent",wideToUtf8(musicSetting(L"tool.replayAccent",L"#00d4ff")));d->SetString("textColour",wideToUtf8(musicSetting(L"tool.replayTextColour",L"#e6e8eb")));d->SetInt("opacity",_wtoi(musicSetting(L"tool.replayOpacity",L"92").c_str()));d->SetString("sizeStep",wideToUtf8(replaySizeStep()));d->SetString("borderStep",wideToUtf8(replayBorderStep()));d->SetString("radiusStep",wideToUtf8(replayRadiusStep()));}else{d->SetInt("seconds",_wtoi(musicSetting(L"tool.replaySeconds",L"10").c_str()));d->SetBool("autoStart",musicBool(L"tool.replayAutoStart",false));d->SetBool("autoHide",musicBool(L"tool.replayAutoHide",true));}CefRefPtr<CefValue>root=CefValue::Create();root->SetDictionary(d);return CefWriteJSON(root,JSON_WRITER_DEFAULT).ToString();}
 static void queueReplayConfiguration(){std::lock_guard<std::mutex>lock(g_hostEventMutex);g_hostEvents.push_back("HOST\tTOOL\treplayBufferConfig\t"+replayConfigJson(false)+"\n");g_hostEvents.push_back("HOST\tTOOL\treplayFrameConfig\t"+replayConfigJson(true)+"\n");g_hostEvents.push_back("HOST\tTOOL\treplayStatus\t\"\"\n");}
 
 static std::wstring normalisedProgramPath(std::wstring path)
@@ -1705,9 +1844,9 @@ public:
 									else {std::lock_guard<std::mutex>lock(g_hostEventMutex);g_hostEvents.push_back("HOST\tTOOL\t"+action+"\t"+value+"\n");}
 									if(action=="setAutoLaunch")setMusicSetting(L"tool.autoLaunch",object->GetBool("value")?L"true":L"false");
 									else if(action=="setAutoClose")setMusicSetting(L"tool.autoClose",object->GetBool("value")?L"true":L"false");
-									else if(action=="dropText"){
+									else if(action=="dropText"||action=="quickTextConfig"||action=="quickTextShow"){
 										CefRefPtr<CefDictionaryValue>v=object->GetDictionary("value");
-										if(v){setMusicSetting(L"tool.quickSize",std::to_wstring(v->GetInt("size")));setMusicSetting(L"tool.quickColour",utf8ToWide(v->GetString("colour").ToString()));setMusicSetting(L"tool.quickFont",utf8ToWide(v->GetString("font").ToString()));}
+										if(v){setMusicSetting(L"tool.quickSize",std::to_wstring(v->GetInt("size")));setMusicSetting(L"tool.quickColour",utf8ToWide(v->GetString("colour").ToString()));setMusicSetting(L"tool.quickFont",utf8ToWide(v->GetString("font").ToString()));if(v->HasKey("fontWeight"))setMusicSetting(L"tool.quickFontWeight",std::to_wstring(v->GetInt("fontWeight")));}
 									}else if(action=="timerEnsure"){
 										CefRefPtr<CefDictionaryValue>v=object->GetDictionary("value");
 										if(v){setMusicSetting(L"tool.timerLabel",utf8ToWide(v->GetString("label").ToString()));setMusicSetting(L"tool.timerMode",utf8ToWide(v->GetString("mode").ToString()));setMusicSetting(L"tool.timerSeconds",std::to_wstring(v->GetInt("seconds")));}
@@ -1809,7 +1948,7 @@ private:
 		if (!m_ready || !m_webView) return; CefRefPtr<CefDictionaryValue> d = CefDictionaryValue::Create();
 		auto boolean=[&](const char *key,bool fallback){const std::wstring k=utf8ToWide(key);d->SetBool(key,overlayBool(k.c_str(),fallback));}; auto string=[&](const char *key,const wchar_t *fallback){const std::wstring k=utf8ToWide(key);d->SetString(key,wideToUtf8(overlaySetting(k.c_str(),fallback)));}; auto number=[&](const char *key,int fallback){const std::wstring k=utf8ToWide(key);d->SetInt(key,int(overlayNumber(k.c_str(),DWORD(fallback))));};
 		boolean("showArtwork",true); boolean("showTitle",true); boolean("showArtist",true); boolean("showAlbum",true); boolean("showRequester",true); boolean("showProgress",true); boolean("artworkBackground",false); boolean("backgroundTransparent",false);
-		string("artworkPosition",L"left"); string("timingMode",L"elapsedTotal"); string("fontFamily",L"Sora"); string("titleOverflow",L"ellipsis"); string("scrollDirection",L"left"); string("customText",L""); string("backgroundColour",L"#0b0f14"); string("textColour",L"#e6e8eb"); string("accentColour",L"#00d4ff"); number("titleSize",34); number("bodySize",20); number("scrollSpeed",45); number("backgroundOpacity",82); number("width",800); number("height",240);
+		string("artworkPosition",L"left"); string("timingMode",L"elapsedTotal"); d->SetString("fontFamily",wideToUtf8(normalisedOverlayFontSetting(L"fontFamily",L"Sora"))); string("titleOverflow",L"ellipsis"); string("scrollDirection",L"left"); string("customText",L""); string("backgroundColour",L"#0b0f14"); string("textColour",L"#e6e8eb"); string("accentColour",L"#00d4ff"); number("titleSize",34); number("bodySize",20); number("scrollSpeed",45); number("backgroundOpacity",82); number("width",800); number("height",240);
 		setFontFamilies(d, "fontFamilies");
 		CefRefPtr<CefValue> root=CefValue::Create(); root->SetDictionary(d); const std::wstring script=L"window.rsApplyConfig("+utf8ToWide(CefWriteJSON(root,JSON_WRITER_DEFAULT).ToString())+L")"; m_webView->ExecuteScript(script.c_str(),nullptr);
 	}
@@ -1819,7 +1958,13 @@ private:
 		CefRefPtr<CefDictionaryValue>d=CefDictionaryValue::Create();
 		d->SetInt("quickSize",_wtoi(musicSetting(L"tool.quickSize",L"120").c_str()));
 		d->SetString("quickColour",wideToUtf8(musicSetting(L"tool.quickColour",L"#ffffff")));
-		d->SetString("quickFont",wideToUtf8(musicSetting(L"tool.quickFont",L"Sora")));
+		d->SetString("quickFont",wideToUtf8(normalisedMusicFontSetting(L"tool.quickFont",L"Sora")));
+		d->SetInt("quickFontWeight",_wtoi(musicSetting(L"tool.quickFontWeight",L"700").c_str()));
+		d->SetBool("quickTextSourceExists",g_quickTextSourceExists);
+		d->SetBool("quickTextPlaced",g_quickTextPlaced);
+		d->SetBool("quickTextVisible",g_quickTextVisible);
+		d->SetBool("quickTextConflict",g_quickTextConflict);
+		d->SetString("quickTextMessage",g_quickTextMessage);
 		d->SetString("timerLabel",wideToUtf8(musicSetting(L"tool.timerLabel",L"Timer")));
 		d->SetString("timerMode",wideToUtf8(musicSetting(L"tool.timerMode",L"countdown")));
 		d->SetInt("timerSeconds",_wtoi(musicSetting(L"tool.timerSeconds",L"300").c_str()));
@@ -1839,7 +1984,7 @@ private:
 		d->SetBool("replayBufferActive",g_replayBufferActive);
 		d->SetBool("replaySetupComplete",g_replaySceneExists&&musicBool(L"tool.replaySetupCompleted",false));
 		d->SetString("replayTitle",wideToUtf8(musicSetting(L"tool.replayTitle",L"INSTANT REPLAY")));
-		d->SetString("replayFont",wideToUtf8(musicSetting(L"tool.replayFont",L"Sora")));
+		d->SetString("replayFont",wideToUtf8(normalisedMusicFontSetting(L"tool.replayFont",L"Sora")));
 		d->SetString("replayFontWeight",wideToUtf8(replayFontWeight()));
 		d->SetString("replayAlignment",wideToUtf8(musicSetting(L"tool.replayAlignment",L"left")));
 		d->SetString("replayBackground",wideToUtf8(musicSetting(L"tool.replayBackground",L"#0b0f14")));
@@ -2884,6 +3029,8 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int)
 						const size_t tab=line.find('\t',12);if(tab!=std::string::npos){g_captureExists=line.substr(12,tab-12)=="true";g_playerAutoStart=line.substr(tab+1)=="true";if(g_overlayDesigner)g_overlayDesigner->refresh();}
 					} else if (line.rfind("REPLAY_STATE\t", 0) == 0) {
 						CefRefPtr<CefValue>state=CefParseJSON(line.substr(13),JSON_PARSER_RFC);if(state&&state->GetType()==VTYPE_DICTIONARY){auto dictionary=state->GetDictionary();g_replayBufferActive=dictionary->GetBool("bufferActive");g_replaySceneExists=dictionary->GetBool("sceneExists");if(dictionary->HasKey("geometry")){auto geometry=dictionary->GetDictionary("geometry");if(geometry){g_replayPreviewGeometry.width=geometry->GetInt("width");g_replayPreviewGeometry.height=geometry->GetInt("height");g_replayPreviewGeometry.scalePercent=geometry->GetInt("scalePercent");g_replayPreviewGeometry.titlePixelSize=geometry->GetInt("titlePixelSize");g_replayPreviewGeometry.border=geometry->GetInt("border");g_replayPreviewGeometry.outerRadius=geometry->GetInt("outerRadius");g_replayPreviewGeometry.innerRadius=geometry->GetInt("innerRadius");g_replayPreviewGeometry.apertureX=geometry->GetInt("apertureX");g_replayPreviewGeometry.apertureY=geometry->GetInt("apertureY");g_replayPreviewGeometry.apertureWidth=geometry->GetInt("apertureWidth");g_replayPreviewGeometry.apertureHeight=geometry->GetInt("apertureHeight");g_replayPreviewGeometry.titleX=geometry->GetInt("titleX");g_replayPreviewGeometry.titleY=geometry->GetInt("titleY");g_replayPreviewGeometry.titleWidth=geometry->GetInt("titleWidth");g_replayPreviewGeometry.titleHeight=geometry->GetInt("titleHeight");g_replayPreviewGeometry.available=g_replayPreviewGeometry.width>0&&g_replayPreviewGeometry.height>0;}}const bool setupResponse=g_replaySetupPending.exchange(false);if(setupResponse&&g_replaySceneExists)setMusicSetting(L"tool.replaySetupCompleted",L"true");if(g_overlayDesigner)g_overlayDesigner->refresh();}
+					} else if (line.rfind("QUICK_TEXT_STATE\t", 0) == 0) {
+						CefRefPtr<CefValue>state=CefParseJSON(line.substr(17),JSON_PARSER_RFC);if(state&&state->GetType()==VTYPE_DICTIONARY){auto dictionary=state->GetDictionary();g_quickTextSourceExists=dictionary->GetBool("sourceExists");g_quickTextPlaced=dictionary->GetBool("placedInCurrentScene");g_quickTextVisible=dictionary->GetBool("visibleInCurrentScene");g_quickTextConflict=dictionary->GetBool("conflict");g_quickTextMessage=dictionary->GetString("message").ToString();if(g_overlayDesigner)g_overlayDesigner->refresh();}
 					} else if (line.rfind("HUB_IMPORT\t", 0) == 0) {
 						const std::string url = line.substr(11);
 						std::thread([window, url] { auto *result = new HubPlaylistResult(resolveHubPlaylist(url));

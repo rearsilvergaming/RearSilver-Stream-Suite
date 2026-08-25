@@ -69,7 +69,7 @@
 </section>
 <section class="card wide tool-panel" data-tool-panel="quick-text">
 <h2>Quick Text</h2>
-<p>Font, colour and size update live when the source exists. â€œShow textâ€ creates or repairs it and makes it visible.</p>
+<p>Font, colour and size update live when the source exists. “Show text” creates or repairs it and makes it visible.</p>
 <label>Message</label>
 <input id="quickText" placeholder="Type the message to show on stream">
 <div id="quickPreview" class="preview">Preview</div>
@@ -90,12 +90,17 @@
 <select id="quickFont">
 </select>
 </div>
+<div>
+<label>Font weight</label>
+<select id="quickFontWeight"><option value="400">Regular</option><option value="500">Medium</option><option value="600">Semibold</option><option value="700">Bold</option><option value="800">Extra Bold</option></select>
+</div>
 </div>
 <div class="row">
-<button data-action="dropText" class="primary">Show text</button>
+<button data-action="quickTextShow" class="primary">Show text</button>
 <button id="savePreset">Save as preset</button>
-<button data-action="clearText" class="danger">Clear</button>
+<button data-action="quickTextClear" class="danger">Clear</button>
 </div>
+<div id="quickTextStatus" class="status">Quick Text has not been added to OBS yet.</div>
 <label>Presets (right-click to remove)</label>
 <div id="presets" class="presets">
 </div>
@@ -176,6 +181,18 @@
 <script>(()=>{const $=id=>document.getElementById(id),post=(action,value='')=>parent.rsNativePost(JSON.stringify({page:'tools',action,value}));let presetList=['BRB','Coffee Break','Back Soon'],programList=[],ready=false,timerDebounce=0,quickDebounce=0;const fonts=['Sora','Arial','Segoe UI','Calibri','Verdana','Tahoma','Trebuchet MS','Georgia','Times New Roman','Impact','Comic Sans MS'];fonts.forEach(f=>{const o=document.createElement('option');o.textContent=f;$('quickFont').appendChild(o)});const validHex=x=>/^#[0-9a-f]{6}$/i.test(x);function pair(a,b){$(a).oninput=()=>{$(b).value=$(a).value;changed(a)};$(b).oninput=()=>{if(validHex($(b).value)){$(a).value=$(b).value;changed(a)}}}const quick=()=>({text:$('quickText').value,size:+$('quickSize').value,colour:$('quickColour').value,font:$('quickFont').value});const timer=()=>({label:$('timerLabel').value,mode:$('timerMode').value,seconds:(+$('timerMinutes').value||0)*60+(+$('timerSecondsPart').value||0)});const timerStyle=()=>({textColour:$('timerTextColour').value,labelSize:+$('timerLabelSize').value,timeSize:+$('timerTimeSize').value,shadow:$('timerShadow').checked,background:$('timerBackground').checked,backgroundColour:$('timerBgColour').value,backgroundOpacity:+$('timerBgOpacity').value,backgroundRadius:+$('timerBgRadius').value,hideWhenFinished:$('timerHideFinished').checked});function changed(id){preview();if(!ready)return;if(id.startsWith('quick')){clearTimeout(quickDebounce);quickDebounce=setTimeout(()=>post('dropText',quick()),120)}else{clearTimeout(timerDebounce);timerDebounce=setTimeout(()=>{post('timerEnsure',timer());post('timerStyle',timerStyle())},120)}}function preview(){const p=$('quickPreview'),s=+($('quickSize').value||120);p.textContent=$('quickText').value||'Preview';p.style.color=$('quickColour').value;p.style.fontFamily=$('quickFont').value;p.style.fontSize=Math.max(10,Math.min(68,s*.4))+'px'}function renderPresets(){$('presets').innerHTML='';presetList.forEach((x,i)=>{const b=document.createElement('button');b.textContent=x;b.onclick=()=>{$('quickText').value=x;preview();post('dropText',quick())};b.oncontextmenu=e=>{e.preventDefault();presetList.splice(i,1);post('saveQuickPresets',presetList);renderPresets()};$('presets').appendChild(b)})}function renderPrograms(){$('programs').innerHTML='';programList.forEach((x,i)=>{const r=document.createElement('div');r.className='program';const s=document.createElement('span');s.textContent=x;s.title=x;r.appendChild(s);['Launch','Close','Remove'].forEach((n,j)=>{const b=document.createElement('button');b.className='small'+(j===2?' danger':'');b.textContent=n;b.onclick=()=>{if(j===2){programList.splice(i,1);post('removeProgram',x);post('savePrograms',programList);renderPrograms()}else post(j===0?'launchProgram':'closeProgram',x)};r.appendChild(b)});$('programs').appendChild(r)})}document.querySelectorAll('[data-action]').forEach(b=>b.onclick=()=>{const a=b.dataset.action;let v='';if(a==='dropText')v=quick();if(a==='saveReplayFolder')v=$('replayFolder').value;if(a==='timerEnsure')v=timer();post(a,v)});$('addProgram').onclick=()=>{const x=$('programPath').value.trim();if(!x)return;if(!programList.some(p=>p.toLowerCase()===x.toLowerCase())){programList.push(x);post('addProgram',x);post('savePrograms',programList);renderPrograms()}$('programPath').value=''};$('savePreset').onclick=()=>{const x=$('quickText').value.trim();if(x&&!presetList.includes(x)){presetList.push(x);post('saveQuickPresets',presetList);renderPresets()}};pair('quickColour','quickColourHex');pair('timerTextColour','timerTextHex');pair('timerBgColour','timerBgHex');document.querySelectorAll('#quickText,#quickSize,#quickFont,#timerLabel,#timerMode,#timerMinutes,#timerSecondsPart,#timerLabelSize,#timerTimeSize,#timerBgOpacity,#timerBgRadius,#timerShadow,#timerBackground,#timerHideFinished').forEach(e=>{e.oninput=()=>changed(e.id);e.onchange=()=>changed(e.id)});window.rsApplyTools=c=>{ready=false;$('quickSize').value=c.quickSize||120;$('quickColour').value=$('quickColourHex').value=c.quickColour||'#ffffff';$('quickFont').value=c.quickFont||'Sora';$('timerLabel').value=c.timerLabel||'Timer';$('timerMode').value=c.timerMode||'countdown';const sec=c.timerSeconds??300;$('timerMinutes').value=Math.floor(sec/60);$('timerSecondsPart').value=sec%60;$('timerTextColour').value=$('timerTextHex').value=c.timerTextColour||'#ffffff';$('timerLabelSize').value=c.timerLabelSize||28;$('timerTimeSize').value=c.timerTimeSize||84;$('timerShadow').checked=c.timerShadow!==false;$('timerBackground').checked=!!c.timerBackground;$('timerBgColour').value=$('timerBgHex').value=c.timerBgColour||'#000000';$('timerBgOpacity').value=c.timerBgOpacity??70;$('timerBgRadius').value=c.timerBgRadius??48;$('timerHideFinished').checked=!!c.timerHideFinished;$('replayFolder').value=c.replayFolder||'';presetList=Array.isArray(c.quickPresets)?c.quickPresets:presetList;programList=Array.isArray(c.programs)?c.programs:programList;$('browserStatus').textContent=c.status||'Ready.';preview();renderPresets();renderPrograms();ready=true};preview();renderPresets();parent.rsNativePost('tools-ready')})();</script>
 <script>
 (()=>{const byId=id=>document.getElementById(id),post=(action,value='')=>parent.rsNativePost(JSON.stringify({page:'tools',action,value}));
+const quick=()=>({text:byId('quickText').value,size:+byId('quickSize').value,colour:byId('quickColour').value,font:byId('quickFont').value,fontWeight:+byId('quickFontWeight').value});
+let quickUpdate=0,requestedQuickStatus=false;
+const previewQuick=()=>{const preview=byId('quickPreview'),size=+(byId('quickSize').value||120);preview.textContent=byId('quickText').value||'Preview';preview.style.color=byId('quickColour').value;preview.style.fontFamily=byId('quickFont').value;preview.style.fontWeight=byId('quickFontWeight').value;preview.style.fontSize=Math.max(10,Math.min(68,size*.4))+'px'};
+const configureQuick=()=>{previewQuick();clearTimeout(quickUpdate);quickUpdate=setTimeout(()=>post('quickTextConfig',quick()),120)};
+['quickText','quickSize','quickFont','quickFontWeight'].forEach(id=>{byId(id).oninput=configureQuick;byId(id).onchange=configureQuick});
+byId('quickColour').oninput=()=>{byId('quickColourHex').value=byId('quickColour').value;configureQuick()};
+byId('quickColourHex').oninput=()=>{if(/^#[0-9a-f]{6}$/i.test(byId('quickColourHex').value)){byId('quickColour').value=byId('quickColourHex').value;configureQuick()}};
+document.querySelector('[data-action="quickTextShow"]').onclick=()=>post('quickTextShow',quick());
+document.querySelector('[data-action="quickTextClear"]').onclick=()=>{byId('quickText').value='';previewQuick();post('quickTextClear')};
+byId('presets').addEventListener('click',event=>{const button=event.target.closest('button');if(!button)return;event.preventDefault();event.stopImmediatePropagation();byId('quickText').value=button.textContent;previewQuick();post('quickTextShow',quick())},true);
+const applyTools=window.rsApplyTools;
+window.rsApplyTools=config=>{applyTools(config);const select=byId('quickFont'),selected=config.quickFont||'Sora',families=Array.isArray(config.fontFamilies)?config.fontFamilies:[];select.innerHTML='';families.forEach(font=>{const option=document.createElement('option');option.value=option.textContent=font;select.appendChild(option)});if(!families.some(font=>font.toLowerCase()===selected.toLowerCase())){const option=document.createElement('option');option.value=option.textContent=selected;select.insertBefore(option,select.firstChild)}select.value=selected;byId('quickFontWeight').value=String(config.quickFontWeight||700);byId('quickTextStatus').textContent=config.quickTextMessage||'Quick Text has not been added to OBS yet.';byId('quickTextStatus').style.color=config.quickTextConflict?'#ff9caa':'';previewQuick();post('quickTextConfig',quick());if(!requestedQuickStatus){requestedQuickStatus=true;post('quickTextStatus')}};
 byId('browseProgram').onclick=()=>post('pickProgram');
 byId('browseReplay').onclick=()=>post('pickReplayFolder');
 byId('clearReplayFolder').onclick=()=>{byId('replayFolder').value='';post('saveReplayFolder','')};

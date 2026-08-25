@@ -9,6 +9,8 @@
 #include "enhancements/rs_quick_text.hpp"
 #include "enhancements/rs_timer.hpp"
 #include "rs_instant_replay.hpp"
+#include "rs_stream_overlay_manager.hpp"
+#include "rs_stream_overlay_server.hpp"
 
 #include <QDateTime>
 #include <QFileInfo>
@@ -40,6 +42,10 @@ RsMusicController::RsMusicController(RsMusicState *state, QObject *parent) : QOb
 		auto publishReplayState = []() {
 			const QByteArray json = QJsonDocument(hub_replay::RsInstantReplay::replayState()).toJson(QJsonDocument::Compact);
 			RsMusicLocalPlayer::instance().sendUiCommand("REPLAY_STATE", QString::fromUtf8(json));
+		};
+		auto publishQuickTextState = [](const QJsonObject &state) {
+			const QByteArray json = QJsonDocument(state).toJson(QJsonDocument::Compact);
+			RsMusicLocalPlayer::instance().sendUiCommand("QUICK_TEXT_STATE", QString::fromUtf8(json));
 		};
 		if (command == "SETUP_STATUS") { publishSetupState(); return; }
 		// The Control Hub is mandatory infrastructure now. Legacy AUTOSTART
@@ -92,6 +98,10 @@ RsMusicController::RsMusicController(RsMusicState *state, QObject *parent) : QOb
 			else if (action == "closeProgram") RsAutoStart::closeProgram(value.toString());
 			else if (action == "refreshCurrent") RsBrowserRefresh::refreshCurrentScene();
 			else if (action == "refreshAll") RsBrowserRefresh::refreshAllScenes();
+			else if (action == "quickTextConfig") RsStreamOverlayServer::instance().setQuickTextState(value.toObject());
+			else if (action == "quickTextShow") { RsStreamOverlayServer::instance().setQuickTextState(value.toObject()); publishQuickTextState(RsStreamOverlayManager::showQuickTextInCurrentScene()); }
+			else if (action == "quickTextClear") { QJsonObject state=RsStreamOverlayServer::instance().quickTextState(); state["text"]=""; RsStreamOverlayServer::instance().setQuickTextState(state); publishQuickTextState(RsStreamOverlayManager::clearQuickTextInCurrentScene()); }
+			else if (action == "quickTextStatus") publishQuickTextState(RsStreamOverlayManager::quickTextStatus());
 			else if (action == "dropText") { const QJsonObject o=value.toObject(); RsQuickText::showText(o.value("text").toString(),o.value("size").toInt(120),o.value("colour").toString("#ffffff"),o.value("font").toString("Sora")); }
 			else if (action == "clearText") RsQuickText::clearAll();
 			else if (action == "timerEnsure") { const QJsonObject o=value.toObject(); RsTimer::configure(o.value("label").toString("Timer"),o.value("mode").toString("countdown"),o.value("seconds").toInt(300)); }

@@ -1,0 +1,10 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><style>
+html,body{width:100%;height:100%;margin:0;overflow:hidden;background:transparent}
+body{display:flex;align-items:center;justify-content:center}
+#text{max-width:100%;padding:12px 24px;box-sizing:border-box;text-align:center;white-space:pre-wrap;overflow-wrap:anywhere;line-height:1.15}
+</style></head><body><div id="text"></div><script>
+const text=document.getElementById('text');
+async function update(){try{const state=await fetch('/api/overlays/quick-text',{cache:'no-store'}).then(r=>r.json());text.textContent=state.text||'';text.style.fontSize=`${state.size||120}px`;text.style.color=state.colour||'#ffffff';text.style.fontFamily=`"${String(state.font||'Sora').replaceAll('"','')}", sans-serif`;text.style.fontWeight=state.fontWeight||700}catch{}}
+update();setInterval(update,100);
+</script></body></html>

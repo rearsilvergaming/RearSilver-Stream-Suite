@@ -20,7 +20,6 @@
 #include "rs_stats.hpp"
 #include "enhancements/rs_browser_refresh.hpp"
 #include "enhancements/rs_quick_text.hpp"
-#include "enhancements/rs_timer.hpp"
 #include "enhancements/rs_auto_start.hpp"
 
 // MUSIC UI panels (NEW)
@@ -200,9 +199,6 @@ void RsMainDock::createPanels()
 	// Auto Start (Enhancements tab)
 	m_pageAutoStart = RsAutoStart::createPage(this, m_contentCard);
 
-	// Timer / Countdown (Enhancements tab)
-	m_pageTimer = RsTimer::createPage(this, m_contentCard);
-
 	// UI Settings
 	m_pageUiSettings = new QWidget(m_contentCard);
 	{
@@ -292,8 +288,7 @@ void RsMainDock::createPanels()
 	m_stack->addWidget(m_pageBrowserRefresh); // 3
 	m_stack->addWidget(m_pageQuickText);      // 4
 	m_stack->addWidget(m_pageAutoStart);      // 5
-	m_stack->addWidget(m_pageTimer);          // 6
-	m_stack->addWidget(m_pageUiSettings);     // 7
+	m_stack->addWidget(m_pageUiSettings);     // 6
 
 	// MUSIC (append only)
 	m_stack->addWidget(m_pageMusicNowPlaying); // 8

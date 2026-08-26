@@ -1049,6 +1049,8 @@ static bool g_captureExists = false, g_playerAutoStart = false, g_hostPipeConnec
 static bool g_quickTextSourceExists = false, g_quickTextPlaced = false,
 	g_quickTextVisible = false, g_quickTextConflict = false;
 static std::string g_quickTextMessage = "Quick Text has not been added to OBS yet.";
+static bool g_timerSourceExists = false, g_timerPlaced = false, g_timerVisible = false, g_timerConflict = false;
+static std::string g_timerMessage = "Set up the managed Timer source before starting it.";
 struct ReplayPreviewGeometry {
 	bool available = false;
 	int width = 0, height = 0, scalePercent = 0, titlePixelSize = 0;
@@ -1799,21 +1801,23 @@ public:
 								}
 								if(object->GetString("page").ToString()=="tools"){
 									const std::string action=object->GetString("action").ToString();
-									if(action=="pickProgram"||action=="pickReplayFolder"){
+									if(action=="pickProgram"||action=="pickReplayFolder"||action=="pickTimerSound"){
 										ComPtr<IFileOpenDialog> dialog;
 										if(SUCCEEDED(CoCreateInstance(CLSID_FileOpenDialog,nullptr,CLSCTX_INPROC_SERVER,IID_PPV_ARGS(&dialog)))){
 											DWORD options=0; dialog->GetOptions(&options);
-											const bool folder=action=="pickReplayFolder";
+											const bool folder=action=="pickReplayFolder",sound=action=="pickTimerSound";
 											dialog->SetOptions(options|FOS_FORCEFILESYSTEM|(folder?FOS_PICKFOLDERS:FOS_FILEMUSTEXIST));
-											dialog->SetTitle(folder?L"Choose instant replay folder":L"Choose an application");
-											if(!folder){const COMDLG_FILTERSPEC filters[]={{L"Applications",L"*.exe"},{L"All files",L"*.*"}};dialog->SetFileTypes(2,filters);dialog->SetDefaultExtension(L"exe");}
+											dialog->SetTitle(folder?L"Choose instant replay folder":sound?L"Choose Timer completion sound":L"Choose an application");
+											if(sound){const COMDLG_FILTERSPEC filters[]={{L"Audio files",L"*.wav;*.mp3;*.flac;*.ogg"},{L"All files",L"*.*"}};dialog->SetFileTypes(2,filters);}
+											else if(!folder){const COMDLG_FILTERSPEC filters[]={{L"Applications",L"*.exe"},{L"All files",L"*.*"}};dialog->SetFileTypes(2,filters);dialog->SetDefaultExtension(L"exe");}
 											if(SUCCEEDED(dialog->Show(m_parent))){
 												ComPtr<IShellItem> item; PWSTR raw=nullptr;
 												if(SUCCEEDED(dialog->GetResult(&item))&&SUCCEEDED(item->GetDisplayName(SIGDN_FILESYSPATH,&raw))){
 													CefRefPtr<CefValue> selected=CefValue::Create(); selected->SetString(wideToUtf8(raw));
 													const std::wstring json=utf8ToWide(CefWriteJSON(selected,JSON_WRITER_DEFAULT).ToString());
-													const std::wstring callback=folder?L"window.rsSelectedReplayFolder":L"window.rsSelectedProgram";
-													m_webView->ExecuteScript((callback+L"("+json+L")").c_str(),nullptr); CoTaskMemFree(raw);
+													if(sound)m_webView->ExecuteScript((L"window.rsInvokeAll&&window.rsInvokeAll('rsSelectedTimerSound',"+json+L")").c_str(),nullptr);
+													else {const std::wstring callback=folder?L"window.rsSelectedReplayFolder":L"window.rsSelectedProgram";m_webView->ExecuteScript((callback+L"("+json+L")").c_str(),nullptr);}
+													CoTaskMemFree(raw);
 												}
 											}
 										}
@@ -1847,12 +1851,10 @@ public:
 									else if(action=="dropText"||action=="quickTextConfig"||action=="quickTextShow"){
 										CefRefPtr<CefDictionaryValue>v=object->GetDictionary("value");
 										if(v){setMusicSetting(L"tool.quickSize",std::to_wstring(v->GetInt("size")));setMusicSetting(L"tool.quickColour",utf8ToWide(v->GetString("colour").ToString()));setMusicSetting(L"tool.quickFont",utf8ToWide(v->GetString("font").ToString()));if(v->HasKey("fontWeight"))setMusicSetting(L"tool.quickFontWeight",std::to_wstring(v->GetInt("fontWeight")));}
-									}else if(action=="timerEnsure"){
+									}else if(action=="timerConfig"){
 										CefRefPtr<CefDictionaryValue>v=object->GetDictionary("value");
-										if(v){setMusicSetting(L"tool.timerLabel",utf8ToWide(v->GetString("label").ToString()));setMusicSetting(L"tool.timerMode",utf8ToWide(v->GetString("mode").ToString()));setMusicSetting(L"tool.timerSeconds",std::to_wstring(v->GetInt("seconds")));}
-									}else if(action=="timerStyle"){
-										CefRefPtr<CefDictionaryValue>v=object->GetDictionary("value");
-										if(v){setMusicSetting(L"tool.timerTextColour",utf8ToWide(v->GetString("textColour").ToString()));setMusicSetting(L"tool.timerLabelSize",std::to_wstring(v->GetInt("labelSize")));setMusicSetting(L"tool.timerTimeSize",std::to_wstring(v->GetInt("timeSize")));setMusicSetting(L"tool.timerShadow",v->GetBool("shadow")?L"true":L"false");setMusicSetting(L"tool.timerBackground",v->GetBool("background")?L"true":L"false");setMusicSetting(L"tool.timerBgColour",utf8ToWide(v->GetString("backgroundColour").ToString()));setMusicSetting(L"tool.timerBgOpacity",std::to_wstring(v->GetInt("backgroundOpacity")));setMusicSetting(L"tool.timerBgRadius",std::to_wstring(v->GetInt("backgroundRadius")));setMusicSetting(L"tool.timerHideFinished",v->GetBool("hideWhenFinished")?L"true":L"false");}
+										if(v){setMusicSetting(L"tool.timerLingerSeconds",std::to_wstring(v->GetInt("lingerSeconds")));setMusicSetting(L"tool.timerSoundPath",utf8ToWide(v->GetString("soundPath").ToString()));}
+										if(v){setMusicSetting(L"tool.timerLabel",utf8ToWide(v->GetString("label").ToString()));setMusicSetting(L"tool.timerMode",utf8ToWide(v->GetString("mode").ToString()));setMusicSetting(L"tool.timerSeconds",std::to_wstring(v->GetInt("seconds")));setMusicSetting(L"tool.timerFont",utf8ToWide(v->GetString("font").ToString()));setMusicSetting(L"tool.timerLabelWeight",std::to_wstring(v->GetInt("labelWeight")));setMusicSetting(L"tool.timerTimeWeight",std::to_wstring(v->GetInt("timeWeight")));setMusicSetting(L"tool.timerTextColour",utf8ToWide(v->GetString("textColour").ToString()));setMusicSetting(L"tool.timerLabelSize",std::to_wstring(v->GetInt("labelSize")));setMusicSetting(L"tool.timerTimeSize",std::to_wstring(v->GetInt("timeSize")));setMusicSetting(L"tool.timerShadow",v->GetBool("shadow")?L"true":L"false");setMusicSetting(L"tool.timerBackground",v->GetBool("background")?L"true":L"false");setMusicSetting(L"tool.timerBgColour",utf8ToWide(v->GetString("backgroundColour").ToString()));setMusicSetting(L"tool.timerBgOpacity",std::to_wstring(v->GetInt("backgroundOpacity")));setMusicSetting(L"tool.timerBgRadius",std::to_wstring(v->GetInt("backgroundRadius")));setMusicSetting(L"tool.timerHideFinished",v->GetBool("hideWhenFinished")?L"true":L"false");}
 									}else if(action=="saveReplayFolder")setMusicSetting(L"tool.replayFolder",utf8ToWide(object->GetString("value").ToString()));
 									else if(action=="replayBufferConfig"){
 										CefRefPtr<CefDictionaryValue>v=object->GetDictionary("value");
@@ -1968,6 +1970,9 @@ private:
 		d->SetString("timerLabel",wideToUtf8(musicSetting(L"tool.timerLabel",L"Timer")));
 		d->SetString("timerMode",wideToUtf8(musicSetting(L"tool.timerMode",L"countdown")));
 		d->SetInt("timerSeconds",_wtoi(musicSetting(L"tool.timerSeconds",L"300").c_str()));
+		d->SetString("timerFont",wideToUtf8(normalisedMusicFontSetting(L"tool.timerFont",L"Segoe UI")));
+		d->SetInt("timerLabelWeight",_wtoi(musicSetting(L"tool.timerLabelWeight",L"600").c_str()));
+		d->SetInt("timerTimeWeight",_wtoi(musicSetting(L"tool.timerTimeWeight",L"800").c_str()));
 		d->SetString("timerTextColour",wideToUtf8(musicSetting(L"tool.timerTextColour",L"#ffffff")));
 		d->SetInt("timerLabelSize",_wtoi(musicSetting(L"tool.timerLabelSize",L"28").c_str()));
 		d->SetInt("timerTimeSize",_wtoi(musicSetting(L"tool.timerTimeSize",L"84").c_str()));
@@ -1977,6 +1982,13 @@ private:
 		d->SetInt("timerBgOpacity",_wtoi(musicSetting(L"tool.timerBgOpacity",L"70").c_str()));
 		d->SetInt("timerBgRadius",_wtoi(musicSetting(L"tool.timerBgRadius",L"48").c_str()));
 		d->SetBool("timerHideFinished",musicBool(L"tool.timerHideFinished",false));
+		d->SetInt("timerLingerSeconds",_wtoi(musicSetting(L"tool.timerLingerSeconds",L"3").c_str()));
+		d->SetString("timerSoundPath",wideToUtf8(musicSetting(L"tool.timerSoundPath",L"")));
+		d->SetBool("timerSourceExists",g_timerSourceExists);
+		d->SetBool("timerPlaced",g_timerPlaced);
+		d->SetBool("timerVisible",g_timerVisible);
+		d->SetBool("timerConflict",g_timerConflict);
+		d->SetString("timerMessage",g_timerMessage);
 		d->SetString("replayFolder",wideToUtf8(musicSetting(L"tool.replayFolder",L"")));
 		d->SetInt("replaySeconds",_wtoi(musicSetting(L"tool.replaySeconds",L"10").c_str()));
 		d->SetBool("replayAutoStart",musicBool(L"tool.replayAutoStart",false));
@@ -3031,6 +3043,8 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int)
 						CefRefPtr<CefValue>state=CefParseJSON(line.substr(13),JSON_PARSER_RFC);if(state&&state->GetType()==VTYPE_DICTIONARY){auto dictionary=state->GetDictionary();g_replayBufferActive=dictionary->GetBool("bufferActive");g_replaySceneExists=dictionary->GetBool("sceneExists");if(dictionary->HasKey("geometry")){auto geometry=dictionary->GetDictionary("geometry");if(geometry){g_replayPreviewGeometry.width=geometry->GetInt("width");g_replayPreviewGeometry.height=geometry->GetInt("height");g_replayPreviewGeometry.scalePercent=geometry->GetInt("scalePercent");g_replayPreviewGeometry.titlePixelSize=geometry->GetInt("titlePixelSize");g_replayPreviewGeometry.border=geometry->GetInt("border");g_replayPreviewGeometry.outerRadius=geometry->GetInt("outerRadius");g_replayPreviewGeometry.innerRadius=geometry->GetInt("innerRadius");g_replayPreviewGeometry.apertureX=geometry->GetInt("apertureX");g_replayPreviewGeometry.apertureY=geometry->GetInt("apertureY");g_replayPreviewGeometry.apertureWidth=geometry->GetInt("apertureWidth");g_replayPreviewGeometry.apertureHeight=geometry->GetInt("apertureHeight");g_replayPreviewGeometry.titleX=geometry->GetInt("titleX");g_replayPreviewGeometry.titleY=geometry->GetInt("titleY");g_replayPreviewGeometry.titleWidth=geometry->GetInt("titleWidth");g_replayPreviewGeometry.titleHeight=geometry->GetInt("titleHeight");g_replayPreviewGeometry.available=g_replayPreviewGeometry.width>0&&g_replayPreviewGeometry.height>0;}}const bool setupResponse=g_replaySetupPending.exchange(false);if(setupResponse&&g_replaySceneExists)setMusicSetting(L"tool.replaySetupCompleted",L"true");if(g_overlayDesigner)g_overlayDesigner->refresh();}
 					} else if (line.rfind("QUICK_TEXT_STATE\t", 0) == 0) {
 						CefRefPtr<CefValue>state=CefParseJSON(line.substr(17),JSON_PARSER_RFC);if(state&&state->GetType()==VTYPE_DICTIONARY){auto dictionary=state->GetDictionary();g_quickTextSourceExists=dictionary->GetBool("sourceExists");g_quickTextPlaced=dictionary->GetBool("placedInCurrentScene");g_quickTextVisible=dictionary->GetBool("visibleInCurrentScene");g_quickTextConflict=dictionary->GetBool("conflict");g_quickTextMessage=dictionary->GetString("message").ToString();if(g_overlayDesigner)g_overlayDesigner->refresh();}
+					} else if (line.rfind("TIMER_STATE\t", 0) == 0) {
+						CefRefPtr<CefValue>state=CefParseJSON(line.substr(12),JSON_PARSER_RFC);if(state&&state->GetType()==VTYPE_DICTIONARY){auto dictionary=state->GetDictionary();g_timerSourceExists=dictionary->GetBool("sourceExists");g_timerPlaced=dictionary->GetBool("placedInCurrentScene");g_timerVisible=dictionary->GetBool("visibleInCurrentScene");g_timerConflict=dictionary->GetBool("conflict");g_timerMessage=dictionary->GetString("message").ToString();if(g_overlayDesigner)g_overlayDesigner->refresh();}
 					} else if (line.rfind("HUB_IMPORT\t", 0) == 0) {
 						const std::string url = line.substr(11);
 						std::thread([window, url] { auto *result = new HubPlaylistResult(resolveHubPlaylist(url));

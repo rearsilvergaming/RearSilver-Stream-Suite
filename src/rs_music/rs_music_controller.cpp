@@ -7,10 +7,10 @@
 #include "enhancements/rs_auto_start.hpp"
 #include "enhancements/rs_browser_refresh.hpp"
 #include "enhancements/rs_quick_text.hpp"
-#include "enhancements/rs_timer.hpp"
 #include "rs_instant_replay.hpp"
 #include "rs_stream_overlay_manager.hpp"
 #include "rs_stream_overlay_server.hpp"
+#include "rs_stream_timer.hpp"
 
 #include <QDateTime>
 #include <QFileInfo>
@@ -46,6 +46,10 @@ RsMusicController::RsMusicController(RsMusicState *state, QObject *parent) : QOb
 		auto publishQuickTextState = [](const QJsonObject &state) {
 			const QByteArray json = QJsonDocument(state).toJson(QJsonDocument::Compact);
 			RsMusicLocalPlayer::instance().sendUiCommand("QUICK_TEXT_STATE", QString::fromUtf8(json));
+		};
+		auto publishTimerState = [](const QJsonObject &state) {
+			const QByteArray json = QJsonDocument(state).toJson(QJsonDocument::Compact);
+			RsMusicLocalPlayer::instance().sendUiCommand("TIMER_STATE", QString::fromUtf8(json));
 		};
 		if (command == "SETUP_STATUS") { publishSetupState(); return; }
 		// The Control Hub is mandatory infrastructure now. Legacy AUTOSTART
@@ -104,13 +108,15 @@ RsMusicController::RsMusicController(RsMusicState *state, QObject *parent) : QOb
 			else if (action == "quickTextStatus") publishQuickTextState(RsStreamOverlayManager::quickTextStatus());
 			else if (action == "dropText") { const QJsonObject o=value.toObject(); RsQuickText::showText(o.value("text").toString(),o.value("size").toInt(120),o.value("colour").toString("#ffffff"),o.value("font").toString("Sora")); }
 			else if (action == "clearText") RsQuickText::clearAll();
-			else if (action == "timerEnsure") { const QJsonObject o=value.toObject(); RsTimer::configure(o.value("label").toString("Timer"),o.value("mode").toString("countdown"),o.value("seconds").toInt(300)); }
-			else if (action == "timerStyle") { const QJsonObject o=value.toObject(); RsTimer::configureStyle(o.value("textColour").toString("#ffffff"),o.value("labelSize").toInt(28),o.value("timeSize").toInt(84),o.value("shadow").toBool(true),o.value("background").toBool(false),o.value("backgroundColour").toString("#000000"),o.value("backgroundOpacity").toInt(70),o.value("backgroundRadius").toInt(48),o.value("hideWhenFinished").toBool(false)); }
-			else if (action == "timerStart") RsTimer::start();
-			else if (action == "timerPause") RsTimer::pauseResume();
-			else if (action == "timerReset") RsTimer::reset();
-			else if (action == "timerShow") RsTimer::setVisible(true);
-			else if (action == "timerHide") RsTimer::setVisible(false);
+			else if (action == "timerConfig") RsStreamTimer::instance().configure(value.toObject());
+			else if (action == "timerSetup") publishTimerState(RsStreamTimer::instance().setup());
+			else if (action == "timerStatus") publishTimerState(RsStreamTimer::instance().status());
+			else if (action == "timerSoundTest") publishTimerState(RsStreamTimer::instance().testSound());
+			else if (action == "timerStart") publishTimerState(RsStreamTimer::instance().startTimer());
+			else if (action == "timerPause") publishTimerState(RsStreamTimer::instance().pauseResume());
+			else if (action == "timerReset") publishTimerState(RsStreamTimer::instance().reset());
+			else if (action == "timerShow") publishTimerState(RsStreamTimer::instance().setVisible(true));
+			else if (action == "timerHide") publishTimerState(RsStreamTimer::instance().setVisible(false));
 			else if (action == "triggerReplay") hub_replay::RsInstantReplay::triggerReplay();
 			else if (action == "hideReplay") hub_replay::RsInstantReplay::hideReplaySource();
 			else if (action == "replayShow") hub_replay::RsInstantReplay::showReplaySource();

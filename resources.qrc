@@ -11,5 +11,6 @@
   </qresource>
   <qresource prefix="/rs/stream-overlays">
     <file alias="quick-text.html">assets/overlay/quick-text-overlay.html</file>
+	<file alias="timer.html">assets/overlay/timer-overlay.html</file>
   </qresource>
 </RCC>

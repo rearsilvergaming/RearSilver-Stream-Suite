@@ -17,7 +17,6 @@ void RsMainDock::setActiveButton(QToolButton *button)
 		m_btnBrowserRefresh,
 		m_btnQuickText,
 		m_btnAutoStart,
-		m_btnTimer,
 		m_btnUiSettings,
 
 		// MUSIC
@@ -92,15 +91,6 @@ void RsMainDock::showAutoStart()
 		m_lastEnhancementsPage = m_stack->currentIndex();
 	}
 	setActiveButton(m_btnAutoStart);
-}
-
-void RsMainDock::showTimer()
-{
-	if (m_stack && m_pageTimer) {
-		m_stack->setCurrentWidget(m_pageTimer);
-		m_lastEnhancementsPage = m_stack->currentIndex();
-	}
-	setActiveButton(m_btnTimer);
 }
 
 void RsMainDock::showUiSettings()

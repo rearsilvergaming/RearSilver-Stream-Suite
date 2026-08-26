@@ -14,8 +14,11 @@ public:
 	void stop();
 	quint16 port() const;
 	QString quickTextUrl() const;
+	QString timerUrl() const;
 	void setQuickTextState(const QJsonObject &state);
 	QJsonObject quickTextState() const;
+	void setTimerState(const QJsonObject &state);
+	QJsonObject timerState() const;
 
 private:
 	explicit RsStreamOverlayServer(QObject *parent = nullptr);
@@ -25,4 +28,5 @@ private:
 
 	QTcpServer *m_server = nullptr;
 	QJsonObject m_quickTextState;
+	QJsonObject m_timerState;
 };

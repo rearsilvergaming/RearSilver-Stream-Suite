@@ -24,6 +24,7 @@
 #include "enhancements/rs_auto_start.hpp"
 #include "rs_instant_replay.hpp"
 #include "rs_stream_overlay_server.hpp"
+#include "rs_stream_timer.hpp"
 
 // ---------------------------------------------
 // OBS module boilerplate
@@ -192,6 +193,7 @@ void obs_module_unload(void)
 
 	obs_frontend_remove_event_callback(frontend_event_callback, nullptr);
 	RsStreamOverlayServer::instance().stop();
+	RsStreamTimer::instance().shutdown();
 	hub_replay::RsInstantReplay::shutdown();
 	RsAutoStart::shutdown();
 	rsMusicPcmStopOutput();

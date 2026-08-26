@@ -107,7 +107,8 @@
 </section>
 <section class="card wide tool-panel" data-tool-panel="timer">
 <h2>Timer</h2>
-<p>Configuration and styling update live. Start, pause and reset remain explicit controls.</p>
+<p>Set up the managed browser source once. Configuration and styling then update live.</p>
+<div id="timerPreview" class="preview"><div id="timerPreviewLabel">Timer</div><div id="timerPreviewTime">05:00</div></div>
 <div class="row">
 <div>
 <label>Title</label>
@@ -126,6 +127,18 @@
 </div>
 </div>
 <div class="row">
+<div>
+<label>Font</label>
+<select id="timerFont"></select>
+</div>
+<div>
+<label>Title weight</label>
+<select id="timerLabelWeight"><option value="400">Regular</option><option value="500">Medium</option><option value="600" selected>Semibold</option><option value="700">Bold</option><option value="800">Extra bold</option><option value="900">Black</option></select>
+</div>
+<div>
+<label>Time weight</label>
+<select id="timerTimeWeight"><option value="400">Regular</option><option value="500">Medium</option><option value="600">Semibold</option><option value="700">Bold</option><option value="800" selected>Extra bold</option><option value="900">Black</option></select>
+</div>
 <div>
 <label>Text colour</label>
 <div class="colour">
@@ -166,13 +179,28 @@
 <input id="timerHideFinished" type="checkbox">Hide when finished</label>
 </div>
 <div class="row">
-<button data-action="timerEnsure">Repair source</button>
-<button data-action="timerStart" class="primary">Start</button>
-<button data-action="timerPause">Pause / resume</button>
-<button data-action="timerReset">Reset</button>
-<button data-action="timerShow">Show</button>
-<button data-action="timerHide">Hide</button>
+<div>
+<label>Linger at zero</label>
+<select id="timerLinger"><option value="0">Off</option><option value="2">2 seconds</option><option value="3" selected>3 seconds</option><option value="5">5 seconds</option><option value="10">10 seconds</option></select>
 </div>
+<div style="flex:2">
+<label>Completion sound</label>
+<input id="timerSoundPath" readonly placeholder="No completion sound selected">
+</div>
+<button id="timerChooseSound">Choose sound…</button>
+<button id="timerTestSound">Test sound</button>
+<button id="timerClearSound">Clear</button>
+</div>
+<div id="timerSoundStatus" class="status">Choose an optional sound played through the Timer source when the countdown reaches zero.</div>
+<div class="row">
+<button id="timerSetup">Set up timer</button>
+<button id="timerStart" class="primary" disabled>Start</button>
+<button id="timerPause" disabled>Pause / resume</button>
+<button id="timerReset" disabled>Reset</button>
+<button id="timerShow" disabled>Show</button>
+<button id="timerHide" disabled>Hide</button>
+</div>
+<div id="timerStatus" class="status">Set up the managed Timer source before starting it.</div>
 </section>
 </div>
 <script>
@@ -264,6 +292,18 @@ byId('replayTitle').value=config.replayTitle||'INSTANT REPLAY';byId('replayFont'
 };
 preview();
 })();
+</script>
+<script>
+(()=>{const byId=id=>document.getElementById(id),post=(action,value='')=>parent.rsNativePost(JSON.stringify({page:'tools',action,value}));let timerReady=false,timerInitialised=false,updateTimer=0;
+const config=()=>({label:byId('timerLabel').value,mode:byId('timerMode').value,seconds:(+byId('timerMinutes').value||0)*60+(+byId('timerSecondsPart').value||0),font:byId('timerFont').value,fontWeight:+byId('timerTimeWeight').value,labelWeight:+byId('timerLabelWeight').value,timeWeight:+byId('timerTimeWeight').value,textColour:byId('timerTextColour').value,labelSize:+byId('timerLabelSize').value,timeSize:+byId('timerTimeSize').value,shadow:byId('timerShadow').checked,background:byId('timerBackground').checked,backgroundColour:byId('timerBgColour').value,backgroundOpacity:+byId('timerBgOpacity').value,backgroundRadius:+byId('timerBgRadius').value,hideWhenFinished:byId('timerHideFinished').checked,lingerSeconds:+byId('timerLinger').value,soundPath:byId('timerSoundPath').value});
+const preview=()=>{const value=config(),seconds=value.mode==='stopwatch'?0:value.seconds;byId('timerPreviewLabel').textContent=value.label||'Timer';byId('timerPreviewTime').textContent=`${String(Math.floor(seconds/60)).padStart(2,'0')}:${String(seconds%60).padStart(2,'0')}`;const p=byId('timerPreview');p.style.fontFamily=value.font;p.style.color=value.textColour;p.style.background=value.background?value.backgroundColour:'transparent';p.style.borderRadius=`${Math.min(40,value.backgroundRadius*.4)}px`;byId('timerPreviewLabel').style.fontWeight=value.labelWeight;byId('timerPreviewTime').style.fontWeight=value.timeWeight;byId('timerPreviewLabel').style.fontSize=`${Math.max(10,Math.min(42,value.labelSize*.45))}px`;byId('timerPreviewTime').style.fontSize=`${Math.max(18,Math.min(72,value.timeSize*.45))}px`};
+const changed=()=>{preview();if(!timerReady)return;clearTimeout(updateTimer);updateTimer=setTimeout(()=>post('timerConfig',config()),120)};
+['timerLabel','timerMode','timerMinutes','timerSecondsPart','timerFont','timerLabelWeight','timerTimeWeight','timerTextColour','timerLabelSize','timerTimeSize','timerBgColour','timerBgOpacity','timerBgRadius','timerShadow','timerBackground','timerHideFinished','timerLinger'].forEach(id=>{byId(id).oninput=changed;byId(id).onchange=changed});
+['timerTextHex','timerBgHex'].forEach(id=>{const applyHex=()=>{if(/^#[0-9a-f]{6}$/i.test(byId(id).value)){const colour=id==='timerTextHex'?'timerTextColour':'timerBgColour';byId(colour).value=byId(id).value;changed()}};byId(id).oninput=applyHex;byId(id).onchange=applyHex;byId(id).onblur=applyHex;byId(id).onkeydown=event=>{if(event.key==='Enter'){event.preventDefault();applyHex();byId(id).blur()}}});
+byId('timerChooseSound').onclick=()=>post('pickTimerSound');byId('timerTestSound').onclick=()=>{post('timerConfig',config());post('timerSoundTest');byId('timerSoundStatus').textContent='Test requested through the Timer source.';byId('timerSoundStatus').style.color=''};byId('timerClearSound').onclick=()=>{byId('timerSoundPath').value='';byId('timerSoundStatus').textContent='No completion sound selected.';changed()};window.rsSelectedTimerSound=path=>{byId('timerSoundPath').value=path||'';byId('timerSoundStatus').textContent=path?'Completion sound selected. Use Test sound to verify it.':'No completion sound selected.';byId('timerSoundStatus').style.color='';changed()};
+byId('timerSetup').onclick=()=>{post('timerConfig',config());post('timerSetup')};byId('timerStart').onclick=()=>{post('timerConfig',config());post('timerStart')};byId('timerPause').onclick=()=>post('timerPause');byId('timerReset').onclick=()=>post('timerReset');byId('timerShow').onclick=()=>post('timerShow');byId('timerHide').onclick=()=>post('timerHide');
+window.rsApplyTimerState=state=>{const usable=!!state.sourceExists&&!state.conflict;['timerStart','timerPause','timerReset','timerShow','timerHide','timerTestSound'].forEach(id=>byId(id).disabled=!usable);byId('timerSetup').textContent=usable?'Repair timer':'Set up timer';byId('timerStatus').textContent=state.message||'Set up the managed Timer source before starting it.';byId('timerStatus').style.color=state.conflict?'#ff9caa':''};
+const apply=window.rsApplyTools;window.rsApplyTools=c=>{apply(c);const select=byId('timerFont'),selected=c.timerFont||'Segoe UI',families=Array.isArray(c.fontFamilies)?c.fontFamilies:[];select.innerHTML='';families.forEach(font=>{const option=document.createElement('option');option.value=option.textContent=font;select.appendChild(option)});if(!families.some(font=>font.toLowerCase()===selected.toLowerCase())){const option=document.createElement('option');option.value=option.textContent=selected;select.insertBefore(option,select.firstChild)}select.value=selected;byId('timerLabelWeight').value=String(c.timerLabelWeight||600);byId('timerTimeWeight').value=String(c.timerTimeWeight||800);byId('timerLinger').value=String(c.timerLingerSeconds??3);byId('timerSoundPath').value=c.timerSoundPath||'';timerReady=true;preview();window.rsApplyTimerState({sourceExists:c.timerSourceExists,placedInCurrentScene:c.timerPlaced,visibleInCurrentScene:c.timerVisible,conflict:c.timerConflict,message:c.timerMessage});if(!timerInitialised){timerInitialised=true;post('timerConfig',config());post('timerStatus')}};preview()})();
 </script>
 </body>
 </html>

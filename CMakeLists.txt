@@ -200,8 +200,6 @@ add_library(${PROJECT_NAME} MODULE
     src/enhancements/rs_browser_refresh.hpp
     src/enhancements/rs_quick_text.cpp
     src/enhancements/rs_quick_text.hpp
-    src/enhancements/rs_timer.cpp
-    src/enhancements/rs_timer.hpp
     src/enhancements/rs_auto_start.cpp
     src/enhancements/rs_auto_start.hpp
     src/rs_instant_replay.cpp
@@ -210,6 +208,8 @@ add_library(${PROJECT_NAME} MODULE
     src/rs_stream_overlay_server.hpp
     src/rs_stream_overlay_manager.cpp
     src/rs_stream_overlay_manager.hpp
+	src/rs_stream_timer.cpp
+	src/rs_stream_timer.hpp
 
     src/rs_music/rs_music.cpp
     src/rs_music/rs_music.hpp

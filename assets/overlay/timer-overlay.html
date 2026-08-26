@@ -1,0 +1,11 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><style>
+html,body{width:100%;height:100%;margin:0;overflow:hidden;background:transparent}
+body{display:flex;align-items:center;justify-content:center}.timer{display:flex;flex-direction:column;align-items:center;justify-content:center;padding:28px 44px;box-sizing:border-box;text-align:center}
+#label{line-height:1.15}#time{line-height:1.05;letter-spacing:.02em}
+</style></head><body><div class="timer" id="timer"><div id="label"></div><div id="time"></div></div><script>
+const timer=document.getElementById('timer'),label=document.getElementById('label'),time=document.getElementById('time'),sound=new Audio();let soundRevision=null;
+const format=value=>`${String(Math.floor(Math.max(0,value)/60)).padStart(2,'0')}:${String(Math.max(0,value)%60).padStart(2,'0')}`;
+async function update(){try{const s=await fetch('/api/overlays/timer',{cache:'no-store'}).then(r=>r.json());label.textContent=s.label||'';time.textContent=format(Number(s.displaySeconds)||0);const family=String(s.font||'Segoe UI').replaceAll('"','');label.style.fontFamily=time.style.fontFamily=`"${family}",sans-serif`;label.style.fontWeight=s.labelWeight||600;time.style.fontWeight=s.timeWeight||800;label.style.fontSize=`${s.labelSize||28}px`;time.style.fontSize=`${s.timeSize||84}px`;label.style.color=time.style.color=s.textColour||'#ffffff';const shadow=s.shadow?'0 3px 10px rgba(0,0,0,.8)':'none';label.style.textShadow=time.style.textShadow=shadow;timer.style.background=s.background?`${s.backgroundColour||'#000000'}${Math.round((s.backgroundOpacity??70)*2.55).toString(16).padStart(2,'0')}`:'transparent';timer.style.borderRadius=`${s.backgroundRadius||0}px`;const next=Number(s.soundRevision)||0;if(soundRevision===null)soundRevision=next;else if(next!==soundRevision){soundRevision=next;sound.src=`/media/timer-completion?revision=${next}`;sound.currentTime=0;sound.play().catch(()=>{})}}catch{}}
+update();setInterval(update,100);
+</script></body></html>

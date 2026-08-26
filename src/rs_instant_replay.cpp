@@ -12,7 +12,9 @@
 #include <QColor>
 #include <QRect>
 #include <QCoreApplication>
+#include <QDesktopServices>
 #include <QHash>
+#include <QUrl>
 
 #include <atomic>
 #include <vector>
@@ -56,7 +58,6 @@ static QString s_replayBorderStep = QStringLiteral("medium");
 static QString s_replayRadiusStep = QStringLiteral("rounded");
 static QString s_replayAlignment = QStringLiteral("left");
 static QString s_replayFontWeight = QStringLiteral("bold");
-static QString s_replayFolderOverride;
 static int s_replaySeconds = 10;
 static bool s_hasReplayBufferConfiguration = false;
 static bool s_restartReplayBufferAfterStop = false;
@@ -136,14 +137,25 @@ static bool s_frontendCallbacksRegistered = false;
 // ------------------------------------------------------------
 // Replay settings are supplied by the Control Hub for this process lifetime.
 // ------------------------------------------------------------
-QString RsInstantReplay::replayFolderOverride()
+void RsInstantReplay::openReplayFolder()
 {
-	return s_replayFolderOverride;
-}
-
-void RsInstantReplay::setReplayFolderOverride(const QString &path)
-{
-	s_replayFolderOverride = path;
+	QString folder;
+	config_t *cfg = obs_frontend_get_profile_config();
+	if (cfg) {
+		const char *modeValue = config_get_string(cfg, "Output", "Mode");
+		const QString mode = modeValue ? QString::fromUtf8(modeValue) : QString();
+		const bool advanced = mode.compare(QStringLiteral("Advanced"), Qt::CaseInsensitive) == 0;
+		const char *pathValue = config_get_string(cfg, advanced ? "AdvOut" : "SimpleOutput",
+			advanced ? "RecFilePath" : "FilePath");
+		if (pathValue) folder = QString::fromUtf8(pathValue);
+	}
+	if (!folder.isEmpty()) folder = QDir::cleanPath(folder);
+	if (folder.isEmpty() || !QDir(folder).exists()) {
+		blog(LOG_WARNING, "[RS Instant Replay] Cannot open replay folder because the configured directory is unavailable");
+		return;
+	}
+	if (!QDesktopServices::openUrl(QUrl::fromLocalFile(folder)))
+		blog(LOG_WARNING, "[RS Instant Replay] Windows could not open the configured replay folder");
 }
 
 // ------------------------------------------------------------
@@ -993,26 +1005,6 @@ void RsInstantReplay::hideReplaySource()
 }
 
 
-static QString findReplayAfterRequest(const QString &folder)
-{
-	QDir dir(folder);
-	if (!dir.exists())
-		return QString();
-
-	const QFileInfoList files = dir.entryInfoList(QStringList() << "*.mp4" << "*.mkv", QDir::Files, QDir::Time);
-
-	for (const QFileInfo &fi : files) {
-		qint64 modified = fi.lastModified().toMSecsSinceEpoch();
-
-		// Ignore files created too quickly (rename dialog still open)
-		if (modified >= s_lastReplayRequestTime + 500) {
-			return fi.absoluteFilePath();
-		}
-	}
-
-	return QString();
-}
-
 static void playReplayAfterRename(int attempt)
 {
 	// OBS knows the exact final replay path, including any profile folder and
@@ -1030,31 +1022,10 @@ static void playReplayAfterRename(int attempt)
 		bfree(lastReplay);
 	}
 
-	const QString folder = RsInstantReplay::replayFolderOverride();
-	if (folder.isEmpty()) {
-		if (attempt < 40)
-			QTimer::singleShot(250, [attempt]() { playReplayAfterRename(attempt + 1); });
-		else
-			blog(LOG_WARNING, "[RS Instant Replay] OBS did not report a saved replay path");
-		return;
-	}
-
-	QString file = findReplayAfterRequest(folder);
-
-	// Keep polling until the file ACTUALLY exists (OBS + mover plugin delay)
-	if (file.isEmpty()) {
-		if (attempt < 40) {
-			QTimer::singleShot(250, [attempt]() { playReplayAfterRename(attempt + 1); });
-		} else {
-			blog(LOG_WARNING, "[RS Instant Replay] Replay file never appeared in folder: %s",
-			     folder.toUtf8().constData());
-		}
-		return;
-	}
-
-	// File finally exists → play it
-	s_lastReplayFile = file;
-	RsInstantReplay::playReplay(file);
+	if (attempt < 40)
+		QTimer::singleShot(250, [attempt]() { playReplayAfterRename(attempt + 1); });
+	else
+		blog(LOG_WARNING, "[RS Instant Replay] OBS did not report a saved replay path");
 }
 
 

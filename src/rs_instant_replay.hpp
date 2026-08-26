@@ -32,9 +32,7 @@ public:
 	// Trigger a replay save (Play button / hotkey)
 	static void triggerReplay();
 
-	// Add storage path override
-	static QString replayFolderOverride();
-	static void setReplayFolderOverride(const QString &path);
+	static void openReplayFolder();
 	static void ensureReplayBgSource();
 	static int replaySeconds();
 	static bool replayAutoStart();

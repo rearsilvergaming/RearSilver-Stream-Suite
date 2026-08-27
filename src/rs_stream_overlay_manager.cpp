@@ -221,9 +221,10 @@ QJsonObject timerStatusFor(obs_source_t *source, bool conflict, const QString &m
 		{"setupComplete", source != nullptr && !conflict}, {"placementMode", "advanced"}};
 	result["message"] = message.isEmpty()
 		? (conflict ? QString("A source named %1 already exists but is not managed by the Suite.").arg(kTimerSourceName)
-			: !source ? QString("Set up the managed Timer source before starting it.")
-			: placed ? QString("Timer is set up in the current scene.")
-			: QString("Timer is ready. Start or Show will add it to this scene."))
+			: !source ? QString("Connected to OBS. Timer will be created automatically when started or shown.")
+			: !placed ? QString("Connected to OBS. Timer will be added to this scene when started or shown.")
+			: visible ? QString("Timer is visible in the current scene.")
+			: QString("Timer is ready in the current scene."))
 		: message;
 	return result;
 }
@@ -275,10 +276,10 @@ QJsonObject statusFor(obs_source_t *source, bool conflict, const QString &messag
 		{"setupComplete", source != nullptr && !conflict}, {"placementMode", "advanced"}};
 	result["message"] = message.isEmpty()
 		? (conflict ? QString("A source named %1 already exists but is not managed by the Suite.").arg(kSourceName)
-			: !source ? QString("Quick Text has not been added to OBS yet.")
-			: !placed ? QString("Quick Text is ready and can be added to this scene with Show text.")
+			: !source ? QString("Connected to OBS. Quick Text will be created automatically when shown.")
+			: !placed ? QString("Connected to OBS. Quick Text will be added to this scene when shown.")
 			: visible ? QString("Quick Text is visible in the current scene.")
-			: QString("Quick Text is hidden in the current scene."))
+			: QString("Quick Text is ready in the current scene."))
 		: message;
 	return result;
 }
@@ -314,10 +315,10 @@ QJsonObject simpleQuickTextStatusFor(obs_source_t *source, bool sourceConflict, 
 	result["message"] = message.isEmpty()
 		? (sourceConflict ? QString("A source named %1 already exists but is not managed by the Suite.").arg(kSourceName)
 			: sceneConflict ? QString("A source named %1 already exists but is not managed by the Suite.").arg(kSimpleSceneName)
-			: !source || !simpleSource ? QString("Quick Text is not set up in the managed Stream Overlays scene yet.")
-			: !placed ? QString("Quick Text is ready; use Show text to add Stream Overlays to this scene.")
-			: visible ? QString("Quick Text is visible through the managed Stream Overlays scene.")
-			: QString("Quick Text is hidden in the managed Stream Overlays scene."))
+			: !source || !simpleSource ? QString("Connected to OBS. Quick Text will be created automatically when shown.")
+			: !placed ? QString("Connected to OBS. Quick Text will be added to this scene when shown.")
+			: visible ? QString("Quick Text is visible in the current scene.")
+			: QString("Quick Text is ready in the current scene."))
 		: message;
 	if (simpleSource) obs_source_release(simpleSource);
 	return result;
@@ -354,10 +355,10 @@ QJsonObject simpleTimerStatusFor(obs_source_t *source, bool sourceConflict, cons
 	result["message"] = message.isEmpty()
 		? (sourceConflict ? QString("A source named %1 already exists but is not managed by the Suite.").arg(kTimerSourceName)
 			: sceneConflict ? QString("A source named %1 already exists but is not managed by the Suite.").arg(kSimpleSceneName)
-			: !source || !simpleSource ? QString("Timer is not set up in the managed Stream Overlays scene yet.")
-			: !placed ? QString("Timer is ready. Start or Show will add Stream Overlays to this scene.")
-			: visible ? QString("Timer is visible through the managed Stream Overlays scene.")
-			: QString("Timer is hidden in the managed Stream Overlays scene."))
+			: !source || !simpleSource ? QString("Connected to OBS. Timer will be created automatically when started or shown.")
+			: !placed ? QString("Connected to OBS. Timer will be added to this scene when started or shown.")
+			: visible ? QString("Timer is visible in the current scene.")
+			: QString("Timer is ready in the current scene."))
 		: message;
 	if (simpleSource) obs_source_release(simpleSource);
 	return result;

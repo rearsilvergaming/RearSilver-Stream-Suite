@@ -448,6 +448,9 @@ obsConnected=!!config.ipcConnected;
 presetList=(Array.isArray(config.quickPresets)?config.quickPresets:[]).map(normalisePreset).filter(preset=>preset.text);
 renderPresets();
 syncQuickPreviewGeometry();
+document.getElementById('overlayPlacementMode').textContent=obsConnected
+?`OBS connected — ${config.overlayPlacementMode==='simple'?'Simple':'Advanced'} placement`
+:'OBS is not connected. Settings can still be edited.';
 if(!obsConnected){
 document.getElementById('quickTextStatus').textContent='OBS is not connected. Quick Text settings can still be edited.';
 document.getElementById('timerStatus').textContent='OBS is not connected. Timer settings can still be edited.';

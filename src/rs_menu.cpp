@@ -1,5 +1,7 @@
 ﻿#include "rs_main_dock.hpp"
 
+#include "rs_music/rs_music_controller.hpp"
+
 #include <QToolButton>
 #include <QIcon>
 #include <QPixmap>
@@ -8,6 +10,9 @@
 #include <QSize>
 #include <QVBoxLayout>
 #include <QGridLayout>
+#include <QLabel>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QWidget>
 
 // Local helper: fallback emoji icon
@@ -92,18 +97,13 @@ void RsMainDock::createSidebarMenus()
 	m_systemMenu->setMinimumWidth(240);
 	m_systemMenu->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Maximum);
 
-	// --- ENHANCEMENTS menu buttons ---
-	m_btnBrowserRefresh =
-		makeButton("Browser Refresh", "Reload browser sources without hiding them", "view-refresh", "🔄");
-	m_btnAutoStart =
-		makeButton("Auto-Start Manager", "Launch/close tools with OBS (placeholder)", "system-run", "🚀");
+	// --- STREAM TOOLS navigation ---
+	m_btnStreamToolsQuickActions = makeButton("Quick Actions", "Compact controls for Hub-owned Stream Tools",
+		"system-run", "⚡");
 	m_btnUiSettings =
 		makeButton("UI Settings", "RearSilver Stream Suite layout settings", "preferences-desktop-theme", "🎛");
-
-	m_enhMenuLayout->addWidget(m_btnBrowserRefresh, 0, 0);
-	m_enhMenuLayout->addWidget(m_btnAutoStart, 0, 1);
-
-	m_enhMenuLayout->addWidget(m_btnUiSettings, 1, 0);
+	m_enhMenuLayout->addWidget(m_btnStreamToolsQuickActions, 0, 0);
+	m_enhMenuLayout->addWidget(m_btnUiSettings, 0, 1);
 	m_enhMenu->setMinimumWidth(300);
 
 	// Ensure both columns expand evenly in horizontal layouts
@@ -111,8 +111,6 @@ void RsMainDock::createSidebarMenus()
 	m_enhMenuLayout->setColumnStretch(1, 1);
 	// Prevent rows from stretching vertically
 	m_enhMenuLayout->setRowStretch(0, 0);
-	m_enhMenuLayout->setRowStretch(1, 0);
-	m_enhMenuLayout->setRowStretch(2, 0);
 
 	// --- MUSIC menu buttons ---
 	// NOTE: m_musicMenu and m_musicMenuLayout are created in rs_main_dock.cpp (see instructions below).
@@ -136,10 +134,92 @@ void RsMainDock::createSidebarMenus()
 	connect(m_btnStats, &QToolButton::clicked, this, &RsMainDock::showStats);
 	connect(m_btnObsSettings, &QToolButton::clicked, this, &RsMainDock::openNativeSettings);
 
-	connect(m_btnBrowserRefresh, &QToolButton::clicked, this, &RsMainDock::showBrowserRefresh);
-	connect(m_btnAutoStart, &QToolButton::clicked, this, &RsMainDock::showAutoStart);
+	connect(m_btnStreamToolsQuickActions, &QToolButton::clicked, this, &RsMainDock::showStreamToolsQuickActions);
 	connect(m_btnUiSettings, &QToolButton::clicked, this, &RsMainDock::showUiSettings);
 
 	connect(m_btnMusicNowPlaying, &QToolButton::clicked, this, &RsMainDock::showMusicNowPlaying);
 	connect(m_btnMusicQueue, &QToolButton::clicked, this, &RsMainDock::showMusicQueue);
+}
+
+void RsMainDock::updateStreamToolActionAvailability(bool hubConnected)
+{
+	m_streamToolsHubConnected = hubConnected;
+	if (!hubConnected) {
+		m_streamToolsQuickTextReady = false;
+		m_streamToolsQuickTextHasMessage = false;
+		m_streamToolsQuickTextVisible = false;
+		m_streamToolsTimerReady = false;
+		m_streamToolsReplayReady = false;
+		if (m_lblStreamToolReplay) m_lblStreamToolReplay->setText("Instant Replay — Hub unavailable");
+		if (m_lblStreamToolQuickText) m_lblStreamToolQuickText->setText("Quick Text — Hub unavailable");
+		if (m_lblStreamToolTimer) m_lblStreamToolTimer->setText(
+			QString("%1 — Hub unavailable").arg(m_streamToolsTimerMode == "countdown" ? "Countdown" : "Timer"));
+	}
+	updateStreamToolActionButtons();
+}
+
+void RsMainDock::updateStreamToolActionButtons()
+{
+	if (!m_pageStreamToolsQuickActions) return;
+	for (QToolButton *button : m_pageStreamToolsQuickActions->findChildren<QToolButton *>())
+		if (button->property("requiresReplayConfiguration").toBool())
+			button->setEnabled(m_streamToolsHubConnected && m_streamToolsReplayReady);
+		else if (button->property("requiresQuickTextMessage").toBool())
+			button->setEnabled(m_streamToolsHubConnected && m_streamToolsQuickTextReady &&
+				m_streamToolsQuickTextHasMessage);
+		else if (button->property("requiresQuickTextConfiguration").toBool())
+			button->setEnabled(m_streamToolsHubConnected && m_streamToolsQuickTextReady);
+		else if (button->property("requiresTimerConfiguration").toBool())
+			button->setEnabled(m_streamToolsHubConnected && m_streamToolsTimerReady);
+		else if (button->property("requiresHub").toBool())
+			button->setEnabled(m_streamToolsHubConnected);
+}
+
+void RsMainDock::updateStreamToolTimerMode(const QString &mode)
+{
+	m_streamToolsTimerMode = mode == "stopwatch" ? "stopwatch" : "countdown";
+	const QString name = m_streamToolsTimerMode == "countdown" ? "Countdown" : "Timer";
+	if (m_btnStreamToolTimerStart) m_btnStreamToolTimerStart->setText(QString("Start %1").arg(name.toLower()));
+}
+
+void RsMainDock::updateStreamToolState(const QString &command, const QString &argument)
+{
+	if (command == "BROWSER_REFRESH_STATE") {
+		if (QLabel *heading = m_pageStreamToolsQuickActions->findChild<QLabel *>("browserRefreshState"))
+			heading->setText(argument == "all" ? "Browser Refresh — all scenes refreshed"
+				: "Browser Refresh — current scene refreshed");
+		return;
+	}
+	if (command != "QUICK_TEXT_STATE" && command != "TIMER_STATE" && command != "REPLAY_STATE") return;
+	QJsonParseError error;
+	const QJsonDocument document = QJsonDocument::fromJson(argument.toUtf8(), &error);
+	if (error.error != QJsonParseError::NoError || !document.isObject()) return;
+	const QJsonObject state = document.object();
+	if (command == "QUICK_TEXT_STATE") {
+		if (m_lblStreamToolQuickText) {
+			m_streamToolsQuickTextVisible = state.value("visibleInCurrentScene").toBool();
+			const QString visibility = m_streamToolsQuickTextVisible ? "Visible" : "Hidden";
+			const QString activity = m_streamToolsQuickTextHasMessage ? "Message ready" : "No message selected";
+			m_lblStreamToolQuickText->setText(QString("Quick Text — %1 | %2").arg(visibility, activity));
+		}
+		return;
+	}
+	if (command == "REPLAY_STATE") {
+		if (m_lblStreamToolReplay) {
+			const QString visibility = state.value("visible").toBool() ? "Visible" : "Hidden";
+			const QString activity = state.value("playing").toBool() ? "Playing"
+				: state.value("bufferActive").toBool() ? "Buffer active" : "Buffer inactive";
+			m_lblStreamToolReplay->setText(QString("Instant Replay — %1 | %2").arg(visibility, activity));
+		}
+		return;
+	}
+	const QString name = m_streamToolsTimerMode == "countdown" ? "Countdown" : "Timer";
+	const bool running = state.value("running").toBool();
+	const bool paused = state.value("paused").toBool();
+	if (m_lblStreamToolTimer) {
+		const QString visibility = state.value("visibleInCurrentScene").toBool() ? "Visible" : "Hidden";
+		const QString activity = paused ? "Paused" : running ? "Running" : "Ready";
+		m_lblStreamToolTimer->setText(QString("%1 — %2 | %3").arg(name, visibility, activity));
+	}
+	if (m_btnStreamToolTimerPause) m_btnStreamToolTimerPause->setText(paused ? "Resume" : "Pause");
 }

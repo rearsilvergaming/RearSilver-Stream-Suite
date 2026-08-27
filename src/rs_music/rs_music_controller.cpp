@@ -33,9 +33,89 @@ void rsPublishStreamOverlayPlacementState()
 	RsMusicLocalPlayer::instance().sendUiCommand("TIMER_STATE", QString::fromUtf8(timer));
 }
 
+static void publishReplayState()
+{
+	const QByteArray json = QJsonDocument(hub_replay::RsInstantReplay::replayState()).toJson(QJsonDocument::Compact);
+	RsMusicLocalPlayer::instance().sendUiCommand("REPLAY_STATE", QString::fromUtf8(json));
+}
+
+static void publishTimerState(const QJsonObject &state)
+{
+	const QByteArray json = QJsonDocument(state).toJson(QJsonDocument::Compact);
+	RsMusicLocalPlayer::instance().sendUiCommand("TIMER_STATE", QString::fromUtf8(json));
+}
+
+static void publishQuickTextState(const QJsonObject &state)
+{
+	const QByteArray json = QJsonDocument(state).toJson(QJsonDocument::Compact);
+	RsMusicLocalPlayer::instance().sendUiCommand("QUICK_TEXT_STATE", QString::fromUtf8(json));
+}
+
+void rsExecuteStreamToolQuickAction(RsStreamToolQuickAction action)
+{
+	switch (action) {
+	case RsStreamToolQuickAction::RefreshCurrentBrowsers:
+		RsBrowserRefresh::refreshCurrentScene();
+		RsMusicLocalPlayer::instance().sendUiCommand("BROWSER_REFRESH_STATE", "current");
+		break;
+	case RsStreamToolQuickAction::RefreshAllBrowsers:
+		RsBrowserRefresh::refreshAllScenes();
+		RsMusicLocalPlayer::instance().sendUiCommand("BROWSER_REFRESH_STATE", "all");
+		break;
+	case RsStreamToolQuickAction::TriggerReplay:
+		hub_replay::RsInstantReplay::triggerReplay();
+		publishReplayState();
+		break;
+	case RsStreamToolQuickAction::ShowReplay:
+		hub_replay::RsInstantReplay::showReplaySource();
+		publishReplayState();
+		break;
+	case RsStreamToolQuickAction::HideReplay:
+		hub_replay::RsInstantReplay::hideReplaySource();
+		publishReplayState();
+		break;
+	case RsStreamToolQuickAction::ShowQuickText:
+		publishQuickTextState(RsStreamOverlayManager::showQuickTextInCurrentScene());
+		break;
+	case RsStreamToolQuickAction::HideQuickText:
+		publishQuickTextState(RsStreamOverlayManager::clearQuickTextInCurrentScene());
+		break;
+	case RsStreamToolQuickAction::StartTimer: {
+		QJsonObject state = RsStreamTimer::instance().setup();
+		if (state.value("setupComplete").toBool() && !state.value("conflict").toBool())
+			state = RsStreamTimer::instance().startTimer();
+		publishTimerState(state);
+		break;
+	}
+	case RsStreamToolQuickAction::PauseTimer:
+		publishTimerState(RsStreamTimer::instance().pauseResume());
+		break;
+	case RsStreamToolQuickAction::ResetTimer:
+		publishTimerState(RsStreamTimer::instance().reset());
+		break;
+	case RsStreamToolQuickAction::ShowTimer: {
+		QJsonObject state = RsStreamTimer::instance().setup();
+		if (state.value("setupComplete").toBool() && !state.value("conflict").toBool())
+			state = RsStreamTimer::instance().setVisible(true);
+		publishTimerState(state);
+		break;
+	}
+	case RsStreamToolQuickAction::HideTimer:
+		publishTimerState(RsStreamTimer::instance().setVisible(false));
+		break;
+	}
+}
+
 RsMusicController::RsMusicController(RsMusicState *state, QObject *parent) : QObject(parent), m_state(state)
 {
-	connect(&RsMusicLocalPlayer::instance(), &RsMusicLocalPlayer::hostCommandReceived, this, [this](const QString &command) {
+	hub_replay::RsInstantReplay::setStateChangedCallback(publishReplayState);
+	auto &localPlayer = RsMusicLocalPlayer::instance();
+	connect(&localPlayer, &RsMusicLocalPlayer::hubConnectionChanged, this, [this](bool connected) {
+		if (connected) return;
+		m_replayBufferConfigurationReceived = false;
+		m_replayFrameConfigurationReceived = false;
+	});
+	connect(&localPlayer, &RsMusicLocalPlayer::hostCommandReceived, this, [this](const QString &command) {
 		auto publishSetupState = []() {
 			obs_source_t *capture = obs_get_source_by_name("Music Capture");
 			const bool captureExists = capture != nullptr; if (capture) obs_source_release(capture);
@@ -45,18 +125,6 @@ RsMusicController::RsMusicController(RsMusicState *state, QObject *parent) : QOb
 			const bool autoStart = !player.isEmpty();
 			RsMusicLocalPlayer::instance().sendUiCommand("SETUP_STATE",
 				QString("%1\t%2").arg(captureExists ? "true" : "false", autoStart ? "true" : "false"));
-		};
-		auto publishReplayState = []() {
-			const QByteArray json = QJsonDocument(hub_replay::RsInstantReplay::replayState()).toJson(QJsonDocument::Compact);
-			RsMusicLocalPlayer::instance().sendUiCommand("REPLAY_STATE", QString::fromUtf8(json));
-		};
-		auto publishQuickTextState = [](const QJsonObject &state) {
-			const QByteArray json = QJsonDocument(state).toJson(QJsonDocument::Compact);
-			RsMusicLocalPlayer::instance().sendUiCommand("QUICK_TEXT_STATE", QString::fromUtf8(json));
-		};
-		auto publishTimerState = [](const QJsonObject &state) {
-			const QByteArray json = QJsonDocument(state).toJson(QJsonDocument::Compact);
-			RsMusicLocalPlayer::instance().sendUiCommand("TIMER_STATE", QString::fromUtf8(json));
 		};
 		if (command == "SETUP_STATUS") { publishSetupState(); return; }
 		// The Control Hub is mandatory infrastructure now. Legacy AUTOSTART
@@ -111,31 +179,32 @@ RsMusicController::RsMusicController(RsMusicState *state, QObject *parent) : QOb
 			else if (action == "removeProgram") RsAutoStart::removeProgram(value.toString());
 			else if (action == "launchProgram") RsAutoStart::launchProgram(value.toString());
 			else if (action == "closeProgram") RsAutoStart::closeProgram(value.toString());
-			else if (action == "refreshCurrent") RsBrowserRefresh::refreshCurrentScene();
-			else if (action == "refreshAll") RsBrowserRefresh::refreshAllScenes();
-			else if (action == "quickTextConfig") RsStreamOverlayServer::instance().setQuickTextState(value.toObject());
-			else if (action == "quickTextShow") { RsStreamOverlayServer::instance().setQuickTextState(value.toObject()); publishQuickTextState(RsStreamOverlayManager::showQuickTextInCurrentScene()); }
-			else if (action == "quickTextClear") { QJsonObject state=RsStreamOverlayServer::instance().quickTextState(); state["text"]=""; RsStreamOverlayServer::instance().setQuickTextState(state); publishQuickTextState(RsStreamOverlayManager::clearQuickTextInCurrentScene()); }
+			else if (action == "refreshCurrent") rsExecuteStreamToolQuickAction(RsStreamToolQuickAction::RefreshCurrentBrowsers);
+			else if (action == "refreshAll") rsExecuteStreamToolQuickAction(RsStreamToolQuickAction::RefreshAllBrowsers);
+			else if (action == "quickTextConfig") { const QJsonObject o=value.toObject(); RsStreamOverlayServer::instance().setQuickTextState(o); emit quickTextConfigurationReady(!o.value("text").toString().trimmed().isEmpty()); }
+			else if (action == "quickTextShow") { const QJsonObject o=value.toObject(); RsStreamOverlayServer::instance().setQuickTextState(o); emit quickTextConfigurationReady(!o.value("text").toString().trimmed().isEmpty()); publishQuickTextState(RsStreamOverlayManager::showQuickTextInCurrentScene()); }
+			else if (action == "quickTextHide") rsExecuteStreamToolQuickAction(RsStreamToolQuickAction::HideQuickText);
+			else if (action == "quickTextClear") { QJsonObject state=RsStreamOverlayServer::instance().quickTextState(); state["text"]=""; RsStreamOverlayServer::instance().setQuickTextState(state); emit quickTextConfigurationReady(false); publishQuickTextState(RsStreamOverlayManager::clearQuickTextInCurrentScene()); }
 			else if (action == "quickTextStatus") publishQuickTextState(RsStreamOverlayManager::quickTextStatus());
-			else if (action == "timerConfig") RsStreamTimer::instance().configure(value.toObject());
+			else if (action == "timerConfig") { const QJsonObject o=value.toObject(); RsStreamTimer::instance().configure(o); emit timerConfigurationReady(o.value("mode").toString("countdown")); publishTimerState(RsStreamTimer::instance().status()); }
 			else if (action == "timerSetup") publishTimerState(RsStreamTimer::instance().setup());
 			else if (action == "timerStatus") publishTimerState(RsStreamTimer::instance().status());
 			else if (action == "timerSoundTest") publishTimerState(RsStreamTimer::instance().testSound());
-			else if (action == "timerStart") { QJsonObject state=RsStreamTimer::instance().setup(); if (state.value("setupComplete").toBool()&&!state.value("conflict").toBool()) state=RsStreamTimer::instance().startTimer(); publishTimerState(state); }
-			else if (action == "timerPause") publishTimerState(RsStreamTimer::instance().pauseResume());
-			else if (action == "timerReset") publishTimerState(RsStreamTimer::instance().reset());
-			else if (action == "timerShow") { QJsonObject state=RsStreamTimer::instance().setup(); if (state.value("setupComplete").toBool()&&!state.value("conflict").toBool()) state=RsStreamTimer::instance().setVisible(true); publishTimerState(state); }
-			else if (action == "timerHide") publishTimerState(RsStreamTimer::instance().setVisible(false));
-			else if (action == "triggerReplay") hub_replay::RsInstantReplay::triggerReplay();
-			else if (action == "hideReplay") hub_replay::RsInstantReplay::hideReplaySource();
-			else if (action == "replayShow") hub_replay::RsInstantReplay::showReplaySource();
+			else if (action == "timerStart") rsExecuteStreamToolQuickAction(RsStreamToolQuickAction::StartTimer);
+			else if (action == "timerPause") rsExecuteStreamToolQuickAction(RsStreamToolQuickAction::PauseTimer);
+			else if (action == "timerReset") rsExecuteStreamToolQuickAction(RsStreamToolQuickAction::ResetTimer);
+			else if (action == "timerShow") rsExecuteStreamToolQuickAction(RsStreamToolQuickAction::ShowTimer);
+			else if (action == "timerHide") rsExecuteStreamToolQuickAction(RsStreamToolQuickAction::HideTimer);
+			else if (action == "triggerReplay") rsExecuteStreamToolQuickAction(RsStreamToolQuickAction::TriggerReplay);
+			else if (action == "hideReplay") rsExecuteStreamToolQuickAction(RsStreamToolQuickAction::HideReplay);
+			else if (action == "replayShow") rsExecuteStreamToolQuickAction(RsStreamToolQuickAction::ShowReplay);
 			else if (action == "replayRepair") hub_replay::RsInstantReplay::repairReplaySource();
 			else if (action == "replayStart") hub_replay::RsInstantReplay::startReplayBuffer();
 			else if (action == "replayStop") hub_replay::RsInstantReplay::stopReplayBuffer();
 			else if (action == "openReplayFolder") hub_replay::RsInstantReplay::openReplayFolder();
-			else if (action == "replayBufferConfig") { const QJsonObject o=value.toObject(); hub_replay::RsInstantReplay::configureReplayBuffer(o.value("seconds").toInt(10),o.value("autoStart").toBool(false),o.value("autoHide").toBool(true)); }
-			else if (action == "replayFrameConfig") { const QJsonObject o=value.toObject(); hub_replay::RsInstantReplay::configureReplayFrame(o.value("title").toString("INSTANT REPLAY"),o.value("font").toString("Sora"),o.value("fontWeight").toString("bold"),o.value("alignment").toString("left"),o.value("background").toString("#0b0f14"),o.value("accent").toString("#00d4ff"),o.value("textColour").toString("#e6e8eb"),o.value("opacity").toInt(92),o.value("sizeStep").toString("large"),o.value("borderStep").toString("medium"),o.value("radiusStep").toString("rounded")); }
-			if (action.startsWith("replay") || action == "triggerReplay" || action == "hideReplay") publishReplayState();
+			else if (action == "replayBufferConfig") { const QJsonObject o=value.toObject(); hub_replay::RsInstantReplay::configureReplayBuffer(o.value("seconds").toInt(10),o.value("autoStart").toBool(false),o.value("autoHide").toBool(true)); m_replayBufferConfigurationReceived=true; if(m_replayFrameConfigurationReceived) emit replayConfigurationReady(); }
+			else if (action == "replayFrameConfig") { const QJsonObject o=value.toObject(); hub_replay::RsInstantReplay::configureReplayFrame(o.value("title").toString("INSTANT REPLAY"),o.value("font").toString("Sora"),o.value("fontWeight").toString("bold"),o.value("alignment").toString("left"),o.value("background").toString("#0b0f14"),o.value("accent").toString("#00d4ff"),o.value("textColour").toString("#e6e8eb"),o.value("opacity").toInt(92),o.value("sizeStep").toString("large"),o.value("borderStep").toString("medium"),o.value("radiusStep").toString("rounded")); m_replayFrameConfigurationReceived=true; if(m_replayBufferConfigurationReceived) emit replayConfigurationReady(); }
+			if ((action.startsWith("replay") || action == "hideReplay") && action != "triggerReplay" && action != "replayShow" && action != "hideReplay") publishReplayState();
 			return;
 		}
 		if (command.startsWith("REQUEST_ACCEPTED\t")) {

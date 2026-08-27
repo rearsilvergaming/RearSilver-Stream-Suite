@@ -41,9 +41,8 @@ private slots:
 	void showStats();
 	void showObsSettings() { openNativeSettings(); }
 
-	void showBrowserRefresh();
-	void showAutoStart();
 	void showUiSettings();
+	void showStreamToolsQuickActions();
 
 	// MUSIC navigation slots
 	void showMusicNowPlaying();
@@ -93,6 +92,10 @@ private:
 
 	void applyTheme();
 	void setActiveButton(QToolButton *button);
+	void updateStreamToolActionAvailability(bool hubConnected);
+	void updateStreamToolActionButtons();
+	void updateStreamToolState(const QString &command, const QString &argument);
+	void updateStreamToolTimerMode(const QString &mode);
 
 	// Info bar
 	void updateSceneSourceInfo();
@@ -192,9 +195,21 @@ private:
 	QToolButton *m_btnStats = nullptr;
 	QToolButton *m_btnObsSettings = nullptr;
 
-	QToolButton *m_btnBrowserRefresh = nullptr;
-	QToolButton *m_btnAutoStart = nullptr;
 	QToolButton *m_btnUiSettings = nullptr;
+	QToolButton *m_btnStreamToolsQuickActions = nullptr;
+	QToolButton *m_btnStreamToolQuickTextShow = nullptr;
+	QToolButton *m_btnStreamToolTimerStart = nullptr;
+	QToolButton *m_btnStreamToolTimerPause = nullptr;
+	QLabel *m_lblStreamToolReplay = nullptr;
+	QLabel *m_lblStreamToolQuickText = nullptr;
+	QLabel *m_lblStreamToolTimer = nullptr;
+	bool m_streamToolsHubConnected = false;
+	bool m_streamToolsQuickTextReady = false;
+	bool m_streamToolsQuickTextHasMessage = false;
+	bool m_streamToolsQuickTextVisible = false;
+	bool m_streamToolsTimerReady = false;
+	bool m_streamToolsReplayReady = false;
+	QString m_streamToolsTimerMode = "countdown";
 
 	// MUSIC menu buttons
 	QToolButton *m_btnMusicNowPlaying = nullptr;
@@ -210,6 +225,7 @@ private:
 	QWidget *m_pageStats = nullptr;
 	QWidget *m_pageBrowserRefresh = nullptr;
 	QWidget *m_pageAutoStart = nullptr;
+	QWidget *m_pageStreamToolsQuickActions = nullptr;
 	QWidget *m_pageUiSettings = nullptr;
 
 	// MUSIC pages (stack widgets)

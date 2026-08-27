@@ -38,8 +38,10 @@ RsMusicLocalPlayer::RsMusicLocalPlayer()
 		m_hubConnectionAttempts = 0;
 		m_connectedThisSession = true;
 		blog(LOG_INFO, "[RS Music] Companion control channel connected.");
+		emit hubConnectionChanged(true);
 	});
 	connect(m_socket, &QLocalSocket::disconnected, this, [this]() {
+		emit hubConnectionChanged(false);
 		if (m_shuttingDown)
 			return;
 		blog(LOG_INFO, "[RS Music] Companion control channel disconnected; waiting for the player.");
@@ -51,6 +53,11 @@ RsMusicLocalPlayer::RsMusicLocalPlayer()
 			emit playbackError("The bundled local music player could not be started.");
 	});
 	QTimer::singleShot(0, this, &RsMusicLocalPlayer::connectToHub);
+}
+
+bool RsMusicLocalPlayer::isHubConnected() const
+{
+	return m_socket && m_socket->state() == QLocalSocket::ConnectedState;
 }
 
 void RsMusicLocalPlayer::connectToHub()
@@ -152,6 +159,7 @@ void RsMusicLocalPlayer::sendCommand(const QString &command, const QString &argu
 
 void RsMusicLocalPlayer::sendUiCommand(const QString &command, const QString &argument)
 {
+	emit uiCommandSent(command, argument);
 	sendCommand(command, argument);
 }
 

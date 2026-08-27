@@ -31,6 +31,7 @@ public:
 	void shutdown();
 	QString currentFile() const;
 	QString executablePath() const { return companionPath(); }
+	bool isHubConnected() const;
 
 signals:
 	void playbackStarted();
@@ -41,6 +42,8 @@ signals:
 	void playbackMetadata(const QString &title, const QString &artist, qint64 durationMs);
 	void hubStateReceived(const QByteArray &json);
 	void hostCommandReceived(const QString &command);
+	void hubConnectionChanged(bool connected);
+	void uiCommandSent(const QString &command, const QString &argument);
 
 private:
 	RsMusicLocalPlayer();

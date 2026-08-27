@@ -14,8 +14,7 @@ void RsMainDock::setActiveButton(QToolButton *button)
 		m_btnStats,
 
 		// ENHANCEMENTS
-		m_btnBrowserRefresh,
-		m_btnAutoStart,
+		m_btnStreamToolsQuickActions,
 		m_btnUiSettings,
 
 		// MUSIC
@@ -65,22 +64,13 @@ void RsMainDock::showStats()
 	setActiveButton(m_btnStats);
 }
 
-void RsMainDock::showBrowserRefresh()
+void RsMainDock::showStreamToolsQuickActions()
 {
-	if (m_stack && m_pageBrowserRefresh) {
-		m_stack->setCurrentWidget(m_pageBrowserRefresh);
+	if (m_stack && m_pageStreamToolsQuickActions) {
+		m_stack->setCurrentWidget(m_pageStreamToolsQuickActions);
 		m_lastEnhancementsPage = m_stack->currentIndex();
 	}
-	setActiveButton(m_btnBrowserRefresh);
-}
-
-void RsMainDock::showAutoStart()
-{
-	if (m_stack && m_pageAutoStart) {
-		m_stack->setCurrentWidget(m_pageAutoStart);
-		m_lastEnhancementsPage = m_stack->currentIndex();
-	}
-	setActiveButton(m_btnAutoStart);
+	setActiveButton(m_btnStreamToolsQuickActions);
 }
 
 void RsMainDock::showUiSettings()

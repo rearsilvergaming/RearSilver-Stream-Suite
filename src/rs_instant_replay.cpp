@@ -52,11 +52,18 @@ static qint64 s_replayBufferStartTime = 0;
 static bool s_waitingForRequestedReplay = false;
 static std::atomic<quint64> s_replayPlaybackGeneration{0};
 static std::atomic<quint64> s_replayStartedGeneration{0};
+static void (*s_replayStateChangedCallback)() = nullptr;
 static obs_source_t *s_replaySignalSource = nullptr;
 static QString s_replaySizeStep = QStringLiteral("large");
 static QString s_replayBorderStep = QStringLiteral("medium");
 static QString s_replayRadiusStep = QStringLiteral("rounded");
 static QString s_replayAlignment = QStringLiteral("left");
+
+static void notifyReplayStateChanged()
+{
+	if (s_replayStateChangedCallback)
+		s_replayStateChangedCallback();
+}
 static QString s_replayFontWeight = QStringLiteral("bold");
 static int s_replaySeconds = 10;
 static bool s_hasReplayBufferConfiguration = false;
@@ -335,26 +342,45 @@ static obs_source_t *ensureReplaySceneSource()
 	return result;
 }
 
-static obs_sceneitem_t *findSceneInstance(obs_scene_t *scene, obs_source_t *serviceSource)
+struct SceneInstanceMatch {
+	obs_sceneitem_t *item = nullptr;
+	bool effectivelyVisible = false;
+};
+
+static SceneInstanceMatch findSceneInstanceRecursive(obs_scene_t *scene, obs_source_t *serviceSource,
+						      bool ancestorsVisible)
 {
 	if (!scene || !serviceSource)
-		return nullptr;
+		return {};
 	struct Search {
 		obs_source_t *source;
-		obs_sceneitem_t *item;
-	} search{serviceSource, nullptr};
+		bool ancestorsVisible;
+		SceneInstanceMatch match;
+	} search{serviceSource, ancestorsVisible, {}};
 	obs_scene_enum_items(
 		scene,
 		[](obs_scene_t *, obs_sceneitem_t *item, void *param) {
 			auto *search = static_cast<Search *>(param);
+			const bool itemVisible = search->ancestorsVisible && obs_sceneitem_visible(item);
 			if (obs_sceneitem_get_source(item) == search->source) {
-				search->item = item;
+				search->match = {item, itemVisible};
 				return false;
 			}
-			return true;
+			if (!obs_sceneitem_is_group(item)) return true;
+			obs_scene_t *groupScene = obs_sceneitem_group_get_scene(item);
+			search->match = findSceneInstanceRecursive(groupScene, search->source, itemVisible);
+			return search->match.item == nullptr;
 		},
 		&search);
-	return search.item;
+	return search.match;
+}
+
+static obs_sceneitem_t *findSceneInstance(obs_scene_t *scene, obs_source_t *serviceSource,
+					  bool *effectivelyVisible = nullptr)
+{
+	const SceneInstanceMatch match = findSceneInstanceRecursive(scene, serviceSource, true);
+	if (effectivelyVisible) *effectivelyVisible = match.effectivelyVisible;
+	return match.item;
 }
 
 static obs_sceneitem_t *ensureSceneInstance(obs_scene_t *parentScene, obs_source_t *serviceSource)
@@ -399,6 +425,7 @@ static void onReplayMediaStarted(void *, calldata_t *data)
 				obs_sceneitem_set_visible(video, true);
 			if (serviceSource)
 				obs_source_release(serviceSource);
+			notifyReplayStateChanged();
 		});
 	}
 }
@@ -561,6 +588,7 @@ void RsInstantReplay::showReplaySource()
 	}
 	obs_source_release(parentSource);
 	obs_source_release(serviceSource);
+	notifyReplayStateChanged();
 }
 
 static void fitReplayInsideBackground(obs_scene_t *groupScene);
@@ -695,8 +723,20 @@ QJsonObject RsInstantReplay::replayState()
 {
 	obs_source_t *serviceSource = findReplaySceneSource();
 	const bool sceneExists = serviceSource != nullptr;
-	if (serviceSource)
-		obs_source_release(serviceSource);
+	obs_scene_t *serviceScene = serviceSource ? obs_scene_from_source(serviceSource) : nullptr;
+	obs_sceneitem_t *group = findReplayGroup(serviceScene);
+	const bool groupVisible = group && obs_sceneitem_visible(group);
+	obs_source_t *activeSource = obs_frontend_get_current_scene();
+	bool parentVisible = false;
+	if (activeSource && activeSource != serviceSource) {
+		obs_scene_t *activeScene = obs_scene_from_source(activeSource);
+		findSceneInstance(activeScene, serviceSource, &parentVisible);
+	}
+	const bool visible = groupVisible && activeSource &&
+		(activeSource == serviceSource || parentVisible);
+	const bool playing = s_replayStartedGeneration.load() != 0;
+	if (activeSource) obs_source_release(activeSource);
+	if (serviceSource) obs_source_release(serviceSource);
 	const ReplayFrameLayout &layout = s_replayFrameLayout;
 	QJsonObject geometry{{"width", layout.width}, {"height", layout.height}, {"scalePercent", layout.scalePercent},
 		{"titlePixelSize", layout.titlePixelSize}, {"border", layout.border},
@@ -706,10 +746,16 @@ QJsonObject RsInstantReplay::replayState()
 		{"titleX", layout.titleRect.x()}, {"titleY", layout.titleRect.y()},
 		{"titleWidth", layout.titleRect.width()}, {"titleHeight", layout.titleRect.height()}};
 	return {{"bufferActive", replayBufferActive()}, {"sceneExists", sceneExists},
+		{"visible", visible}, {"playing", playing},
 		{"seconds", replaySeconds()}, {"autoStart", replayAutoStart()}, {"autoHide", replayAutoHide()},
 		{"sizeStep", s_replaySizeStep}, {"borderStep", s_replayBorderStep},
 		{"radiusStep", s_replayRadiusStep}, {"alignment", s_replayAlignment},
 		{"fontWeight", s_replayFontWeight}, {"geometry", geometry}};
+}
+
+void RsInstantReplay::setStateChangedCallback(void (*callback)())
+{
+	s_replayStateChangedCallback = callback;
 }
 
 static void fitReplayInsideBackground(obs_scene_t *groupScene)
@@ -990,6 +1036,7 @@ void RsInstantReplay::hideReplaySource()
 	obs_source_t *serviceSource = findReplaySceneSource();
 	if (!serviceSource) {
 		disconnectReplayMediaSignals();
+		notifyReplayStateChanged();
 		return;
 	}
 	obs_scene_t *serviceScene = obs_scene_from_source(serviceSource);
@@ -1002,6 +1049,7 @@ void RsInstantReplay::hideReplaySource()
 	}
 	obs_source_release(serviceSource);
 	disconnectReplayMediaSignals();
+	notifyReplayStateChanged();
 }
 
 

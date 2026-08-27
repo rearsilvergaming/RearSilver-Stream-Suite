@@ -26,7 +26,23 @@
 class RsMusicState;
 class RsMusicYouTubeResolver;
 
+enum class RsStreamToolQuickAction {
+	RefreshCurrentBrowsers,
+	RefreshAllBrowsers,
+	TriggerReplay,
+	ShowReplay,
+	HideReplay,
+	ShowQuickText,
+	HideQuickText,
+	StartTimer,
+	PauseTimer,
+	ResetTimer,
+	ShowTimer,
+	HideTimer,
+};
+
 void rsPublishStreamOverlayPlacementState();
+void rsExecuteStreamToolQuickAction(RsStreamToolQuickAction action);
 
 class RsMusicController : public QObject {
 	Q_OBJECT
@@ -54,6 +70,9 @@ public:
 	void actionRemoveRequest(const QString &requestId);
 
 signals:
+	void quickTextConfigurationReady(bool hasMessage);
+	void timerConfigurationReady(const QString &mode);
+	void replayConfigurationReady();
 	void localLibraryChanged();
 	void youtubeRequestResolutionFailed(const QString &trackId, const QString &message);
 	void songRequestAccepted(const QString &requestId, const QString &title, const QString &artist,
@@ -85,4 +104,6 @@ private:
 	RsMusicYouTubeResolver *m_youtubeResolver = nullptr;
 	QStringList m_localLibrary;
 	bool m_youtubeCaptureRefreshed = false;
+	bool m_replayBufferConfigurationReceived = false;
+	bool m_replayFrameConfigurationReceived = false;
 };

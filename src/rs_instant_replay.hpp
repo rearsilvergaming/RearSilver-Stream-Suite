@@ -49,6 +49,7 @@ public:
 					 const QString &textColour, int opacity,
 					 const QString &sizeStep, const QString &borderStep, const QString &radiusStep);
 	static QJsonObject replayState();
+	static void setStateChangedCallback(void (*callback)());
 };
 
 } // namespace hub_replay

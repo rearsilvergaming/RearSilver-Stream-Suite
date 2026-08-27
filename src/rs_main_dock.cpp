@@ -123,6 +123,30 @@ RsMainDock::RsMainDock(QWidget *parent) : QWidget(parent)
 	// asynchronous reconnect. Otherwise an expired token can fail during
 	// construction and leave the status text permanently on Reconnecting.
 	createUi();
+	auto &localPlayer = RsMusicLocalPlayer::instance();
+	connect(&localPlayer, &RsMusicLocalPlayer::hubConnectionChanged, this,
+		&RsMainDock::updateStreamToolActionAvailability);
+	connect(&localPlayer, &RsMusicLocalPlayer::uiCommandSent, this, &RsMainDock::updateStreamToolState);
+	connect(m_musicController, &RsMusicController::quickTextConfigurationReady, this, [this](bool hasMessage) {
+		m_streamToolsQuickTextReady = true;
+		m_streamToolsQuickTextHasMessage = hasMessage;
+		if (m_lblStreamToolQuickText) {
+			const QString visibility = m_streamToolsQuickTextVisible ? "Visible" : "Hidden";
+			const QString activity = hasMessage ? "Message ready" : "No message selected";
+			m_lblStreamToolQuickText->setText(QString("Quick Text — %1 | %2").arg(visibility, activity));
+		}
+		updateStreamToolActionButtons();
+	});
+	connect(m_musicController, &RsMusicController::timerConfigurationReady, this, [this](const QString &mode) {
+		m_streamToolsTimerReady = true;
+		updateStreamToolTimerMode(mode);
+		updateStreamToolActionButtons();
+	});
+	connect(m_musicController, &RsMusicController::replayConfigurationReady, this, [this]() {
+		m_streamToolsReplayReady = true;
+		updateStreamToolActionButtons();
+	});
+	updateStreamToolActionAvailability(localPlayer.isHubConnected());
 	connect(m_musicController, &RsMusicController::twitchAccountStateReceived, this,
 		[this](const QString &account, bool connected, const QString &login) {
 			QLabel *dot = account == "bot" ? m_lblBotDot : m_lblStreamerDot;
@@ -329,7 +353,7 @@ void RsMainDock::createUi()
 	// TAB BAR
 	m_tabBar = new QTabBar();
 	m_tabBar->addTab("SYSTEM");
-	m_tabBar->addTab("ENHANCEMENTS");
+	m_tabBar->addTab("STREAM TOOLS");
 	m_tabBar->addTab("Music");
 	m_tabBar->setExpanding(true);
 	connect(m_tabBar, &QTabBar::currentChanged, this, &RsMainDock::onTabChanged);

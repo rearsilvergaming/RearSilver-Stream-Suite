@@ -15,11 +15,32 @@
 #include <QScrollArea>
 #include <QFrame>
 #include <QCheckBox>
+#include <QToolButton>
+#include <QIcon>
+#include <QPixmap>
+#include <QPainter>
+#include <QSizePolicy>
+
+#include <utility>
 
 #include "rs_scenes_sources.hpp"
 #include "rs_stats.hpp"
 #include "enhancements/rs_browser_refresh.hpp"
 #include "enhancements/rs_auto_start.hpp"
+#include "rs_music/rs_music_controller.hpp"
+
+static QIcon makeStreamToolFallbackIcon(const QString &emoji)
+{
+	QPixmap pixmap(32, 32);
+	pixmap.fill(Qt::transparent);
+	QPainter painter(&pixmap);
+	QFont font;
+	font.setPointSize(18);
+	painter.setFont(font);
+	painter.setPen(Qt::white);
+	painter.drawText(pixmap.rect(), Qt::AlignCenter, emoji);
+	return QIcon(pixmap);
+}
 
 // MUSIC UI panels (NEW)
 #include "rs_music/state/rs_music_state.hpp"
@@ -195,6 +216,115 @@ void RsMainDock::createPanels()
 	// Auto Start (Enhancements tab)
 	m_pageAutoStart = RsAutoStart::createPage(this, m_contentCard);
 
+	// Stream Tools quick actions
+	m_pageStreamToolsQuickActions = new QWidget(m_contentCard);
+	{
+		auto *layout = new QVBoxLayout(m_pageStreamToolsQuickActions);
+		layout->setContentsMargins(8, 8, 8, 8);
+		layout->setSpacing(4);
+
+		auto makeButton = [&](const QString &text, const QString &tooltip, const QString &iconName,
+			const QString &fallbackEmoji) {
+			auto *button = new QToolButton(m_pageStreamToolsQuickActions);
+			button->setText(text);
+			button->setToolTip(tooltip);
+			button->setObjectName("SidebarButton");
+			QIcon icon = QIcon::fromTheme(iconName);
+			if (icon.isNull() || icon.availableSizes().isEmpty())
+				icon = makeStreamToolFallbackIcon(fallbackEmoji);
+			button->setIcon(icon);
+			button->setIconSize(QSize(20, 20));
+			button->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
+			button->setMinimumWidth(140);
+			button->setFixedHeight(32);
+			button->setMaximumWidth(QWIDGETSIZE_MAX);
+			button->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+			button->setAutoRaise(true);
+			return button;
+		};
+
+		auto makeSection = [&](const QString &title, QLabel **heading = nullptr) {
+			auto *section = new QWidget(m_pageStreamToolsQuickActions);
+			auto *sectionLayout = new QVBoxLayout(section);
+			sectionLayout->setContentsMargins(0, 2, 0, 2);
+			sectionLayout->setSpacing(4);
+			auto *label = new QLabel(title, section);
+			QFont font = label->font();
+			font.setBold(true);
+			label->setFont(font);
+			label->setContentsMargins(0, 0, 0, 2);
+			label->setMinimumHeight(label->fontMetrics().height() + 4);
+			sectionLayout->addWidget(label);
+			auto *grid = new QGridLayout();
+			grid->setContentsMargins(0, 0, 0, 0);
+			grid->setHorizontalSpacing(6);
+			grid->setVerticalSpacing(6);
+			grid->setColumnStretch(0, 1);
+			grid->setColumnStretch(1, 1);
+			sectionLayout->addLayout(grid);
+			if (heading) *heading = label;
+			return std::pair<QWidget *, QGridLayout *>(section, grid);
+		};
+
+		auto *refreshCurrent = makeButton("Refresh browsers", "Refresh browser sources in the current scene", "view-refresh", "🔄");
+		auto *refreshAll = makeButton("Refresh all browsers", "Refresh browser sources across every scene", "view-refresh", "🔄");
+		auto *showReplay = makeButton("Show", "Show the managed Instant Replay layout", "view-visible", "👁");
+		auto *hideReplay = makeButton("Hide", "Hide the managed Instant Replay layout", "view-hidden", "◉");
+		auto *triggerReplay = makeButton("Save & play replay", "Save and play the current Replay Buffer clip", "media-playback-start", "🎬");
+		m_btnStreamToolQuickTextShow = makeButton("Show message", "Show the current Hub Quick Text message", "view-visible", "💬");
+		auto *hideQuickText = makeButton("Hide", "Hide Quick Text without clearing its configured message", "view-hidden", "◉");
+		m_btnStreamToolTimerStart = makeButton("Start countdown", "Start the Hub-configured Timer or Countdown in the current scene", "chronometer", "⏱");
+		m_btnStreamToolTimerPause = makeButton("Pause", "Pause or resume the current Timer or Countdown", "media-playback-pause", "⏯");
+		auto *resetTimer = makeButton("Reset timer", "Reset the Timer to its Hub-configured duration", "edit-undo", "↺");
+		auto *showTimer = makeButton("Show", "Show the managed Timer or Countdown overlay", "view-visible", "👁");
+		auto *hideTimer = makeButton("Hide", "Hide the managed Timer or Countdown overlay", "view-hidden", "◉");
+
+		QLabel *browserRefreshHeading = nullptr;
+		auto browserSection = makeSection("Browser Refresh", &browserRefreshHeading);
+		browserRefreshHeading->setObjectName("browserRefreshState");
+		browserSection.second->addWidget(refreshCurrent, 0, 0);
+		browserSection.second->addWidget(refreshAll, 0, 1);
+		auto replaySection = makeSection("Instant Replay — waiting for Hub", &m_lblStreamToolReplay);
+		replaySection.second->addWidget(showReplay, 0, 0);
+		replaySection.second->addWidget(hideReplay, 0, 1);
+		replaySection.second->addWidget(triggerReplay, 1, 0, 1, 2);
+		auto quickTextSection = makeSection("Quick Text — waiting for Hub", &m_lblStreamToolQuickText);
+		quickTextSection.second->addWidget(m_btnStreamToolQuickTextShow, 0, 0);
+		quickTextSection.second->addWidget(hideQuickText, 0, 1);
+		auto timerSection = makeSection("Countdown — waiting for Hub", &m_lblStreamToolTimer);
+		timerSection.second->addWidget(showTimer, 0, 0);
+		timerSection.second->addWidget(hideTimer, 0, 1);
+		timerSection.second->addWidget(m_btnStreamToolTimerStart, 1, 0);
+		timerSection.second->addWidget(m_btnStreamToolTimerPause, 1, 1);
+		timerSection.second->addWidget(resetTimer, 2, 0, 1, 2);
+
+		layout->addWidget(browserSection.first);
+		layout->addWidget(replaySection.first);
+		layout->addWidget(quickTextSection.first);
+		layout->addWidget(timerSection.first);
+		layout->addStretch();
+
+		for (QToolButton *button : {showReplay, hideReplay, triggerReplay})
+			button->setProperty("requiresReplayConfiguration", true);
+		m_btnStreamToolQuickTextShow->setProperty("requiresQuickTextMessage", true);
+		hideQuickText->setProperty("requiresQuickTextConfiguration", true);
+		for (QToolButton *button : {m_btnStreamToolTimerStart, m_btnStreamToolTimerPause, resetTimer, showTimer, hideTimer})
+			button->setProperty("requiresTimerConfiguration", true);
+
+		connect(refreshCurrent, &QToolButton::clicked, this, []() { rsExecuteStreamToolQuickAction(RsStreamToolQuickAction::RefreshCurrentBrowsers); });
+		connect(refreshAll, &QToolButton::clicked, this, []() { rsExecuteStreamToolQuickAction(RsStreamToolQuickAction::RefreshAllBrowsers); });
+		connect(showReplay, &QToolButton::clicked, this, []() { rsExecuteStreamToolQuickAction(RsStreamToolQuickAction::ShowReplay); });
+		connect(hideReplay, &QToolButton::clicked, this, []() { rsExecuteStreamToolQuickAction(RsStreamToolQuickAction::HideReplay); });
+		connect(triggerReplay, &QToolButton::clicked, this, []() { rsExecuteStreamToolQuickAction(RsStreamToolQuickAction::TriggerReplay); });
+		connect(m_btnStreamToolQuickTextShow, &QToolButton::clicked, this, []() { rsExecuteStreamToolQuickAction(RsStreamToolQuickAction::ShowQuickText); });
+		connect(hideQuickText, &QToolButton::clicked, this, []() { rsExecuteStreamToolQuickAction(RsStreamToolQuickAction::HideQuickText); });
+		connect(m_btnStreamToolTimerStart, &QToolButton::clicked, this, []() { rsExecuteStreamToolQuickAction(RsStreamToolQuickAction::StartTimer); });
+		connect(m_btnStreamToolTimerPause, &QToolButton::clicked, this, []() { rsExecuteStreamToolQuickAction(RsStreamToolQuickAction::PauseTimer); });
+		connect(resetTimer, &QToolButton::clicked, this, []() { rsExecuteStreamToolQuickAction(RsStreamToolQuickAction::ResetTimer); });
+		connect(showTimer, &QToolButton::clicked, this, []() { rsExecuteStreamToolQuickAction(RsStreamToolQuickAction::ShowTimer); });
+		connect(hideTimer, &QToolButton::clicked, this, []() { rsExecuteStreamToolQuickAction(RsStreamToolQuickAction::HideTimer); });
+	}
+
 	// UI Settings
 	m_pageUiSettings = new QWidget(m_contentCard);
 	{
@@ -283,15 +413,17 @@ void RsMainDock::createPanels()
 	m_stack->addWidget(m_pageStats);          // 2
 	m_stack->addWidget(m_pageBrowserRefresh); // 3
 	m_stack->addWidget(m_pageAutoStart);      // 4
-	m_stack->addWidget(m_pageUiSettings);     // 5
+	m_stack->addWidget(m_pageStreamToolsQuickActions); // 5
+	m_stack->addWidget(m_pageUiSettings);     // 6
 
 	// MUSIC (append only)
-	m_stack->addWidget(m_pageMusicNowPlaying); // 6
-	m_stack->addWidget(m_pageMusicQueue);      // 7
-	m_stack->addWidget(m_pageMusicRequests);   // 8
-	m_stack->addWidget(m_pageMusicSettings);   // 9
-	m_stack->addWidget(m_pageMusicSetup);      // 10
-	m_stack->addWidget(m_pageMusicOverlay);    // 11
+	m_stack->addWidget(m_pageMusicNowPlaying); // 7
+	m_stack->addWidget(m_pageMusicQueue);      // 8
+	m_stack->addWidget(m_pageMusicRequests);   // 9
+	m_stack->addWidget(m_pageMusicSettings);   // 10
+	m_stack->addWidget(m_pageMusicSetup);      // 11
+	m_stack->addWidget(m_pageMusicOverlay);    // 12
+	m_lastEnhancementsPage = m_stack->indexOf(m_pageStreamToolsQuickActions);
 
 	applyTheme();
 }

@@ -100,7 +100,7 @@
 <div class="row">
 <button data-action="quickTextShow" class="primary" disabled>Show message</button>
 <button id="savePreset">Save as preset</button>
-<button data-action="quickTextClear" class="danger">Clear</button>
+<button data-action="quickTextHide">Hide</button>
 </div>
 <div id="quickTextStatus" class="status">Quick Text has not been added to OBS yet.</div>
 <label>Presets</label>
@@ -234,10 +234,10 @@ const configureQuick=()=>{previewQuick();clearTimeout(quickUpdate);quickUpdate=s
 byId('quickColour').oninput=()=>{byId('quickColourHex').value=byId('quickColour').value;configureQuick()};
 byId('quickColourHex').oninput=()=>{if(/^#[0-9a-f]{6}$/i.test(byId('quickColourHex').value)){byId('quickColour').value=byId('quickColourHex').value;configureQuick()}};
 quickShowButton.onclick=()=>{if(byId('quickText').value.trim())post('quickTextShow',quick())};
-document.querySelector('[data-action="quickTextClear"]').onclick=()=>{byId('quickText').value='';previewQuick();post('quickTextClear')};
+document.querySelector('[data-action="quickTextHide"]').onclick=()=>post('quickTextHide');
 byId('presets').addEventListener('click',event=>{const button=event.target.closest('button');if(!button)return;event.preventDefault();event.stopImmediatePropagation();byId('quickText').value=button.textContent;previewQuick();post('quickTextShow',quick())},true);
 const applyTools=window.rsApplyTools;
-window.rsApplyTools=config=>{applyTools(config);const select=byId('quickFont'),selected=config.quickFont||'Sora',families=Array.isArray(config.fontFamilies)?config.fontFamilies:[];select.innerHTML='';families.forEach(font=>{const option=document.createElement('option');option.value=option.textContent=font;select.appendChild(option)});if(!families.some(font=>font.toLowerCase()===selected.toLowerCase())){const option=document.createElement('option');option.value=option.textContent=selected;select.insertBefore(option,select.firstChild)}select.value=selected;byId('quickFontWeight').value=String(config.quickFontWeight||700);byId('quickTextStatus').textContent=config.quickTextMessage||'Quick Text has not been added to OBS yet.';byId('quickTextStatus').style.color=config.quickTextConflict?'#ff9caa':'';previewQuick();post('quickTextConfig',quick());if(!requestedQuickStatus){requestedQuickStatus=true;post('quickTextStatus')}};
+window.rsApplyTools=config=>{applyTools(config);byId('quickText').value=config.quickText||'';const select=byId('quickFont'),selected=config.quickFont||'Sora',families=Array.isArray(config.fontFamilies)?config.fontFamilies:[];select.innerHTML='';families.forEach(font=>{const option=document.createElement('option');option.value=option.textContent=font;select.appendChild(option)});if(!families.some(font=>font.toLowerCase()===selected.toLowerCase())){const option=document.createElement('option');option.value=option.textContent=selected;select.insertBefore(option,select.firstChild)}select.value=selected;byId('quickFontWeight').value=String(config.quickFontWeight||700);byId('quickTextStatus').textContent=config.quickTextMessage||'Quick Text has not been added to OBS yet.';byId('quickTextStatus').style.color=config.quickTextConflict?'#ff9caa':'';previewQuick();post('quickTextConfig',quick());if(!requestedQuickStatus){requestedQuickStatus=true;post('quickTextStatus')}};
 byId('browseProgram').onclick=()=>post('pickProgram');
 window.rsSelectedProgram=path=>{byId('programPath').value=path||''};
 })();

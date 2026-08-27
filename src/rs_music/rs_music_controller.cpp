@@ -6,7 +6,6 @@
 #include "rs_music_youtube_resolver.hpp"
 #include "enhancements/rs_auto_start.hpp"
 #include "enhancements/rs_browser_refresh.hpp"
-#include "enhancements/rs_quick_text.hpp"
 #include "rs_instant_replay.hpp"
 #include "rs_stream_overlay_manager.hpp"
 #include "rs_stream_overlay_server.hpp"
@@ -118,8 +117,6 @@ RsMusicController::RsMusicController(RsMusicState *state, QObject *parent) : QOb
 			else if (action == "quickTextShow") { RsStreamOverlayServer::instance().setQuickTextState(value.toObject()); publishQuickTextState(RsStreamOverlayManager::showQuickTextInCurrentScene()); }
 			else if (action == "quickTextClear") { QJsonObject state=RsStreamOverlayServer::instance().quickTextState(); state["text"]=""; RsStreamOverlayServer::instance().setQuickTextState(state); publishQuickTextState(RsStreamOverlayManager::clearQuickTextInCurrentScene()); }
 			else if (action == "quickTextStatus") publishQuickTextState(RsStreamOverlayManager::quickTextStatus());
-			else if (action == "dropText") { const QJsonObject o=value.toObject(); RsQuickText::showText(o.value("text").toString(),o.value("size").toInt(120),o.value("colour").toString("#ffffff"),o.value("font").toString("Sora")); }
-			else if (action == "clearText") RsQuickText::clearAll();
 			else if (action == "timerConfig") RsStreamTimer::instance().configure(value.toObject());
 			else if (action == "timerSetup") publishTimerState(RsStreamTimer::instance().setup());
 			else if (action == "timerStatus") publishTimerState(RsStreamTimer::instance().status());

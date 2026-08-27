@@ -15,7 +15,6 @@ void RsMainDock::setActiveButton(QToolButton *button)
 
 		// ENHANCEMENTS
 		m_btnBrowserRefresh,
-		m_btnQuickText,
 		m_btnAutoStart,
 		m_btnUiSettings,
 
@@ -73,15 +72,6 @@ void RsMainDock::showBrowserRefresh()
 		m_lastEnhancementsPage = m_stack->currentIndex();
 	}
 	setActiveButton(m_btnBrowserRefresh);
-}
-
-void RsMainDock::showQuickText()
-{
-	if (m_stack && m_pageQuickText) {
-		m_stack->setCurrentWidget(m_pageQuickText);
-		m_lastEnhancementsPage = m_stack->currentIndex();
-	}
-	setActiveButton(m_btnQuickText);
 }
 
 void RsMainDock::showAutoStart()

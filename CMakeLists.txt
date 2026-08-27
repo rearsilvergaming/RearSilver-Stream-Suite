@@ -198,8 +198,6 @@ add_library(${PROJECT_NAME} MODULE
 
     src/enhancements/rs_browser_refresh.cpp
     src/enhancements/rs_browser_refresh.hpp
-    src/enhancements/rs_quick_text.cpp
-    src/enhancements/rs_quick_text.hpp
     src/enhancements/rs_auto_start.cpp
     src/enhancements/rs_auto_start.hpp
     src/rs_instant_replay.cpp

@@ -1820,7 +1820,7 @@ public:
 													CefRefPtr<CefValue> selected=CefValue::Create(); selected->SetString(wideToUtf8(raw));
 													const std::wstring json=utf8ToWide(CefWriteJSON(selected,JSON_WRITER_DEFAULT).ToString());
 													if(sound)m_webView->ExecuteScript((L"window.rsInvokeAll&&window.rsInvokeAll('rsSelectedTimerSound',"+json+L")").c_str(),nullptr);
-														else m_webView->ExecuteScript((L"window.rsSelectedProgram("+json+L")").c_str(),nullptr);
+												else m_webView->ExecuteScript((L"window.rsInvokeAll&&window.rsInvokeAll('rsSelectedProgram',"+json+L")").c_str(),nullptr);
 													CoTaskMemFree(raw);
 												}
 											}

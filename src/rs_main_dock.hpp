@@ -42,7 +42,6 @@ private slots:
 	void showObsSettings() { openNativeSettings(); }
 
 	void showBrowserRefresh();
-	void showQuickText();
 	void showAutoStart();
 	void showUiSettings();
 
@@ -194,7 +193,6 @@ private:
 	QToolButton *m_btnObsSettings = nullptr;
 
 	QToolButton *m_btnBrowserRefresh = nullptr;
-	QToolButton *m_btnQuickText = nullptr;
 	QToolButton *m_btnAutoStart = nullptr;
 	QToolButton *m_btnUiSettings = nullptr;
 
@@ -211,7 +209,6 @@ private:
 	QWidget *m_pageScenesSources = nullptr;
 	QWidget *m_pageStats = nullptr;
 	QWidget *m_pageBrowserRefresh = nullptr;
-	QWidget *m_pageQuickText = nullptr;
 	QWidget *m_pageAutoStart = nullptr;
 	QWidget *m_pageUiSettings = nullptr;
 

@@ -95,18 +95,15 @@ void RsMainDock::createSidebarMenus()
 	// --- ENHANCEMENTS menu buttons ---
 	m_btnBrowserRefresh =
 		makeButton("Browser Refresh", "Reload browser sources without hiding them", "view-refresh", "🔄");
-	m_btnQuickText = makeButton("Quick Text", "Drop BRB / Coffee / custom text", "insert-text", "💬");
 	m_btnAutoStart =
 		makeButton("Auto-Start Manager", "Launch/close tools with OBS (placeholder)", "system-run", "🚀");
 	m_btnUiSettings =
 		makeButton("UI Settings", "RearSilver Stream Suite layout settings", "preferences-desktop-theme", "🎛");
 
 	m_enhMenuLayout->addWidget(m_btnBrowserRefresh, 0, 0);
-	m_enhMenuLayout->addWidget(m_btnQuickText, 0, 1);
+	m_enhMenuLayout->addWidget(m_btnAutoStart, 0, 1);
 
-	m_enhMenuLayout->addWidget(m_btnAutoStart, 1, 0);
-
-	m_enhMenuLayout->addWidget(m_btnUiSettings, 2, 0);
+	m_enhMenuLayout->addWidget(m_btnUiSettings, 1, 0);
 	m_enhMenu->setMinimumWidth(300);
 
 	// Ensure both columns expand evenly in horizontal layouts
@@ -140,7 +137,6 @@ void RsMainDock::createSidebarMenus()
 	connect(m_btnObsSettings, &QToolButton::clicked, this, &RsMainDock::openNativeSettings);
 
 	connect(m_btnBrowserRefresh, &QToolButton::clicked, this, &RsMainDock::showBrowserRefresh);
-	connect(m_btnQuickText, &QToolButton::clicked, this, &RsMainDock::showQuickText);
 	connect(m_btnAutoStart, &QToolButton::clicked, this, &RsMainDock::showAutoStart);
 	connect(m_btnUiSettings, &QToolButton::clicked, this, &RsMainDock::showUiSettings);
 

@@ -19,7 +19,6 @@
 #include "rs_scenes_sources.hpp"
 #include "rs_stats.hpp"
 #include "enhancements/rs_browser_refresh.hpp"
-#include "enhancements/rs_quick_text.hpp"
 #include "enhancements/rs_auto_start.hpp"
 
 // MUSIC UI panels (NEW)
@@ -193,9 +192,6 @@ void RsMainDock::createPanels()
 	// Browser Refresh (Enhancements tab)
 	m_pageBrowserRefresh = RsBrowserRefresh::createPage(this, m_contentCard);
 
-	// Quick Text (Enhancements tab)
-	m_pageQuickText = RsQuickText::createPage(this, m_contentCard);
-
 	// Auto Start (Enhancements tab)
 	m_pageAutoStart = RsAutoStart::createPage(this, m_contentCard);
 
@@ -286,17 +282,16 @@ void RsMainDock::createPanels()
 	m_stack->addWidget(m_pageScenesSources);  // 1
 	m_stack->addWidget(m_pageStats);          // 2
 	m_stack->addWidget(m_pageBrowserRefresh); // 3
-	m_stack->addWidget(m_pageQuickText);      // 4
-	m_stack->addWidget(m_pageAutoStart);      // 5
-	m_stack->addWidget(m_pageUiSettings);     // 6
+	m_stack->addWidget(m_pageAutoStart);      // 4
+	m_stack->addWidget(m_pageUiSettings);     // 5
 
 	// MUSIC (append only)
-	m_stack->addWidget(m_pageMusicNowPlaying); // 8
-	m_stack->addWidget(m_pageMusicQueue);      // 9
-	m_stack->addWidget(m_pageMusicRequests);   // 10
-	m_stack->addWidget(m_pageMusicSettings);   // 11
-	m_stack->addWidget(m_pageMusicSetup);      // 12
-	m_stack->addWidget(m_pageMusicOverlay);    // 13
+	m_stack->addWidget(m_pageMusicNowPlaying); // 6
+	m_stack->addWidget(m_pageMusicQueue);      // 7
+	m_stack->addWidget(m_pageMusicRequests);   // 8
+	m_stack->addWidget(m_pageMusicSettings);   // 9
+	m_stack->addWidget(m_pageMusicSetup);      // 10
+	m_stack->addWidget(m_pageMusicOverlay);    // 11
 
 	applyTheme();
 }

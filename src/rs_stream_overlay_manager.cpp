@@ -79,17 +79,40 @@ void markSimpleParentItem(obs_sceneitem_t *item)
 	obs_data_release(settings);
 }
 
-obs_sceneitem_t *findSourceItem(obs_scene_t *scene, obs_source_t *source)
+struct SceneItemMatch {
+	obs_sceneitem_t *item = nullptr;
+	bool effectivelyVisible = false;
+};
+
+SceneItemMatch findSourceItemRecursive(obs_scene_t *scene, obs_source_t *source, bool ancestorsVisible)
 {
-	if (!scene || !source) return nullptr;
-	struct Search { obs_source_t *source; obs_sceneitem_t *item; } search{source, nullptr};
+	if (!scene || !source) return {};
+	struct Search {
+		obs_source_t *source;
+		bool ancestorsVisible;
+		SceneItemMatch match;
+	} search{source, ancestorsVisible, {}};
 	obs_scene_enum_items(scene, [](obs_scene_t *, obs_sceneitem_t *item, void *parameter) {
 		auto *search = static_cast<Search *>(parameter);
-		if (obs_sceneitem_get_source(item) != search->source) return true;
-		search->item = item;
-		return false;
+		const bool itemVisible = search->ancestorsVisible && obs_sceneitem_visible(item);
+		if (obs_sceneitem_get_source(item) == search->source) {
+			search->match = {item, itemVisible};
+			return false;
+		}
+		if (!obs_sceneitem_is_group(item)) return true;
+		obs_scene_t *groupScene = obs_sceneitem_group_get_scene(item);
+		search->match = findSourceItemRecursive(groupScene, search->source, itemVisible);
+		return search->match.item == nullptr;
 	}, &search);
-	return search.item;
+	return search.match;
+
+}
+
+obs_sceneitem_t *findSourceItem(obs_scene_t *scene, obs_source_t *source, bool *effectivelyVisible = nullptr)
+{
+	const SceneItemMatch match = findSourceItemRecursive(scene, source, true);
+	if (effectivelyVisible) *effectivelyVisible = match.effectivelyVisible;
+	return match.item;
 }
 
 bool isManagedFeatureGroup(obs_source_t *source, const char *feature)
@@ -194,13 +217,14 @@ obs_source_t *ensureManagedSimpleSceneSource()
 	return result;
 }
 
-obs_sceneitem_t *timerSceneItem(obs_source_t **sceneSourceOut = nullptr)
+obs_sceneitem_t *timerSceneItem(obs_source_t *source, obs_source_t **sceneSourceOut = nullptr,
+				bool *effectivelyVisible = nullptr)
 {
 	obs_source_t *sceneSource = obs_frontend_get_current_scene();
 	if (sceneSourceOut) *sceneSourceOut = sceneSource;
 	if (!sceneSource) return nullptr;
 	obs_scene_t *scene = obs_scene_from_source(sceneSource);
-	return scene ? obs_scene_find_source(scene, kTimerSourceName) : nullptr;
+	return scene ? findSourceItem(scene, source, effectivelyVisible) : nullptr;
 }
 
 QJsonObject timerStatusFor(obs_source_t *source, bool conflict, const QString &message = {})
@@ -208,12 +232,12 @@ QJsonObject timerStatusFor(obs_source_t *source, bool conflict, const QString &m
 	bool placed = false, visible = false;
 	obs_source_t *sceneSource = nullptr;
 	if (source && !conflict) {
-		if (obs_sceneitem_t *item = timerSceneItem(&sceneSource)) {
+		if (obs_sceneitem_t *item = timerSceneItem(source, &sceneSource, &visible)) {
 			placed = obs_sceneitem_get_source(item) == source;
-			visible = placed && obs_sceneitem_visible(item);
+			visible = placed && visible;
 		}
 	} else {
-		timerSceneItem(&sceneSource);
+		timerSceneItem(nullptr, &sceneSource);
 	}
 	if (sceneSource) obs_source_release(sceneSource);
 	QJsonObject result{{"sourceExists", source != nullptr}, {"placedInCurrentScene", placed},
@@ -248,14 +272,15 @@ void applyTimerSettings(obs_source_t *source)
 	obs_source_set_monitoring_type(source, OBS_MONITORING_TYPE_MONITOR_AND_OUTPUT);
 }
 
-obs_sceneitem_t *currentSceneItem(obs_source_t *source, obs_source_t **sceneSourceOut = nullptr)
+obs_sceneitem_t *currentSceneItem(obs_source_t *source, obs_source_t **sceneSourceOut = nullptr,
+				  bool *effectivelyVisible = nullptr)
 {
 	obs_source_t *sceneSource = obs_frontend_get_current_scene();
 	if (sceneSourceOut) *sceneSourceOut = sceneSource;
 	if (!sceneSource) return nullptr;
 	obs_scene_t *scene = obs_scene_from_source(sceneSource);
 	if (!scene || obs_scene_get_source(scene) == source) return nullptr;
-	return obs_scene_find_source(scene, kSourceName);
+	return findSourceItem(scene, source, effectivelyVisible);
 }
 
 QJsonObject statusFor(obs_source_t *source, bool conflict, const QString &message = {})
@@ -263,9 +288,9 @@ QJsonObject statusFor(obs_source_t *source, bool conflict, const QString &messag
 	bool placed = false, visible = false;
 	obs_source_t *sceneSource = nullptr;
 	if (source && !conflict) {
-		if (obs_sceneitem_t *item = currentSceneItem(source, &sceneSource)) {
+		if (obs_sceneitem_t *item = currentSceneItem(source, &sceneSource, &visible)) {
 			placed = obs_sceneitem_get_source(item) == source;
-			visible = placed && obs_sceneitem_visible(item);
+			visible = placed && visible;
 		}
 	} else {
 		currentSceneItem(nullptr, &sceneSource);
@@ -298,14 +323,17 @@ QJsonObject simpleQuickTextStatusFor(obs_source_t *source, bool sourceConflict, 
 		obs_scene_t *simpleScene = obs_scene_from_source(simpleSource);
 		obs_sceneitem_t *group = findManagedFeatureGroup(simpleScene, kFeatureValue);
 		obs_scene_t *groupScene = group ? obs_sceneitem_group_get_scene(group) : nullptr;
-		obs_sceneitem_t *inner = findSourceItem(groupScene, source);
+		bool innerVisible = false;
+		obs_sceneitem_t *inner = findSourceItem(groupScene, source, &innerVisible);
 		setupComplete = group && inner;
 		obs_source_t *activeSource = obs_frontend_get_current_scene();
 		obs_scene_t *activeScene = activeSource ? obs_scene_from_source(activeSource) : nullptr;
-		obs_sceneitem_t *parent = activeSource == simpleSource ? nullptr : findSourceItem(activeScene, simpleSource);
+		bool parentVisible = false;
+		obs_sceneitem_t *parent = activeSource == simpleSource ? nullptr :
+			findSourceItem(activeScene, simpleSource, &parentVisible);
 		placed = group && inner && (activeSource == simpleSource || parent);
-		visible = placed && obs_sceneitem_visible(group) && obs_sceneitem_visible(inner) &&
-			(activeSource == simpleSource || obs_sceneitem_visible(parent));
+		visible = placed && obs_sceneitem_visible(group) && innerVisible &&
+			(activeSource == simpleSource || parentVisible);
 		if (activeSource) obs_source_release(activeSource);
 	}
 	const bool conflict = sourceConflict || sceneConflict;
@@ -338,14 +366,17 @@ QJsonObject simpleTimerStatusFor(obs_source_t *source, bool sourceConflict, cons
 		obs_scene_t *simpleScene = obs_scene_from_source(simpleSource);
 		obs_sceneitem_t *group = findManagedFeatureGroup(simpleScene, "timer");
 		obs_scene_t *groupScene = group ? obs_sceneitem_group_get_scene(group) : nullptr;
-		obs_sceneitem_t *inner = findSourceItem(groupScene, source);
+		bool innerVisible = false;
+		obs_sceneitem_t *inner = findSourceItem(groupScene, source, &innerVisible);
 		setupComplete = group && inner;
 		obs_source_t *activeSource = obs_frontend_get_current_scene();
 		obs_scene_t *activeScene = activeSource ? obs_scene_from_source(activeSource) : nullptr;
-		obs_sceneitem_t *parent = activeSource == simpleSource ? nullptr : findSourceItem(activeScene, simpleSource);
+		bool parentVisible = false;
+		obs_sceneitem_t *parent = activeSource == simpleSource ? nullptr :
+			findSourceItem(activeScene, simpleSource, &parentVisible);
 		placed = group && inner && (activeSource == simpleSource || parent);
-		visible = placed && obs_sceneitem_visible(group) && obs_sceneitem_visible(inner) &&
-			(activeSource == simpleSource || obs_sceneitem_visible(parent));
+		visible = placed && obs_sceneitem_visible(group) && innerVisible &&
+			(activeSource == simpleSource || parentVisible);
 		if (activeSource) obs_source_release(activeSource);
 	}
 	const bool conflict = sourceConflict || sceneConflict;
@@ -576,7 +607,7 @@ QJsonObject RsStreamOverlayManager::setupTimerInCurrentScene()
 		return result;
 	}
 	obs_source_t *sceneSource = nullptr;
-	obs_sceneitem_t *item = timerSceneItem(&sceneSource);
+	obs_sceneitem_t *item = timerSceneItem(source, &sceneSource);
 	obs_scene_t *scene = sceneSource ? obs_scene_from_source(sceneSource) : nullptr;
 	if (!item && scene) {
 		item = obs_scene_add(scene, source);
@@ -622,7 +653,7 @@ QJsonObject RsStreamOverlayManager::setTimerVisibleInCurrentScene(bool visible)
 		return result;
 	}
 	obs_source_t *sceneSource = nullptr;
-	obs_sceneitem_t *item = timerSceneItem(&sceneSource);
+	obs_sceneitem_t *item = timerSceneItem(source, &sceneSource);
 	obs_scene_t *scene = sceneSource ? obs_scene_from_source(sceneSource) : nullptr;
 	if (visible && !item && scene) item = obs_scene_add(scene, source);
 	if (item && obs_sceneitem_get_source(item) == source) obs_sceneitem_set_visible(item, visible);

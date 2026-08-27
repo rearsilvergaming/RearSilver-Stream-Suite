@@ -74,7 +74,7 @@
 <p>Enter a message or choose a preset. The source is created automatically when shown.</p>
 <label>Message</label>
 <input id="quickText" placeholder="Type the message to show on stream">
-<div id="quickPreview" class="preview">Preview</div>
+<div id="quickPreview" class="preview" style="width:min(100%,720px);aspect-ratio:8/3;min-height:0;margin:12px auto 0">Preview</div>
 <div class="row">
 <div>
 <label>Size</label>
@@ -103,8 +103,22 @@
 <button data-action="quickTextClear" class="danger">Clear</button>
 </div>
 <div id="quickTextStatus" class="status">Quick Text has not been added to OBS yet.</div>
-<label>Presets (right-click to remove)</label>
+<label>Presets</label>
 <div id="presets" class="presets">
+</div>
+<div id="presetContextMenu" hidden style="position:fixed;z-index:1000;width:220px;padding:6px;border:1px solid #3b4a60;border-radius:9px;background:#151e29;box-shadow:0 10px 30px #0008">
+<button id="updatePresetStyle" style="text-align:left;margin-bottom:4px">Update to current style selection</button>
+<button id="requestRemovePreset" class="danger" style="text-align:left">Remove preset…</button>
+</div>
+<div id="presetRemoveModal" role="dialog" aria-modal="true" aria-labelledby="presetRemoveTitle" style="display:none;position:fixed;inset:0;z-index:1100;place-items:center;padding:24px;background:#05080db8">
+<div style="width:min(100%,440px);padding:22px;border:1px solid #3b4a60;border-radius:14px;background:#151e29;box-shadow:0 20px 60px #000b">
+<h3 id="presetRemoveTitle">Remove preset?</h3>
+<p id="presetRemoveMessage" style="margin:8px 0 20px"></p>
+<div class="row" style="justify-content:flex-end">
+<button id="cancelRemovePreset">Cancel</button>
+<button id="confirmRemovePreset" class="danger">Remove preset</button>
+</div>
+</div>
 </div>
 </section>
 <section class="card wide tool-panel" data-tool-panel="timer">
@@ -308,20 +322,137 @@ let timerObsConnected=false;const apply=window.rsApplyTools;window.rsApplyTools=
 </script>
 <script>
 (()=>{
-const presets=document.getElementById('presets');
+const originalPresets=document.getElementById('presets');
+const presets=originalPresets.cloneNode(false);
+originalPresets.replaceWith(presets);
+const presetContextMenu=document.getElementById('presetContextMenu');
+const updatePresetStyle=document.getElementById('updatePresetStyle');
+const requestRemovePreset=document.getElementById('requestRemovePreset');
+const presetRemoveModal=document.getElementById('presetRemoveModal');
+const presetRemoveMessage=document.getElementById('presetRemoveMessage');
+const cancelRemovePreset=document.getElementById('cancelRemovePreset');
+const confirmRemovePreset=document.getElementById('confirmRemovePreset');
 let obsConnected=false;
-const updatePresetAvailability=()=>presets.querySelectorAll('button').forEach(button=>button.disabled=!obsConnected);
+let presetList=[];
+let selectedPresetIndex=-1;
+let pendingRemovalIndex=-1;
+const post=(action,value)=>parent.rsNativePost(JSON.stringify({page:'tools',action,value}));
+const normalisePreset=value=>typeof value==='string'?{text:value}:value&&typeof value==='object'?{
+text:String(value.text||''),
+font:value.font?String(value.font):'',
+fontWeight:Number(value.fontWeight)||0,
+size:Number(value.size)||0,
+colour:/^#[0-9a-f]{6}$/i.test(value.colour||'')?value.colour:''
+}:{text:''};
+const currentStyle=()=>({
+font:document.getElementById('quickFont').value,
+fontWeight:+document.getElementById('quickFontWeight').value,
+size:+document.getElementById('quickSize').value,
+colour:document.getElementById('quickColour').value
+});
+const savePresets=()=>post('saveQuickPresets',presetList);
+const applyPreset=preset=>{
+const message=document.getElementById('quickText');
+message.value=preset.text;
+if(preset.font)document.getElementById('quickFont').value=preset.font;
+if(preset.fontWeight)document.getElementById('quickFontWeight').value=String(preset.fontWeight);
+if(preset.size)document.getElementById('quickSize').value=String(preset.size);
+if(preset.colour){
+document.getElementById('quickColour').value=preset.colour;
+document.getElementById('quickColourHex').value=preset.colour;
+}
+message.dispatchEvent(new Event('input',{bubbles:true}));
+document.querySelector('[data-action="quickTextShow"]').click();
+};
+const renderPresets=()=>{
+presets.innerHTML='';
+presetList.forEach((preset,index)=>{
+if(!preset.text)return;
+const button=document.createElement('button');
+button.textContent=preset.text;
+button.disabled=!obsConnected;
+button.onclick=()=>applyPreset(preset);
+button.oncontextmenu=event=>event.preventDefault();
+button.dataset.presetIndex=String(index);
+presets.appendChild(button);
+});
+};
+const closePresetMenu=()=>{presetContextMenu.hidden=true;selectedPresetIndex=-1};
+presets.addEventListener('contextmenu',event=>{
+const button=event.target.closest('button');
+if(!button)return;
+event.preventDefault();
+closePresetMenu();
+if(!obsConnected||button.disabled)return;
+selectedPresetIndex=Number(button.dataset.presetIndex);
+presetContextMenu.hidden=false;
+const width=presetContextMenu.offsetWidth,height=presetContextMenu.offsetHeight;
+presetContextMenu.style.left=Math.max(8,Math.min(event.clientX,window.innerWidth-width-8))+'px';
+presetContextMenu.style.top=Math.max(8,Math.min(event.clientY,window.innerHeight-height-8))+'px';
+},true);
+updatePresetStyle.onclick=()=>{
+if(selectedPresetIndex<0)return;
+const index=selectedPresetIndex;
+closePresetMenu();
+presetList[index]={text:presetList[index].text,...currentStyle()};
+savePresets();
+renderPresets();
+};
+requestRemovePreset.onclick=()=>{
+if(selectedPresetIndex<0)return;
+pendingRemovalIndex=selectedPresetIndex;
+const name=presetList[pendingRemovalIndex].text;
+closePresetMenu();
+presetRemoveMessage.textContent=`“${name}” will be permanently removed.`;
+presetRemoveModal.style.display='grid';
+cancelRemovePreset.focus();
+};
+const closeRemoveModal=()=>{presetRemoveModal.style.display='none';pendingRemovalIndex=-1};
+cancelRemovePreset.onclick=closeRemoveModal;
+confirmRemovePreset.onclick=()=>{
+if(pendingRemovalIndex<0)return;
+presetList.splice(pendingRemovalIndex,1);
+savePresets();
+renderPresets();
+closeRemoveModal();
+};
+presetRemoveModal.addEventListener('click',event=>{if(event.target===presetRemoveModal)closeRemoveModal()});
+document.addEventListener('click',event=>{if(!presetContextMenu.contains(event.target))closePresetMenu()});
+document.addEventListener('keydown',event=>{if(event.key==='Escape'){closePresetMenu();closeRemoveModal()}});
+window.addEventListener('blur',closePresetMenu);
+document.getElementById('savePreset').onclick=()=>{
+const text=document.getElementById('quickText').value.trim();
+if(!text||presetList.some(preset=>preset.text===text))return;
+presetList.push({text,...currentStyle()});
+savePresets();
+renderPresets();
+};
 const applyTools=window.rsApplyTools;
+const syncQuickPreviewGeometry=()=>{
+const preview=document.getElementById('quickPreview'),scale=preview.clientWidth/1920,size=+document.getElementById('quickSize').value||120;
+preview.style.fontSize=Math.max(1,size*scale)+'px';
+preview.style.lineHeight='1.15';
+preview.style.textAlign='center';
+preview.style.whiteSpace='pre-wrap';
+preview.style.overflowWrap='anywhere';
+preview.style.padding=`${12*scale}px ${24*scale}px`;
+};
+['quickText','quickSize','quickFont','quickFontWeight','quickColour','quickColourHex'].forEach(id=>{
+document.getElementById(id).addEventListener('input',syncQuickPreviewGeometry);
+document.getElementById(id).addEventListener('change',syncQuickPreviewGeometry);
+});
+new ResizeObserver(syncQuickPreviewGeometry).observe(document.getElementById('quickPreview'));
 window.rsApplyTools=config=>{
 applyTools(config);
 obsConnected=!!config.ipcConnected;
-updatePresetAvailability();
+presetList=(Array.isArray(config.quickPresets)?config.quickPresets:[]).map(normalisePreset).filter(preset=>preset.text);
+renderPresets();
+syncQuickPreviewGeometry();
 if(!obsConnected){
 document.getElementById('quickTextStatus').textContent='OBS is not connected. Quick Text settings can still be edited.';
 document.getElementById('timerStatus').textContent='OBS is not connected. Timer settings can still be edited.';
 }
 };
-new MutationObserver(updatePresetAvailability).observe(presets,{childList:true});
 })();
 </script>
 </body>

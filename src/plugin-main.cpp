@@ -39,6 +39,22 @@ OBS_MODULE_USE_DEFAULT_LOCALE("RearSilver-Stream-Suite", "en-GB")
 
 static RsMainDock *g_dock = nullptr;
 static QString g_suiteFontFamily = "Sora";
+static bool g_suiteShutdownStarted = false;
+
+static void shutdown_suite_services()
+{
+	if (g_suiteShutdownStarted)
+		return;
+	g_suiteShutdownStarted = true;
+	LOG_INFO_MSG("suite shutdown started");
+	RsStreamTimer::instance().shutdown();
+	hub_replay::RsInstantReplay::shutdown();
+	RsStreamOverlayServer::instance().stop();
+	RsAutoStart::shutdown();
+	rsMusicPcmStopOutput();
+	rsMusicShutdown();
+	LOG_INFO_MSG("suite shutdown completed");
+}
 
 const char *obs_module_description(void)
 {
@@ -77,13 +93,13 @@ static void frontend_event_callback(enum obs_frontend_event event, void *)
 	switch (event) {
 	case OBS_FRONTEND_EVENT_FINISHED_LOADING:
 		rsMusicPcmRemoveLegacyTestSource();
+		hub_replay::RsInstantReplay::applyCachedReplayBufferConfiguration();
 		create_rs_dock();
 		break;
 
 	case OBS_FRONTEND_EVENT_EXIT:
-		LOG_INFO_MSG("OBS exiting — shutting down RS Music");
-		rsMusicPcmStopOutput();
-		rsMusicShutdown();
+		LOG_INFO_MSG("OBS exiting — disconnecting RearSilver Stream Suite services");
+		shutdown_suite_services();
 		break;
 
 	case OBS_FRONTEND_EVENT_SCENE_CHANGED:
@@ -199,12 +215,7 @@ void obs_module_unload(void)
 	LOG_INFO_MSG("plugin unload");
 
 	obs_frontend_remove_event_callback(frontend_event_callback, nullptr);
-	RsStreamOverlayServer::instance().stop();
-	RsStreamTimer::instance().shutdown();
-	hub_replay::RsInstantReplay::shutdown();
-	RsAutoStart::shutdown();
-	rsMusicPcmStopOutput();
-	rsMusicShutdown();
+	shutdown_suite_services();
 	rsMusicPcmShutdownSource();
 
 	// Tell OBS to remove the dock

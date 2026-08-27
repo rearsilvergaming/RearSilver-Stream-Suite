@@ -15,6 +15,7 @@
 #include <QDesktopServices>
 #include <QHash>
 #include <QUrl>
+#include <QSettings>
 
 #include <atomic>
 #include <vector>
@@ -177,6 +178,7 @@ static int loadReplaySeconds()
 static void saveReplaySeconds(int seconds)
 {
 	s_replaySeconds = qBound(2, seconds, 300);
+	QSettings().setValue("replay/cache/seconds", s_replaySeconds);
 }
 // ------------------------------------------------------------
 // Load / Save replay auto-start
@@ -190,6 +192,7 @@ static bool loadReplayAutoStart()
 static void saveReplayAutoStart(bool enabled)
 {
 	s_replayAutoStart = enabled;
+	QSettings().setValue("replay/cache/autoStart", enabled);
 }
 
 // ------------------------------------------------------------
@@ -204,6 +207,7 @@ static bool loadReplayAutoHide()
 static void saveReplayAutoHide(bool enabled)
 {
 	s_replayAutoHide = enabled;
+	QSettings().setValue("replay/cache/autoHide", enabled);
 }
 
 // ------------------------------------------------------------
@@ -529,6 +533,20 @@ int RsInstantReplay::replaySeconds() { return loadReplaySeconds(); }
 bool RsInstantReplay::replayAutoStart() { return loadReplayAutoStart(); }
 bool RsInstantReplay::replayAutoHide() { return loadReplayAutoHide(); }
 bool RsInstantReplay::replayBufferActive() { return obs_frontend_replay_buffer_active(); }
+
+void RsInstantReplay::applyCachedReplayBufferConfiguration()
+{
+	QSettings settings;
+	s_replaySeconds = qBound(2, settings.value("replay/cache/seconds", 10).toInt(), 300);
+	s_replayAutoStart = settings.value("replay/cache/autoStart", false).toBool();
+	s_replayAutoHide = settings.value("replay/cache/autoHide", true).toBool();
+	s_hasReplayBufferConfiguration = settings.contains("replay/cache/autoStart");
+	if (!s_hasReplayBufferConfiguration)
+		return;
+	trySetReplayBufferSeconds(s_replaySeconds);
+	if (s_replayAutoStart && !obs_frontend_replay_buffer_active())
+		tryStartReplayBuffer();
+}
 
 void RsInstantReplay::configureReplayBuffer(int seconds, bool autoStart, bool autoHide)
 {

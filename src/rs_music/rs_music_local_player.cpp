@@ -100,6 +100,8 @@ QString RsMusicLocalPlayer::companionPath() const
 
 bool RsMusicLocalPlayer::ensureCompanion()
 {
+	if (m_shuttingDown)
+		return false;
 	if (m_socket->state() == QLocalSocket::ConnectedState)
 		return true;
 	m_socket->abort();
@@ -109,37 +111,7 @@ bool RsMusicLocalPlayer::ensureCompanion()
 		return true;
 	}
 
-	const QString path = companionPath();
-	if (path.isEmpty()) {
-		blog(LOG_ERROR, "[RS Music] Companion player executable was not found.");
-		emit playbackError("The bundled local music player is missing. Repair or reinstall the Suite.");
-		return false;
-	}
-	if (m_process->state() == QProcess::NotRunning) {
-		blog(LOG_INFO, "[RS Music] Starting companion player: %s", path.toUtf8().constData());
-		m_process->setProgram(path);
-		// A watchdog launch must never restore/foreground an already-running Hub.
-		// The Hub's single-instance path uses this marker to distinguish recovery
-		// from a deliberate launch by the user.
-		m_process->setArguments({"--watchdog"});
-		m_process->setWorkingDirectory(QFileInfo(path).absolutePath());
-		m_process->start();
-		if (!m_process->waitForStarted(3000)) {
-			blog(LOG_ERROR, "[RS Music] Companion failed to start: %s", m_process->errorString().toUtf8().constData());
-			return false;
-		}
-	}
-	// Give fast launches a short synchronous window, then let playFile queue the first track asynchronously.
-	for (int attempt = 0; attempt < 10; ++attempt) {
-		m_socket->abort();
-		m_socket->connectToServer("RearSilverStreamSuiteMusicPlayer");
-		if (m_socket->waitForConnected(150)) {
-			blog(LOG_INFO, "[RS Music] Connected to the companion player.");
-			return true;
-		}
-	}
-	blog(LOG_WARNING, "[RS Music] Companion is running but its control channel is not ready yet: %s",
-	     m_socket->errorString().toUtf8().constData());
+	blog(LOG_DEBUG, "[RS Music] Control Hub is not running; waiting for an independent launch.");
 	return false;
 }
 
@@ -317,20 +289,11 @@ void RsMusicLocalPlayer::shutdown()
 	if (m_shuttingDown)
 		return;
 	m_shuttingDown = true;
-	if (m_socket && m_socket->state() != QLocalSocket::ConnectedState) {
+	if (m_socket)
 		m_socket->abort();
-		m_socket->connectToServer("RearSilverStreamSuiteMusicPlayer");
-		m_socket->waitForConnected(500);
-	}
-	if (m_socket && m_socket->state() == QLocalSocket::ConnectedState) {
-		m_socket->write("SHUTDOWN\n");
-		m_socket->flush();
-		m_socket->waitForBytesWritten(500);
-	}
-	if (m_process && m_process->state() != QProcess::NotRunning && !m_process->waitForFinished(2000)) {
-		m_process->kill();
-		m_process->waitForFinished(1000);
-	}
+	m_pendingMetadata.clear();
+	m_pendingFile.clear();
+	m_pendingPlaybackCommand.clear();
 	m_currentFile.clear();
 }
 

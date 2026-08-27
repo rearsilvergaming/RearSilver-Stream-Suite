@@ -16,6 +16,7 @@
 #include <QScrollArea>
 #include <QSettings>
 #include "rs_music/rs_music_local_player.hpp"
+#include "rs_music/ui/rs_music_now_playing.hpp"
 
 #include <obs-frontend-api.h>
 #include "enhancements/rs_auto_start.hpp"
@@ -124,8 +125,11 @@ RsMainDock::RsMainDock(QWidget *parent) : QWidget(parent)
 	// construction and leave the status text permanently on Reconnecting.
 	createUi();
 	auto &localPlayer = RsMusicLocalPlayer::instance();
-	connect(&localPlayer, &RsMusicLocalPlayer::hubConnectionChanged, this,
-		&RsMainDock::updateStreamToolActionAvailability);
+	connect(&localPlayer, &RsMusicLocalPlayer::hubConnectionChanged, this, [this](bool connected) {
+		updateStreamToolActionAvailability(connected);
+		if (auto *nowPlaying = qobject_cast<RsMusicNowPlaying *>(m_pageMusicNowPlaying))
+			nowPlaying->setHubConnected(connected);
+	});
 	connect(&localPlayer, &RsMusicLocalPlayer::uiCommandSent, this, &RsMainDock::updateStreamToolState);
 	connect(m_musicController, &RsMusicController::quickTextConfigurationReady, this, [this](bool hasMessage) {
 		m_streamToolsQuickTextReady = true;
@@ -147,6 +151,8 @@ RsMainDock::RsMainDock(QWidget *parent) : QWidget(parent)
 		updateStreamToolActionButtons();
 	});
 	updateStreamToolActionAvailability(localPlayer.isHubConnected());
+	if (auto *nowPlaying = qobject_cast<RsMusicNowPlaying *>(m_pageMusicNowPlaying))
+		nowPlaying->setHubConnected(localPlayer.isHubConnected());
 	connect(m_musicController, &RsMusicController::twitchAccountStateReceived, this,
 		[this](const QString &account, bool connected, const QString &login) {
 			QLabel *dot = account == "bot" ? m_lblBotDot : m_lblStreamerDot;

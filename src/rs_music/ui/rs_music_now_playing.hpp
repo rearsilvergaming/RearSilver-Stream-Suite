@@ -15,6 +15,7 @@ class RsMusicNowPlaying : public QWidget {
 
 public:
 	explicit RsMusicNowPlaying(RsMusicState *state, RsMusicController *controller, QWidget *parent = nullptr);
+	void setHubConnected(bool connected);
 
 private slots:
 	void updateFromState();
@@ -32,6 +33,7 @@ private:
 	QLabel *m_lblTime = nullptr;
 	QSlider *m_progress = nullptr;
 	bool m_userSeeking = false;
+	bool m_hubConnected = false;
 	QString m_loadedArtworkUri;
 
 	QPushButton *m_btnPlay = nullptr;

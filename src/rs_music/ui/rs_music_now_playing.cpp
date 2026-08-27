@@ -142,6 +142,15 @@ RsMusicNowPlaying::RsMusicNowPlaying(RsMusicState *state, RsMusicController *con
 	updateFromState();
 }
 
+void RsMusicNowPlaying::setHubConnected(bool connected)
+{
+	m_hubConnected = connected;
+	for (QPushButton *button : {m_btnPrevious, m_btnPlay, m_btnPause, m_btnSkip, m_btnRestart, m_btnStop})
+		if (button)
+			button->setEnabled(connected && m_controller);
+	updateFromState();
+}
+
 void RsMusicNowPlaying::updateFromState()
 {
 	if (!m_state)
@@ -190,10 +199,10 @@ void RsMusicNowPlaying::updateFromState()
 		if (!m_userSeeking)
 			m_progress->setValue(position);
 		const bool canSeek = rsMusicProviderCapabilities(track.provider).canSeek;
-		m_progress->setEnabled(duration > 0);
+		m_progress->setEnabled(m_hubConnected && duration > 0 && canSeek);
 		m_progress->setAttribute(Qt::WA_TransparentForMouseEvents, !canSeek);
-		m_progress->setFocusPolicy(canSeek ? Qt::StrongFocus : Qt::NoFocus);
-		m_progress->setToolTip(canSeek ? "Drag to seek" : "Playback progress (seeking unavailable for this provider)");
+		m_progress->setFocusPolicy(m_hubConnected && canSeek ? Qt::StrongFocus : Qt::NoFocus);
+		m_progress->setToolTip(!m_hubConnected ? "Control Hub unavailable" : canSeek ? "Drag to seek" : "Playback progress (seeking unavailable for this provider)");
 		if (!m_userSeeking)
 			m_lblTime->setText(QString("%1 / %2")
 						   .arg(formatTime(position / 1000), formatTime(duration / 1000)));
@@ -212,4 +221,6 @@ void RsMusicNowPlaying::updateFromState()
 		m_lblStatus->setText("Status: Stopped");
 		break;
 	}
+	if (!m_hubConnected)
+		m_lblStatus->setText("Status: Control Hub unavailable");
 }

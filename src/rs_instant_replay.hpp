@@ -38,6 +38,7 @@ public:
 	static bool replayAutoStart();
 	static bool replayAutoHide();
 	static bool replayBufferActive();
+	static void applyCachedReplayBufferConfiguration();
 	static void configureReplayBuffer(int seconds, bool autoStart, bool autoHide);
 	static void startReplayBuffer();
 	static void stopReplayBuffer();

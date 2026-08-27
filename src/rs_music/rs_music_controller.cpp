@@ -26,6 +26,14 @@ extern "C" {
 #include <obs-frontend-api.h>
 }
 
+void rsPublishStreamOverlayPlacementState()
+{
+	const QByteArray quickText = QJsonDocument(RsStreamOverlayManager::quickTextStatus()).toJson(QJsonDocument::Compact);
+	RsMusicLocalPlayer::instance().sendUiCommand("QUICK_TEXT_STATE", QString::fromUtf8(quickText));
+	const QByteArray timer = QJsonDocument(RsStreamTimer::instance().status()).toJson(QJsonDocument::Compact);
+	RsMusicLocalPlayer::instance().sendUiCommand("TIMER_STATE", QString::fromUtf8(timer));
+}
+
 RsMusicController::RsMusicController(RsMusicState *state, QObject *parent) : QObject(parent), m_state(state)
 {
 	connect(&RsMusicLocalPlayer::instance(), &RsMusicLocalPlayer::hostCommandReceived, this, [this](const QString &command) {
@@ -78,6 +86,10 @@ RsMusicController::RsMusicController(RsMusicState *state, QObject *parent) : QOb
 			else if (key == "queueLimit") rsMusicSetMaxQueueTotal(value.toInt());
 			else if (key == "userLimit") rsMusicSetMaxPerUser(value.toInt());
 			else if (key == "maxTrackMinutes") rsMusicSetMaxTrackLengthSec(value.toInt() * 60);
+			else if (key == "overlayPlacementMode") {
+				RsStreamOverlayManager::setPlacementMode(value);
+				rsPublishStreamOverlayPlacementState();
+			}
 			else if (key.startsWith("command.")) {
 				const QStringList bits = key.split('.');
 				if (bits.size() == 3) QSettings("RearSilver", "RearSilver-Stream-Suite").setValue(
@@ -112,10 +124,10 @@ RsMusicController::RsMusicController(RsMusicState *state, QObject *parent) : QOb
 			else if (action == "timerSetup") publishTimerState(RsStreamTimer::instance().setup());
 			else if (action == "timerStatus") publishTimerState(RsStreamTimer::instance().status());
 			else if (action == "timerSoundTest") publishTimerState(RsStreamTimer::instance().testSound());
-			else if (action == "timerStart") publishTimerState(RsStreamTimer::instance().startTimer());
+			else if (action == "timerStart") { QJsonObject state=RsStreamTimer::instance().setup(); if (state.value("setupComplete").toBool()&&!state.value("conflict").toBool()) state=RsStreamTimer::instance().startTimer(); publishTimerState(state); }
 			else if (action == "timerPause") publishTimerState(RsStreamTimer::instance().pauseResume());
 			else if (action == "timerReset") publishTimerState(RsStreamTimer::instance().reset());
-			else if (action == "timerShow") publishTimerState(RsStreamTimer::instance().setVisible(true));
+			else if (action == "timerShow") { QJsonObject state=RsStreamTimer::instance().setup(); if (state.value("setupComplete").toBool()&&!state.value("conflict").toBool()) state=RsStreamTimer::instance().setVisible(true); publishTimerState(state); }
 			else if (action == "timerHide") publishTimerState(RsStreamTimer::instance().setVisible(false));
 			else if (action == "triggerReplay") hub_replay::RsInstantReplay::triggerReplay();
 			else if (action == "hideReplay") hub_replay::RsInstantReplay::hideReplaySource();

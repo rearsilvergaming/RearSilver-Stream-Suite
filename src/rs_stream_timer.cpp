@@ -64,7 +64,7 @@ QJsonObject RsStreamTimer::testSound()
 QJsonObject RsStreamTimer::startTimer()
 {
 	const QJsonObject source = RsStreamOverlayManager::timerStatus();
-	if (!source.value("sourceExists").toBool() || source.value("conflict").toBool()) return combinedStatus(source);
+	if (!source.value("setupComplete").toBool() || source.value("conflict").toBool()) return combinedStatus(source);
 	m_displaySeconds = m_configuration.value("mode").toString("countdown") == "stopwatch"
 		? 0 : qMax(0, m_configuration.value("seconds").toInt(300));
 	m_running = true;

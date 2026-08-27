@@ -15,12 +15,14 @@
 #include <QFileInfo>
 #include <QFont>
 #include <QFontDatabase>
+#include <QTimer>
 
 #include "rs_main_dock.hpp"
 #include "rs_entitlements.hpp"
 #include "rs_music/rs_music.hpp"
 #include "rs_music/rs_music_tls_probe.hpp"
 #include "rs_music/rs_music_pcm_source.hpp"
+#include "rs_music/rs_music_controller.hpp"
 #include "enhancements/rs_auto_start.hpp"
 #include "rs_instant_replay.hpp"
 #include "rs_stream_overlay_server.hpp"
@@ -82,6 +84,11 @@ static void frontend_event_callback(enum obs_frontend_event event, void *)
 		LOG_INFO_MSG("OBS exiting — shutting down RS Music");
 		rsMusicPcmStopOutput();
 		rsMusicShutdown();
+		break;
+
+	case OBS_FRONTEND_EVENT_SCENE_CHANGED:
+	case OBS_FRONTEND_EVENT_SCENE_COLLECTION_CHANGED:
+		QTimer::singleShot(0, []() { rsPublishStreamOverlayPlacementState(); });
 		break;
 
 	default:

@@ -1047,10 +1047,12 @@ static std::string g_botAuthState = "disconnected", g_botLogin, g_authSender = "
 static bool g_captureExists = false, g_playerAutoStart = false, g_hostPipeConnected = false,
 	g_replayBufferActive = false, g_replaySceneExists = false;
 static bool g_quickTextSourceExists = false, g_quickTextPlaced = false,
-	g_quickTextVisible = false, g_quickTextConflict = false;
+	g_quickTextVisible = false, g_quickTextConflict = false, g_quickTextSetupComplete = false;
 static std::string g_quickTextMessage = "Quick Text has not been added to OBS yet.";
-static bool g_timerSourceExists = false, g_timerPlaced = false, g_timerVisible = false, g_timerConflict = false;
+static bool g_timerSourceExists = false, g_timerPlaced = false, g_timerVisible = false, g_timerConflict = false,
+	g_timerSetupComplete = false;
 static std::string g_timerMessage = "Set up the managed Timer source before starting it.";
+static std::string g_overlayPlacementMode = "advanced";
 struct ReplayPreviewGeometry {
 	bool available = false;
 	int width = 0, height = 0, scalePercent = 0, titlePixelSize = 0;
@@ -1533,8 +1535,10 @@ static std::wstring replaySizeStep(){const auto step=musicSetting(L"tool.replayS
 static std::wstring replayBorderStep(){const auto step=musicSetting(L"tool.replayBorderStep",L"");if(step==L"none"||step==L"subtle"||step==L"medium"||step==L"bold"||step==L"statement")return step;if(step==L"thin")return L"subtle";if(step==L"thick")return L"bold";const int value=_wtoi(musicSetting(L"tool.replayBorderWidth",L"8").c_str());return value<2?L"none":value<6?L"subtle":value<10?L"medium":L"bold";}
 static std::wstring replayRadiusStep(){const auto step=musicSetting(L"tool.replayRadiusStep",L"");if(step==L"square"||step==L"subtle"||step==L"rounded"||step==L"soft"||step==L"dramatic")return step;const int value=_wtoi(musicSetting(L"tool.replayRadius",L"20").c_str());return value<5?L"square":value<15?L"subtle":value<26?L"rounded":L"soft";}
 static std::wstring replayFontWeight(){const auto weight=musicSetting(L"tool.replayFontWeight",L"bold");return weight==L"regular"||weight==L"medium"||weight==L"semibold"||weight==L"bold"||weight==L"extrabold"?weight:L"bold";}
+static std::wstring overlayPlacementMode(){const auto mode=musicSetting(L"overlayPlacementMode",L"advanced");return mode==L"simple"?L"simple":L"advanced";}
 static std::string replayConfigJson(bool frame){CefRefPtr<CefDictionaryValue>d=CefDictionaryValue::Create();if(frame){d->SetString("title",wideToUtf8(musicSetting(L"tool.replayTitle",L"INSTANT REPLAY")));d->SetString("font",wideToUtf8(normalisedMusicFontSetting(L"tool.replayFont",L"Sora")));d->SetString("fontWeight",wideToUtf8(replayFontWeight()));d->SetString("alignment",wideToUtf8(musicSetting(L"tool.replayAlignment",L"left")));d->SetString("background",wideToUtf8(musicSetting(L"tool.replayBackground",L"#0b0f14")));d->SetString("accent",wideToUtf8(musicSetting(L"tool.replayAccent",L"#00d4ff")));d->SetString("textColour",wideToUtf8(musicSetting(L"tool.replayTextColour",L"#e6e8eb")));d->SetInt("opacity",_wtoi(musicSetting(L"tool.replayOpacity",L"92").c_str()));d->SetString("sizeStep",wideToUtf8(replaySizeStep()));d->SetString("borderStep",wideToUtf8(replayBorderStep()));d->SetString("radiusStep",wideToUtf8(replayRadiusStep()));}else{d->SetInt("seconds",_wtoi(musicSetting(L"tool.replaySeconds",L"10").c_str()));d->SetBool("autoStart",musicBool(L"tool.replayAutoStart",false));d->SetBool("autoHide",musicBool(L"tool.replayAutoHide",true));}CefRefPtr<CefValue>root=CefValue::Create();root->SetDictionary(d);return CefWriteJSON(root,JSON_WRITER_DEFAULT).ToString();}
 static void queueReplayConfiguration(){std::lock_guard<std::mutex>lock(g_hostEventMutex);g_hostEvents.push_back("HOST\tTOOL\treplayBufferConfig\t"+replayConfigJson(false)+"\n");g_hostEvents.push_back("HOST\tTOOL\treplayFrameConfig\t"+replayConfigJson(true)+"\n");g_hostEvents.push_back("HOST\tTOOL\treplayStatus\t\"\"\n");}
+static void queueOverlayPlacementMode(){std::lock_guard<std::mutex>lock(g_hostEventMutex);g_hostEvents.push_back("HOST\tSETTING\toverlayPlacementMode\t"+wideToUtf8(overlayPlacementMode())+"\n");}
 
 static std::wstring normalisedProgramPath(std::wstring path)
 {
@@ -1770,7 +1774,7 @@ public:
 								}
 								if(object->GetString("page").ToString()=="settings"){
 									const std::string action=object->GetString("action").ToString();
-									if(action=="set"){const std::string rawKey=object->GetString("key").ToString();const std::wstring key=utf8ToWide(rawKey);std::wstring value;if(object->GetType("value")==VTYPE_BOOL)value=object->GetBool("value")?L"true":L"false";else if(object->GetType("value")==VTYPE_INT)value=std::to_wstring(object->GetInt("value"));else value=utf8ToWide(object->GetString("value").ToString());const wchar_t *storedKey=key.c_str();if(rawKey=="queueLimit")storedKey=L"maxQueueTotal";else if(rawKey=="userLimit")storedKey=L"maxPerUser";else if(rawKey=="maxTrackMinutes")storedKey=L"maxTrackLengthMinutes";setMusicSetting(storedKey,value);if(rawKey=="textOutputEnabled"&&(value==L"true"||value==L"1"))ensureTextOutputFile();if(rawKey=="nonRequestLabel"){g_hub.setNonRequestLabel(wideToUtf8(value));writeTextOutput(g_hub.current());saveHubState();}if(rawKey=="requestsEnabled"||rawKey=="queueLimit"||rawKey=="userLimit"||rawKey=="maxTrackMinutes"||rawKey.rfind("command.",0)==0){std::lock_guard<std::mutex>lock(g_hostEventMutex);g_hostEvents.push_back("HOST\tSETTING\t"+rawKey+"\t"+wideToUtf8(value)+"\n");}}
+									if(action=="set"){const std::string rawKey=object->GetString("key").ToString();const std::wstring key=utf8ToWide(rawKey);std::wstring value;if(object->GetType("value")==VTYPE_BOOL)value=object->GetBool("value")?L"true":L"false";else if(object->GetType("value")==VTYPE_INT)value=std::to_wstring(object->GetInt("value"));else value=utf8ToWide(object->GetString("value").ToString());const wchar_t *storedKey=key.c_str();if(rawKey=="queueLimit")storedKey=L"maxQueueTotal";else if(rawKey=="userLimit")storedKey=L"maxPerUser";else if(rawKey=="maxTrackMinutes")storedKey=L"maxTrackLengthMinutes";setMusicSetting(storedKey,value);if(rawKey=="textOutputEnabled"&&(value==L"true"||value==L"1"))ensureTextOutputFile();if(rawKey=="nonRequestLabel"){g_hub.setNonRequestLabel(wideToUtf8(value));writeTextOutput(g_hub.current());saveHubState();}if(rawKey=="requestsEnabled"||rawKey=="queueLimit"||rawKey=="userLimit"||rawKey=="maxTrackMinutes"||rawKey=="overlayPlacementMode"||rawKey.rfind("command.",0)==0){std::lock_guard<std::mutex>lock(g_hostEventMutex);g_hostEvents.push_back("HOST\tSETTING\t"+rawKey+"\t"+wideToUtf8(value)+"\n");}}
 									else if(action=="createCapture"){std::lock_guard<std::mutex>lock(g_hostEventMutex);g_hostEvents.push_back("HOST\tCREATE_CAPTURE\n");}
 									else if(action=="autostart"){std::lock_guard<std::mutex>lock(g_hostEventMutex);g_hostEvents.push_back(std::string("HOST\tAUTOSTART\t")+(object->GetBool("value")?"true":"false")+"\n");}
 									else if(action=="setupStatus"){std::lock_guard<std::mutex>lock(g_hostEventMutex);g_hostEvents.push_back("HOST\tSETUP_STATUS\n");}
@@ -1965,7 +1969,9 @@ private:
 		d->SetBool("quickTextPlaced",g_quickTextPlaced);
 		d->SetBool("quickTextVisible",g_quickTextVisible);
 		d->SetBool("quickTextConflict",g_quickTextConflict);
+		d->SetBool("quickTextSetupComplete",g_quickTextSetupComplete);
 		d->SetString("quickTextMessage",g_quickTextMessage);
+		d->SetString("overlayPlacementMode",g_overlayPlacementMode);
 		d->SetString("timerLabel",wideToUtf8(musicSetting(L"tool.timerLabel",L"Timer")));
 		d->SetString("timerMode",wideToUtf8(musicSetting(L"tool.timerMode",L"countdown")));
 		d->SetInt("timerSeconds",_wtoi(musicSetting(L"tool.timerSeconds",L"300").c_str()));
@@ -1987,6 +1993,7 @@ private:
 		d->SetBool("timerPlaced",g_timerPlaced);
 		d->SetBool("timerVisible",g_timerVisible);
 		d->SetBool("timerConflict",g_timerConflict);
+		d->SetBool("timerSetupComplete",g_timerSetupComplete);
 		d->SetString("timerMessage",g_timerMessage);
 		d->SetInt("replaySeconds",_wtoi(musicSetting(L"tool.replaySeconds",L"10").c_str()));
 		d->SetBool("replayAutoStart",musicBool(L"tool.replayAutoStart",false));
@@ -2028,6 +2035,7 @@ private:
 		applyArray("quickPresets",L"tool.quickPresets",L"[\"BRB\",\"Coffee Break\",\"Back Soon\"]");
 		applyArray("programs",L"tool.programs",L"[]");
 		d->SetString("status",g_hostPipeConnected?"Connected to OBS. Stream Tool actions are ready.":"OBS is not connected. Settings are saved; live actions become available when OBS opens.");
+		d->SetBool("ipcConnected",g_hostPipeConnected);
 		CefRefPtr<CefValue>root=CefValue::Create();root->SetDictionary(d);m_webView->ExecuteScript((L"window.rsApplyTools("+utf8ToWide(CefWriteJSON(root,JSON_WRITER_DEFAULT).ToString())+L")").c_str(),nullptr);
 	}
 	void sendLibraryConfig() {
@@ -3025,7 +3033,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int)
 			if(br!=lastChatBotRevision||streamerChanged||lastChatSender!=g_authSender){lastChatBotRevision=br;lastChatSender=g_authSender;g_twitchSender.disconnect();if(streamer.connected&&bot.connected&&g_authSender=="bot")g_twitchSender.connect(bot.login,g_botTwitch.accessToken(),streamer.login,streamer.userId);}
 		};
 		syncChat();
-		if (!connected) { connected = ConnectNamedPipe(pipe, nullptr) || GetLastError() == ERROR_PIPE_CONNECTED; g_hostPipeConnected=connected; if (connected) { send(pipe, player.status()); queueReplayConfiguration(); lastStreamerRevision=lastBotRevision=0; } }
+		if (!connected) { connected = ConnectNamedPipe(pipe, nullptr) || GetLastError() == ERROR_PIPE_CONNECTED; g_hostPipeConnected=connected; if (connected) { send(pipe, player.status()); queueOverlayPlacementMode(); queueReplayConfiguration(); lastStreamerRevision=lastBotRevision=0; } }
 		publishTwitch("streamer",g_streamerTwitch,lastStreamerRevision);publishTwitch("bot",g_botTwitch,lastBotRevision);
 		if (connected) {
 			{ std::lock_guard<std::mutex> lock(g_hostEventMutex); for(const auto &event:g_hostEvents)send(pipe,event); g_hostEvents.clear(); }
@@ -3040,9 +3048,9 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int)
 					} else if (line.rfind("REPLAY_STATE\t", 0) == 0) {
 						CefRefPtr<CefValue>state=CefParseJSON(line.substr(13),JSON_PARSER_RFC);if(state&&state->GetType()==VTYPE_DICTIONARY){auto dictionary=state->GetDictionary();g_replayBufferActive=dictionary->GetBool("bufferActive");g_replaySceneExists=dictionary->GetBool("sceneExists");if(dictionary->HasKey("geometry")){auto geometry=dictionary->GetDictionary("geometry");if(geometry){g_replayPreviewGeometry.width=geometry->GetInt("width");g_replayPreviewGeometry.height=geometry->GetInt("height");g_replayPreviewGeometry.scalePercent=geometry->GetInt("scalePercent");g_replayPreviewGeometry.titlePixelSize=geometry->GetInt("titlePixelSize");g_replayPreviewGeometry.border=geometry->GetInt("border");g_replayPreviewGeometry.outerRadius=geometry->GetInt("outerRadius");g_replayPreviewGeometry.innerRadius=geometry->GetInt("innerRadius");g_replayPreviewGeometry.apertureX=geometry->GetInt("apertureX");g_replayPreviewGeometry.apertureY=geometry->GetInt("apertureY");g_replayPreviewGeometry.apertureWidth=geometry->GetInt("apertureWidth");g_replayPreviewGeometry.apertureHeight=geometry->GetInt("apertureHeight");g_replayPreviewGeometry.titleX=geometry->GetInt("titleX");g_replayPreviewGeometry.titleY=geometry->GetInt("titleY");g_replayPreviewGeometry.titleWidth=geometry->GetInt("titleWidth");g_replayPreviewGeometry.titleHeight=geometry->GetInt("titleHeight");g_replayPreviewGeometry.available=g_replayPreviewGeometry.width>0&&g_replayPreviewGeometry.height>0;}}const bool setupResponse=g_replaySetupPending.exchange(false);if(setupResponse&&g_replaySceneExists)setMusicSetting(L"tool.replaySetupCompleted",L"true");if(g_overlayDesigner)g_overlayDesigner->refresh();}
 					} else if (line.rfind("QUICK_TEXT_STATE\t", 0) == 0) {
-						CefRefPtr<CefValue>state=CefParseJSON(line.substr(17),JSON_PARSER_RFC);if(state&&state->GetType()==VTYPE_DICTIONARY){auto dictionary=state->GetDictionary();g_quickTextSourceExists=dictionary->GetBool("sourceExists");g_quickTextPlaced=dictionary->GetBool("placedInCurrentScene");g_quickTextVisible=dictionary->GetBool("visibleInCurrentScene");g_quickTextConflict=dictionary->GetBool("conflict");g_quickTextMessage=dictionary->GetString("message").ToString();if(g_overlayDesigner)g_overlayDesigner->refresh();}
+						CefRefPtr<CefValue>state=CefParseJSON(line.substr(17),JSON_PARSER_RFC);if(state&&state->GetType()==VTYPE_DICTIONARY){auto dictionary=state->GetDictionary();g_quickTextSourceExists=dictionary->GetBool("sourceExists");g_quickTextPlaced=dictionary->GetBool("placedInCurrentScene");g_quickTextVisible=dictionary->GetBool("visibleInCurrentScene");g_quickTextConflict=dictionary->GetBool("conflict");g_quickTextSetupComplete=dictionary->GetBool("setupComplete");if(dictionary->HasKey("placementMode"))g_overlayPlacementMode=dictionary->GetString("placementMode").ToString();g_quickTextMessage=dictionary->GetString("message").ToString();if(g_overlayDesigner)g_overlayDesigner->refresh();}
 					} else if (line.rfind("TIMER_STATE\t", 0) == 0) {
-						CefRefPtr<CefValue>state=CefParseJSON(line.substr(12),JSON_PARSER_RFC);if(state&&state->GetType()==VTYPE_DICTIONARY){auto dictionary=state->GetDictionary();g_timerSourceExists=dictionary->GetBool("sourceExists");g_timerPlaced=dictionary->GetBool("placedInCurrentScene");g_timerVisible=dictionary->GetBool("visibleInCurrentScene");g_timerConflict=dictionary->GetBool("conflict");g_timerMessage=dictionary->GetString("message").ToString();if(g_overlayDesigner)g_overlayDesigner->refresh();}
+						CefRefPtr<CefValue>state=CefParseJSON(line.substr(12),JSON_PARSER_RFC);if(state&&state->GetType()==VTYPE_DICTIONARY){auto dictionary=state->GetDictionary();g_timerSourceExists=dictionary->GetBool("sourceExists");g_timerPlaced=dictionary->GetBool("placedInCurrentScene");g_timerVisible=dictionary->GetBool("visibleInCurrentScene");g_timerConflict=dictionary->GetBool("conflict");g_timerSetupComplete=dictionary->GetBool("setupComplete");if(dictionary->HasKey("placementMode"))g_overlayPlacementMode=dictionary->GetString("placementMode").ToString();g_timerMessage=dictionary->GetString("message").ToString();if(g_overlayDesigner)g_overlayDesigner->refresh();}
 					} else if (line.rfind("HUB_IMPORT\t", 0) == 0) {
 						const std::string url = line.substr(11);
 						std::thread([window, url] { auto *result = new HubPlaylistResult(resolveHubPlaylist(url));

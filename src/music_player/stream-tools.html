@@ -8,6 +8,7 @@
 </head>
 <body>
 <p class="intro">The Control Hub owns Stream Tools. Styling changes update live in OBS; action buttons are reserved for actions.</p>
+<div id="overlayPlacementMode" class="status">Overlay placement mode: checking…</div>
 <nav class="tool-tabs" role="tablist" aria-label="Stream Tools">
 <button type="button" class="tool-tab active" role="tab" aria-selected="true" data-tool-tab="apps">App Manager</button>
 <button type="button" class="tool-tab" role="tab" aria-selected="false" data-tool-tab="browser">Browser Refresh</button>
@@ -70,7 +71,7 @@
 </section>
 <section class="card wide tool-panel" data-tool-panel="quick-text">
 <h2>Quick Text</h2>
-<p>Font, colour and size update live when the source exists. “Show text” creates or repairs it and makes it visible.</p>
+<p>Enter a message or choose a preset. The source is created automatically when shown.</p>
 <label>Message</label>
 <input id="quickText" placeholder="Type the message to show on stream">
 <div id="quickPreview" class="preview">Preview</div>
@@ -97,7 +98,7 @@
 </div>
 </div>
 <div class="row">
-<button data-action="quickTextShow" class="primary">Show text</button>
+<button data-action="quickTextShow" class="primary" disabled>Show message</button>
 <button id="savePreset">Save as preset</button>
 <button data-action="quickTextClear" class="danger">Clear</button>
 </div>
@@ -194,7 +195,6 @@
 </div>
 <div id="timerSoundStatus" class="status">Choose an optional sound played through the Timer source when the countdown reaches zero.</div>
 <div class="row">
-<button id="timerSetup">Set up timer</button>
 <button id="timerStart" class="primary" disabled>Start</button>
 <button id="timerPause" disabled>Pause / resume</button>
 <button id="timerReset" disabled>Reset</button>
@@ -210,14 +210,16 @@
 <script>(()=>{const $=id=>document.getElementById(id),post=(action,value='')=>parent.rsNativePost(JSON.stringify({page:'tools',action,value}));let presetList=['BRB','Coffee Break','Back Soon'],programList=[],ready=false,timerDebounce=0,quickDebounce=0;const fonts=['Sora','Arial','Segoe UI','Calibri','Verdana','Tahoma','Trebuchet MS','Georgia','Times New Roman','Impact','Comic Sans MS'];fonts.forEach(f=>{const o=document.createElement('option');o.textContent=f;$('quickFont').appendChild(o)});const validHex=x=>/^#[0-9a-f]{6}$/i.test(x);function pair(a,b){$(a).oninput=()=>{$(b).value=$(a).value;changed(a)};$(b).oninput=()=>{if(validHex($(b).value)){$(a).value=$(b).value;changed(a)}}}const quick=()=>({text:$('quickText').value,size:+$('quickSize').value,colour:$('quickColour').value,font:$('quickFont').value});const timer=()=>({label:$('timerLabel').value,mode:$('timerMode').value,seconds:(+$('timerMinutes').value||0)*60+(+$('timerSecondsPart').value||0)});const timerStyle=()=>({textColour:$('timerTextColour').value,labelSize:+$('timerLabelSize').value,timeSize:+$('timerTimeSize').value,shadow:$('timerShadow').checked,background:$('timerBackground').checked,backgroundColour:$('timerBgColour').value,backgroundOpacity:+$('timerBgOpacity').value,backgroundRadius:+$('timerBgRadius').value,hideWhenFinished:$('timerHideFinished').checked});function changed(id){preview();if(!ready)return;if(id.startsWith('quick')){clearTimeout(quickDebounce);quickDebounce=setTimeout(()=>post('dropText',quick()),120)}else{clearTimeout(timerDebounce);timerDebounce=setTimeout(()=>{post('timerEnsure',timer());post('timerStyle',timerStyle())},120)}}function preview(){const p=$('quickPreview'),s=+($('quickSize').value||120);p.textContent=$('quickText').value||'Preview';p.style.color=$('quickColour').value;p.style.fontFamily=$('quickFont').value;p.style.fontSize=Math.max(10,Math.min(68,s*.4))+'px'}function renderPresets(){$('presets').innerHTML='';presetList.forEach((x,i)=>{const b=document.createElement('button');b.textContent=x;b.onclick=()=>{$('quickText').value=x;preview();post('dropText',quick())};b.oncontextmenu=e=>{e.preventDefault();presetList.splice(i,1);post('saveQuickPresets',presetList);renderPresets()};$('presets').appendChild(b)})}function renderPrograms(){$('programs').innerHTML='';programList.forEach((x,i)=>{const r=document.createElement('div');r.className='program';const s=document.createElement('span');s.textContent=x;s.title=x;r.appendChild(s);['Launch','Close','Remove'].forEach((n,j)=>{const b=document.createElement('button');b.className='small'+(j===2?' danger':'');b.textContent=n;b.onclick=()=>{if(j===2){programList.splice(i,1);post('removeProgram',x);post('savePrograms',programList);renderPrograms()}else post(j===0?'launchProgram':'closeProgram',x)};r.appendChild(b)});$('programs').appendChild(r)})}document.querySelectorAll('[data-action]').forEach(b=>b.onclick=()=>{const a=b.dataset.action;let v='';if(a==='dropText')v=quick();if(a==='timerEnsure')v=timer();post(a,v)});$('addProgram').onclick=()=>{const x=$('programPath').value.trim();if(!x)return;if(!programList.some(p=>p.toLowerCase()===x.toLowerCase())){programList.push(x);post('addProgram',x);post('savePrograms',programList);renderPrograms()}$('programPath').value=''};$('savePreset').onclick=()=>{const x=$('quickText').value.trim();if(x&&!presetList.includes(x)){presetList.push(x);post('saveQuickPresets',presetList);renderPresets()}};pair('quickColour','quickColourHex');pair('timerTextColour','timerTextHex');pair('timerBgColour','timerBgHex');document.querySelectorAll('#quickText,#quickSize,#quickFont,#timerLabel,#timerMode,#timerMinutes,#timerSecondsPart,#timerLabelSize,#timerTimeSize,#timerBgOpacity,#timerBgRadius,#timerShadow,#timerBackground,#timerHideFinished').forEach(e=>{e.oninput=()=>changed(e.id);e.onchange=()=>changed(e.id)});window.rsApplyTools=c=>{ready=false;$('quickSize').value=c.quickSize||120;$('quickColour').value=$('quickColourHex').value=c.quickColour||'#ffffff';$('quickFont').value=c.quickFont||'Sora';$('timerLabel').value=c.timerLabel||'Timer';$('timerMode').value=c.timerMode||'countdown';const sec=c.timerSeconds??300;$('timerMinutes').value=Math.floor(sec/60);$('timerSecondsPart').value=sec%60;$('timerTextColour').value=$('timerTextHex').value=c.timerTextColour||'#ffffff';$('timerLabelSize').value=c.timerLabelSize||28;$('timerTimeSize').value=c.timerTimeSize||84;$('timerShadow').checked=c.timerShadow!==false;$('timerBackground').checked=!!c.timerBackground;$('timerBgColour').value=$('timerBgHex').value=c.timerBgColour||'#000000';$('timerBgOpacity').value=c.timerBgOpacity??70;$('timerBgRadius').value=c.timerBgRadius??48;$('timerHideFinished').checked=!!c.timerHideFinished;presetList=Array.isArray(c.quickPresets)?c.quickPresets:presetList;programList=Array.isArray(c.programs)?c.programs:programList;$('browserStatus').textContent=c.status||'Ready.';preview();renderPresets();renderPrograms();ready=true};preview();renderPresets();parent.rsNativePost('tools-ready')})();</script>
 <script>
 (()=>{const byId=id=>document.getElementById(id),post=(action,value='')=>parent.rsNativePost(JSON.stringify({page:'tools',action,value}));
+document.querySelectorAll('[data-tool-tab]').forEach(tab=>tab.addEventListener('click',()=>{if(tab.dataset.toolTab==='quick-text')post('quickTextStatus');else if(tab.dataset.toolTab==='timer')post('timerStatus')}));
 const quick=()=>({text:byId('quickText').value,size:+byId('quickSize').value,colour:byId('quickColour').value,font:byId('quickFont').value,fontWeight:+byId('quickFontWeight').value});
 let quickUpdate=0,requestedQuickStatus=false;
-const previewQuick=()=>{const preview=byId('quickPreview'),size=+(byId('quickSize').value||120);preview.textContent=byId('quickText').value||'Preview';preview.style.color=byId('quickColour').value;preview.style.fontFamily=byId('quickFont').value;preview.style.fontWeight=byId('quickFontWeight').value;preview.style.fontSize=Math.max(10,Math.min(68,size*.4))+'px'};
+const quickShowButton=document.querySelector('[data-action="quickTextShow"]');
+const previewQuick=()=>{const preview=byId('quickPreview'),size=+(byId('quickSize').value||120),hasMessage=byId('quickText').value.trim().length>0;preview.textContent=hasMessage?byId('quickText').value:'Preview';quickShowButton.disabled=!hasMessage;preview.style.color=byId('quickColour').value;preview.style.fontFamily=byId('quickFont').value;preview.style.fontWeight=byId('quickFontWeight').value;preview.style.fontSize=Math.max(10,Math.min(68,size*.4))+'px'};
 const configureQuick=()=>{previewQuick();clearTimeout(quickUpdate);quickUpdate=setTimeout(()=>post('quickTextConfig',quick()),120)};
 ['quickText','quickSize','quickFont','quickFontWeight'].forEach(id=>{byId(id).oninput=configureQuick;byId(id).onchange=configureQuick});
 byId('quickColour').oninput=()=>{byId('quickColourHex').value=byId('quickColour').value;configureQuick()};
 byId('quickColourHex').oninput=()=>{if(/^#[0-9a-f]{6}$/i.test(byId('quickColourHex').value)){byId('quickColour').value=byId('quickColourHex').value;configureQuick()}};
-document.querySelector('[data-action="quickTextShow"]').onclick=()=>post('quickTextShow',quick());
+quickShowButton.onclick=()=>{if(byId('quickText').value.trim())post('quickTextShow',quick())};
 document.querySelector('[data-action="quickTextClear"]').onclick=()=>{byId('quickText').value='';previewQuick();post('quickTextClear')};
 byId('presets').addEventListener('click',event=>{const button=event.target.closest('button');if(!button)return;event.preventDefault();event.stopImmediatePropagation();byId('quickText').value=button.textContent;previewQuick();post('quickTextShow',quick())},true);
 const applyTools=window.rsApplyTools;
@@ -300,9 +302,27 @@ const changed=()=>{preview();if(!timerReady)return;clearTimeout(updateTimer);upd
 ['timerLabel','timerMode','timerMinutes','timerSecondsPart','timerFont','timerLabelWeight','timerTimeWeight','timerTextColour','timerLabelSize','timerTimeSize','timerBgColour','timerBgOpacity','timerBgRadius','timerShadow','timerBackground','timerHideFinished','timerLinger'].forEach(id=>{byId(id).oninput=changed;byId(id).onchange=changed});
 ['timerTextHex','timerBgHex'].forEach(id=>{const applyHex=()=>{if(/^#[0-9a-f]{6}$/i.test(byId(id).value)){const colour=id==='timerTextHex'?'timerTextColour':'timerBgColour';byId(colour).value=byId(id).value;changed()}};byId(id).oninput=applyHex;byId(id).onchange=applyHex;byId(id).onblur=applyHex;byId(id).onkeydown=event=>{if(event.key==='Enter'){event.preventDefault();applyHex();byId(id).blur()}}});
 byId('timerChooseSound').onclick=()=>post('pickTimerSound');byId('timerTestSound').onclick=()=>{post('timerConfig',config());post('timerSoundTest');byId('timerSoundStatus').textContent='Test requested through the Timer source.';byId('timerSoundStatus').style.color=''};byId('timerClearSound').onclick=()=>{byId('timerSoundPath').value='';byId('timerSoundStatus').textContent='No completion sound selected.';changed()};window.rsSelectedTimerSound=path=>{byId('timerSoundPath').value=path||'';byId('timerSoundStatus').textContent=path?'Completion sound selected. Use Test sound to verify it.':'No completion sound selected.';byId('timerSoundStatus').style.color='';changed()};
-byId('timerSetup').onclick=()=>{post('timerConfig',config());post('timerSetup')};byId('timerStart').onclick=()=>{post('timerConfig',config());post('timerStart')};byId('timerPause').onclick=()=>post('timerPause');byId('timerReset').onclick=()=>post('timerReset');byId('timerShow').onclick=()=>post('timerShow');byId('timerHide').onclick=()=>post('timerHide');
-window.rsApplyTimerState=state=>{const usable=!!state.sourceExists&&!state.conflict;['timerStart','timerPause','timerReset','timerShow','timerHide','timerTestSound'].forEach(id=>byId(id).disabled=!usable);byId('timerSetup').textContent=usable?'Repair timer':'Set up timer';byId('timerStatus').textContent=state.message||'Set up the managed Timer source before starting it.';byId('timerStatus').style.color=state.conflict?'#ff9caa':''};
-const apply=window.rsApplyTools;window.rsApplyTools=c=>{apply(c);const select=byId('timerFont'),selected=c.timerFont||'Segoe UI',families=Array.isArray(c.fontFamilies)?c.fontFamilies:[];select.innerHTML='';families.forEach(font=>{const option=document.createElement('option');option.value=option.textContent=font;select.appendChild(option)});if(!families.some(font=>font.toLowerCase()===selected.toLowerCase())){const option=document.createElement('option');option.value=option.textContent=selected;select.insertBefore(option,select.firstChild)}select.value=selected;byId('timerLabelWeight').value=String(c.timerLabelWeight||600);byId('timerTimeWeight').value=String(c.timerTimeWeight||800);byId('timerLinger').value=String(c.timerLingerSeconds??3);byId('timerSoundPath').value=c.timerSoundPath||'';timerReady=true;preview();window.rsApplyTimerState({sourceExists:c.timerSourceExists,placedInCurrentScene:c.timerPlaced,visibleInCurrentScene:c.timerVisible,conflict:c.timerConflict,message:c.timerMessage});if(!timerInitialised){timerInitialised=true;post('timerConfig',config());post('timerStatus')}};preview()})();
+byId('timerStart').onclick=()=>{post('timerConfig',config());post('timerStart')};byId('timerPause').onclick=()=>post('timerPause');byId('timerReset').onclick=()=>post('timerReset');byId('timerShow').onclick=()=>post('timerShow');byId('timerHide').onclick=()=>post('timerHide');
+window.rsApplyTimerState=state=>{const setup=!!state.setupComplete&&!state.conflict,canProvision=timerObsConnected&&!state.conflict;byId('timerStart').disabled=!canProvision;byId('timerShow').disabled=!canProvision;['timerPause','timerReset','timerHide','timerTestSound'].forEach(id=>byId(id).disabled=!setup);byId('timerStatus').textContent=state.message||'Start or Show creates the Timer automatically in this scene.';byId('timerStatus').style.color=state.conflict?'#ff9caa':''};
+let timerObsConnected=false;const apply=window.rsApplyTools;window.rsApplyTools=c=>{apply(c);timerObsConnected=!!c.ipcConnected;byId('overlayPlacementMode').textContent='Overlay placement mode: '+(c.overlayPlacementMode==='simple'?'Simple':'Advanced');const select=byId('timerFont'),selected=c.timerFont||'Segoe UI',families=Array.isArray(c.fontFamilies)?c.fontFamilies:[];select.innerHTML='';families.forEach(font=>{const option=document.createElement('option');option.value=option.textContent=font;select.appendChild(option)});if(!families.some(font=>font.toLowerCase()===selected.toLowerCase())){const option=document.createElement('option');option.value=option.textContent=selected;select.insertBefore(option,select.firstChild)}select.value=selected;byId('timerLabelWeight').value=String(c.timerLabelWeight||600);byId('timerTimeWeight').value=String(c.timerTimeWeight||800);byId('timerLinger').value=String(c.timerLingerSeconds??3);byId('timerSoundPath').value=c.timerSoundPath||'';timerReady=true;preview();window.rsApplyTimerState({sourceExists:c.timerSourceExists,setupComplete:c.timerSetupComplete,placedInCurrentScene:c.timerPlaced,visibleInCurrentScene:c.timerVisible,conflict:c.timerConflict,message:c.timerMessage});if(!timerInitialised){timerInitialised=true;post('timerConfig',config());post('timerStatus')}};preview()})();
+</script>
+<script>
+(()=>{
+const presets=document.getElementById('presets');
+let obsConnected=false;
+const updatePresetAvailability=()=>presets.querySelectorAll('button').forEach(button=>button.disabled=!obsConnected);
+const applyTools=window.rsApplyTools;
+window.rsApplyTools=config=>{
+applyTools(config);
+obsConnected=!!config.ipcConnected;
+updatePresetAvailability();
+if(!obsConnected){
+document.getElementById('quickTextStatus').textContent='OBS is not connected. Quick Text settings can still be edited.';
+document.getElementById('timerStatus').textContent='OBS is not connected. Timer settings can still be edited.';
+}
+};
+new MutationObserver(updatePresetAvailability).observe(presets,{childList:true});
+})();
 </script>
 </body>
 </html>

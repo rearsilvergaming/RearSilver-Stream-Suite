@@ -26,6 +26,8 @@
 class RsMusicState;
 class RsMusicYouTubeResolver;
 
+void rsPublishStreamOverlayPlacementState();
+
 class RsMusicController : public QObject {
 	Q_OBJECT
 

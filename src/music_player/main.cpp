@@ -2081,6 +2081,8 @@ private:
 		d->SetInt("setupStep", std::clamp(_wtoi(musicSetting(L"suiteSettings.setupStep", L"0").c_str()), 0, 4));
 		d->SetInt("setupSchemaVersion", std::max(1, _wtoi(musicSetting(L"suiteSettings.setupSchemaVersion", L"1").c_str())));
 		d->SetBool("openHubWithObs", musicBool(L"openHubWithObs", false));
+		d->SetString("overlayPlacementMode", wideToUtf8(overlayPlacementMode()));
+		d->SetBool("ipcConnected", g_hostPipeConnected);
 		CefRefPtr<CefValue> programs = CefParseJSON(wideToUtf8(musicSetting(L"tool.programs", L"[]")), JSON_PARSER_RFC);
 		if (programs && programs->GetType() == VTYPE_LIST)
 			d->SetList("programs", programs->GetList());

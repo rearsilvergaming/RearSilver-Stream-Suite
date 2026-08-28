@@ -33,6 +33,8 @@ void rsPublishStreamOverlayPlacementState()
 	RsMusicLocalPlayer::instance().sendUiCommand("TIMER_STATE", QString::fromUtf8(timer));
 	const QByteArray replay = QJsonDocument(hub_replay::RsInstantReplay::replayState()).toJson(QJsonDocument::Compact);
 	RsMusicLocalPlayer::instance().sendUiCommand("REPLAY_STATE", QString::fromUtf8(replay));
+	const QByteArray musicOverlay = QJsonDocument(RsStreamOverlayManager::musicOverlayStatus()).toJson(QJsonDocument::Compact);
+	RsMusicLocalPlayer::instance().sendUiCommand("MUSIC_OVERLAY_STATE", QString::fromUtf8(musicOverlay));
 }
 
 static void publishReplayState(const QJsonObject &state)
@@ -56,6 +58,12 @@ static void publishQuickTextState(const QJsonObject &state)
 {
 	const QByteArray json = QJsonDocument(state).toJson(QJsonDocument::Compact);
 	RsMusicLocalPlayer::instance().sendUiCommand("QUICK_TEXT_STATE", QString::fromUtf8(json));
+}
+
+static void publishMusicOverlayState(const QJsonObject &state)
+{
+	const QByteArray json = QJsonDocument(state).toJson(QJsonDocument::Compact);
+	RsMusicLocalPlayer::instance().sendUiCommand("MUSIC_OVERLAY_STATE", QString::fromUtf8(json));
 }
 
 void rsExecuteStreamToolQuickAction(RsStreamToolQuickAction action)
@@ -106,6 +114,12 @@ void rsExecuteStreamToolQuickAction(RsStreamToolQuickAction action)
 	}
 	case RsStreamToolQuickAction::HideTimer:
 		publishTimerState(RsStreamTimer::instance().setVisible(false));
+		break;
+	case RsStreamToolQuickAction::ShowMusicOverlay:
+		publishMusicOverlayState(RsStreamOverlayManager::showMusicOverlayInCurrentScene());
+		break;
+	case RsStreamToolQuickAction::HideMusicOverlay:
+		publishMusicOverlayState(RsStreamOverlayManager::hideMusicOverlayInCurrentScene());
 		break;
 	}
 }
@@ -203,6 +217,10 @@ RsMusicController::RsMusicController(RsMusicState *state, QObject *parent) : QOb
 			else if (action == "timerReset") rsExecuteStreamToolQuickAction(RsStreamToolQuickAction::ResetTimer);
 			else if (action == "timerShow") rsExecuteStreamToolQuickAction(RsStreamToolQuickAction::ShowTimer);
 			else if (action == "timerHide") rsExecuteStreamToolQuickAction(RsStreamToolQuickAction::HideTimer);
+			else if (action == "musicOverlayStatus") publishMusicOverlayState(RsStreamOverlayManager::musicOverlayStatus());
+			else if (action == "musicOverlayRefresh") publishMusicOverlayState(RsStreamOverlayManager::refreshMusicOverlaySettings());
+			else if (action == "musicOverlayShow") rsExecuteStreamToolQuickAction(RsStreamToolQuickAction::ShowMusicOverlay);
+			else if (action == "musicOverlayHide") rsExecuteStreamToolQuickAction(RsStreamToolQuickAction::HideMusicOverlay);
 			else if (action == "triggerReplay") rsExecuteStreamToolQuickAction(RsStreamToolQuickAction::TriggerReplay);
 			else if (action == "hideReplay") rsExecuteStreamToolQuickAction(RsStreamToolQuickAction::HideReplay);
 			else if (action == "replayShow") rsExecuteStreamToolQuickAction(RsStreamToolQuickAction::ShowReplay);

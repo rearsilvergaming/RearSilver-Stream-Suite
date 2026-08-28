@@ -154,6 +154,7 @@ void RsMainDock::updateStreamToolActionAvailability(bool hubConnected)
 		if (m_lblStreamToolQuickText) m_lblStreamToolQuickText->setText("Quick Text — Hub unavailable");
 		if (m_lblStreamToolTimer) m_lblStreamToolTimer->setText(
 			QString("%1 — Hub unavailable").arg(m_streamToolsTimerMode == "countdown" ? "Countdown" : "Timer"));
+		if (m_lblStreamToolMusicOverlay) m_lblStreamToolMusicOverlay->setText("Music Overlay — Hub unavailable");
 	}
 	updateStreamToolActionButtons();
 }
@@ -190,7 +191,8 @@ void RsMainDock::updateStreamToolState(const QString &command, const QString &ar
 				: "Browser Refresh — current scene refreshed");
 		return;
 	}
-	if (command != "QUICK_TEXT_STATE" && command != "TIMER_STATE" && command != "REPLAY_STATE") return;
+	if (command != "QUICK_TEXT_STATE" && command != "TIMER_STATE" && command != "REPLAY_STATE" &&
+		command != "MUSIC_OVERLAY_STATE") return;
 	QJsonParseError error;
 	const QJsonDocument document = QJsonDocument::fromJson(argument.toUtf8(), &error);
 	if (error.error != QJsonParseError::NoError || !document.isObject()) return;
@@ -210,6 +212,13 @@ void RsMainDock::updateStreamToolState(const QString &command, const QString &ar
 			const QString activity = state.value("playing").toBool() ? "Playing"
 				: state.value("bufferActive").toBool() ? "Buffer active" : "Buffer inactive";
 			m_lblStreamToolReplay->setText(QString("Instant Replay — %1 | %2").arg(visibility, activity));
+		}
+		return;
+	}
+	if (command == "MUSIC_OVERLAY_STATE") {
+		if (m_lblStreamToolMusicOverlay) {
+			const QString visibility = state.value("visibleInCurrentScene").toBool() ? "Visible" : "Hidden";
+			m_lblStreamToolMusicOverlay->setText(QString("Music Overlay — %1").arg(visibility));
 		}
 		return;
 	}

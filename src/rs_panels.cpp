@@ -278,6 +278,8 @@ void RsMainDock::createPanels()
 		auto *resetTimer = makeButton("Reset timer", "Reset the Timer to its Hub-configured duration", "edit-undo", "↺");
 		auto *showTimer = makeButton("Show", "Show the managed Timer or Countdown overlay", "view-visible", "👁");
 		auto *hideTimer = makeButton("Hide", "Hide the managed Timer or Countdown overlay", "view-hidden", "◉");
+		auto *showMusicOverlay = makeButton("Show", "Show the managed Music Overlay", "view-visible", "👁");
+		auto *hideMusicOverlay = makeButton("Hide", "Hide the managed Music Overlay", "view-hidden", "◉");
 
 		QLabel *browserRefreshHeading = nullptr;
 		auto browserSection = makeSection("Browser Refresh", &browserRefreshHeading);
@@ -297,11 +299,15 @@ void RsMainDock::createPanels()
 		timerSection.second->addWidget(m_btnStreamToolTimerStart, 1, 0);
 		timerSection.second->addWidget(m_btnStreamToolTimerPause, 1, 1);
 		timerSection.second->addWidget(resetTimer, 2, 0, 1, 2);
+		auto musicOverlaySection = makeSection("Music Overlay — waiting for Hub", &m_lblStreamToolMusicOverlay);
+		musicOverlaySection.second->addWidget(showMusicOverlay, 0, 0);
+		musicOverlaySection.second->addWidget(hideMusicOverlay, 0, 1);
 
 		layout->addWidget(browserSection.first);
 		layout->addWidget(replaySection.first);
 		layout->addWidget(quickTextSection.first);
 		layout->addWidget(timerSection.first);
+		layout->addWidget(musicOverlaySection.first);
 		layout->addStretch();
 
 		for (QToolButton *button : {showReplay, hideReplay, triggerReplay})
@@ -310,6 +316,8 @@ void RsMainDock::createPanels()
 		hideQuickText->setProperty("requiresQuickTextConfiguration", true);
 		for (QToolButton *button : {m_btnStreamToolTimerStart, m_btnStreamToolTimerPause, resetTimer, showTimer, hideTimer})
 			button->setProperty("requiresTimerConfiguration", true);
+		showMusicOverlay->setProperty("requiresHub", true);
+		hideMusicOverlay->setProperty("requiresHub", true);
 
 		connect(refreshCurrent, &QToolButton::clicked, this, []() { rsExecuteStreamToolQuickAction(RsStreamToolQuickAction::RefreshCurrentBrowsers); });
 		connect(refreshAll, &QToolButton::clicked, this, []() { rsExecuteStreamToolQuickAction(RsStreamToolQuickAction::RefreshAllBrowsers); });
@@ -323,6 +331,8 @@ void RsMainDock::createPanels()
 		connect(resetTimer, &QToolButton::clicked, this, []() { rsExecuteStreamToolQuickAction(RsStreamToolQuickAction::ResetTimer); });
 		connect(showTimer, &QToolButton::clicked, this, []() { rsExecuteStreamToolQuickAction(RsStreamToolQuickAction::ShowTimer); });
 		connect(hideTimer, &QToolButton::clicked, this, []() { rsExecuteStreamToolQuickAction(RsStreamToolQuickAction::HideTimer); });
+		connect(showMusicOverlay, &QToolButton::clicked, this, []() { rsExecuteStreamToolQuickAction(RsStreamToolQuickAction::ShowMusicOverlay); });
+		connect(hideMusicOverlay, &QToolButton::clicked, this, []() { rsExecuteStreamToolQuickAction(RsStreamToolQuickAction::HideMusicOverlay); });
 	}
 
 	// UI Settings

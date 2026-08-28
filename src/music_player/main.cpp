@@ -1055,6 +1055,9 @@ static std::string g_quickTextMessage = "Quick Text has not been added to OBS ye
 static bool g_timerSourceExists = false, g_timerPlaced = false, g_timerVisible = false, g_timerConflict = false,
 	g_timerSetupComplete = false;
 static std::string g_timerMessage = "Set up the managed Timer source before starting it.";
+static bool g_musicOverlaySourceExists = false, g_musicOverlayPlaced = false, g_musicOverlayVisible = false,
+	g_musicOverlayConflict = false, g_musicOverlaySetupComplete = false;
+static std::string g_musicOverlayMessage = "Music Overlay has not been added to OBS yet.";
 static std::string g_overlayPlacementMode = "advanced";
 struct ReplayPreviewGeometry {
 	bool available = false;
@@ -1805,6 +1808,13 @@ public:
 									if(action=="sender"){g_authSender=object->GetString("value").ToString();setMusicSetting(L"authSender",utf8ToWide(g_authSender));}
 									else {TwitchAccount &auth=account=="bot"?g_botTwitch:g_streamerTwitch;if(action=="login")auth.beginLogin();else if(action=="reconnect")auth.reconnect();else if(action=="logout")auth.logout();} sendAccountsConfig();return S_OK;
 								}
+								if(object->GetString("page").ToString()=="overlay"){
+									const std::string action=object->GetString("action").ToString();
+									if((action=="musicOverlayStatus"||action=="musicOverlayRefresh"||action=="musicOverlayShow"||action=="musicOverlayHide")&&!g_hostPipeConnected)return S_OK;
+									std::lock_guard<std::mutex>lock(g_hostEventMutex);
+									g_hostEvents.push_back("HOST\tTOOL\t"+action+"\t\"\"\n");
+									return S_OK;
+								}
 								if(object->GetString("page").ToString()=="tools"){
 									const std::string action=object->GetString("action").ToString();
 									if(action=="pickProgram"||action=="pickTimerSound"){
@@ -1860,7 +1870,7 @@ public:
 									else if(action=="saveQuickPresets")setMusicSetting(L"tool.quickPresets",utf8ToWide(value));
 									return S_OK;
 								}
-								if (object->GetString("action").ToString() == "reset") { RegDeleteTreeW(HKEY_CURRENT_USER, kOverlayRegistry); sendConfig(); return S_OK; }
+								if (object->GetString("action").ToString() == "reset") { RegDeleteTreeW(HKEY_CURRENT_USER, kOverlayRegistry); if(g_hostPipeConnected){std::lock_guard<std::mutex>lock(g_hostEventMutex);g_hostEvents.push_back("HOST\tTOOL\tmusicOverlayRefresh\t\"\"\n");} sendConfig(); return S_OK; }
 								const std::string key = object->GetString("key").ToString(), type = object->GetString("type").ToString();
 								static const std::vector<std::string> allowed = {"showArtwork","showTitle","showArtist","showAlbum","showRequester","showProgress","artworkBackground","backgroundTransparent","showCustomText","artworkPosition","timingMode","fontFamily","titleOverflow","scrollDirection","customText","backgroundColour","textColour","accentColour","titleSize","bodySize","scrollSpeed","backgroundOpacity","width","height"};
 								if (std::find(allowed.begin(), allowed.end(), key) == allowed.end()) return S_OK;
@@ -1868,6 +1878,7 @@ public:
 								if (type == "number") { int value = object->GetInt("value"), minimum = 0, maximum = 100; if (key == "titleSize") { minimum = 8; maximum = 240; } else if (key == "bodySize") { minimum = 6; maximum = 160; } else if (key == "scrollSpeed") { minimum = 10; maximum = 200; } else if (key == "width") { minimum = 240; maximum = 3840; } else if (key == "height") { minimum = 100; maximum = 2160; } setOverlayNumber(wideKey.c_str(), DWORD(std::clamp(value, minimum, maximum))); }
 								else if (type == "bool") setOverlaySetting(wideKey.c_str(), object->GetBool("value") ? L"true" : L"false");
 								else { const std::wstring value = utf8ToWide(object->GetString("value").ToString()); if ((key == "backgroundColour" || key == "textColour" || key == "accentColour") && !validColour(value)) return S_OK; setOverlaySetting(wideKey.c_str(), value); }
+								if(g_hostPipeConnected){std::lock_guard<std::mutex>lock(g_hostEventMutex);g_hostEvents.push_back("HOST\tTOOL\tmusicOverlayRefresh\t\"\"\n");}
 								return S_OK;
 							}).Get(), &token);
 						m_webView->Navigate(L"https://rearsilver.local/hub-surface.html");
@@ -1945,6 +1956,10 @@ private:
 		auto boolean=[&](const char *key,bool fallback){const std::wstring k=utf8ToWide(key);d->SetBool(key,overlayBool(k.c_str(),fallback));}; auto string=[&](const char *key,const wchar_t *fallback){const std::wstring k=utf8ToWide(key);d->SetString(key,wideToUtf8(overlaySetting(k.c_str(),fallback)));}; auto number=[&](const char *key,int fallback){const std::wstring k=utf8ToWide(key);d->SetInt(key,int(overlayNumber(k.c_str(),DWORD(fallback))));};
 		boolean("showArtwork",true); boolean("showTitle",true); boolean("showArtist",true); boolean("showAlbum",true); boolean("showRequester",true); boolean("showProgress",true); boolean("artworkBackground",false); boolean("backgroundTransparent",false);
 		string("artworkPosition",L"left"); string("timingMode",L"elapsedTotal"); d->SetString("fontFamily",wideToUtf8(normalisedOverlayFontSetting(L"fontFamily",L"Sora"))); string("titleOverflow",L"ellipsis"); string("scrollDirection",L"left"); string("customText",L""); string("backgroundColour",L"#0b0f14"); string("textColour",L"#e6e8eb"); string("accentColour",L"#00d4ff"); number("titleSize",34); number("bodySize",20); number("scrollSpeed",45); number("backgroundOpacity",82); number("width",800); number("height",240);
+		d->SetBool("ipcConnected",g_hostPipeConnected); d->SetBool("sourceExists",g_musicOverlaySourceExists);
+		d->SetBool("placedInCurrentScene",g_musicOverlayPlaced); d->SetBool("visibleInCurrentScene",g_musicOverlayVisible);
+		d->SetBool("conflict",g_musicOverlayConflict); d->SetBool("setupComplete",g_musicOverlaySetupComplete);
+		d->SetString("message",g_musicOverlayMessage); d->SetString("placementMode",g_overlayPlacementMode);
 		setFontFamilies(d, "fontFamilies");
 		CefRefPtr<CefValue> root=CefValue::Create(); root->SetDictionary(d); const std::wstring script=L"window.rsApplyConfig("+utf8ToWide(CefWriteJSON(root,JSON_WRITER_DEFAULT).ToString())+L")"; m_webView->ExecuteScript(script.c_str(),nullptr);
 	}
@@ -3050,6 +3065,8 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int)
 						CefRefPtr<CefValue>state=CefParseJSON(line.substr(17),JSON_PARSER_RFC);if(state&&state->GetType()==VTYPE_DICTIONARY){auto dictionary=state->GetDictionary();g_quickTextSourceExists=dictionary->GetBool("sourceExists");g_quickTextPlaced=dictionary->GetBool("placedInCurrentScene");g_quickTextVisible=dictionary->GetBool("visibleInCurrentScene");g_quickTextConflict=dictionary->GetBool("conflict");g_quickTextSetupComplete=dictionary->GetBool("setupComplete");if(dictionary->HasKey("placementMode"))g_overlayPlacementMode=dictionary->GetString("placementMode").ToString();g_quickTextMessage=dictionary->GetString("message").ToString();if(g_overlayDesigner)g_overlayDesigner->refresh();}
 					} else if (line.rfind("TIMER_STATE\t", 0) == 0) {
 						CefRefPtr<CefValue>state=CefParseJSON(line.substr(12),JSON_PARSER_RFC);if(state&&state->GetType()==VTYPE_DICTIONARY){auto dictionary=state->GetDictionary();g_timerSourceExists=dictionary->GetBool("sourceExists");g_timerPlaced=dictionary->GetBool("placedInCurrentScene");g_timerVisible=dictionary->GetBool("visibleInCurrentScene");g_timerConflict=dictionary->GetBool("conflict");g_timerSetupComplete=dictionary->GetBool("setupComplete");if(dictionary->HasKey("placementMode"))g_overlayPlacementMode=dictionary->GetString("placementMode").ToString();g_timerMessage=dictionary->GetString("message").ToString();if(g_overlayDesigner)g_overlayDesigner->refresh();}
+					} else if (line.rfind("MUSIC_OVERLAY_STATE\t", 0) == 0) {
+						CefRefPtr<CefValue>state=CefParseJSON(line.substr(20),JSON_PARSER_RFC);if(state&&state->GetType()==VTYPE_DICTIONARY){auto dictionary=state->GetDictionary();g_musicOverlaySourceExists=dictionary->GetBool("sourceExists");g_musicOverlayPlaced=dictionary->GetBool("placedInCurrentScene");g_musicOverlayVisible=dictionary->GetBool("visibleInCurrentScene");g_musicOverlayConflict=dictionary->GetBool("conflict");g_musicOverlaySetupComplete=dictionary->GetBool("setupComplete");if(dictionary->HasKey("placementMode"))g_overlayPlacementMode=dictionary->GetString("placementMode").ToString();g_musicOverlayMessage=dictionary->GetString("message").ToString();if(g_overlayDesigner)g_overlayDesigner->refresh();}
 					} else if (line.rfind("HUB_IMPORT\t", 0) == 0) {
 						const std::string url = line.substr(11);
 						std::thread([window, url] { auto *result = new HubPlaylistResult(resolveHubPlaylist(url));

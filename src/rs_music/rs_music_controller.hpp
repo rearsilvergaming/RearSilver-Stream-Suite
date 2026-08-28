@@ -39,6 +39,8 @@ enum class RsStreamToolQuickAction {
 	ResetTimer,
 	ShowTimer,
 	HideTimer,
+	ShowMusicOverlay,
+	HideMusicOverlay,
 };
 
 void rsPublishStreamOverlayPlacementState();

@@ -1,17 +1,22 @@
 #include "rs_stream_overlay_manager.hpp"
 #include "rs_stream_overlay_server.hpp"
+#include "rs_music/rs_music_server.hpp"
 
 #include <cstring>
 #include <unordered_set>
+#include <QSettings>
 #include <obs-module.h>
 #include <obs-frontend-api.h>
 
 namespace {
 constexpr const char *kSourceName = "RearSilver Stream Suite | Quick Text";
 constexpr const char *kTimerSourceName = "RearSilver Stream Suite | Timer";
+constexpr const char *kMusicOverlaySourceName = "RearSilver Stream Suite | Music Overlay";
+constexpr const char *kLegacyMusicOverlaySourceName = "Music Overlay";
 constexpr const char *kSimpleSceneName = "RearSilver Stream Suite | Stream Overlays";
 constexpr const char *kQuickTextGroupName = "Quick Text Overlay";
 constexpr const char *kTimerGroupName = "Timer Overlay";
+constexpr const char *kMusicOverlayGroupName = "Music Overlay Layout";
 constexpr const char *kOwnerKey = "rearsilver_stream_suite_owner";
 constexpr const char *kFeatureKey = "rearsilver_stream_suite_feature";
 constexpr const char *kRoleKey = "rearsilver_stream_suite_role";
@@ -49,6 +54,27 @@ bool isManagedTimer(obs_source_t *source)
 		hasValue(settings, kFeatureKey, "timer") && hasValue(settings, kRoleKey, kRoleValue);
 	obs_data_release(settings);
 	return managed;
+}
+
+bool isManagedMusicOverlay(obs_source_t *source)
+{
+	if (!source || obs_source_removed(source) || std::strcmp(obs_source_get_unversioned_id(source), "browser_source") != 0)
+		return false;
+	obs_data_t *settings = obs_source_get_settings(source);
+	const bool managed = hasValue(settings, kOwnerKey, kOwnerValue) &&
+		hasValue(settings, kFeatureKey, "music_overlay") && hasValue(settings, kRoleKey, kRoleValue);
+	obs_data_release(settings);
+	return managed;
+}
+
+bool isLegacyMusicOverlay(obs_source_t *source)
+{
+	if (!source || obs_source_removed(source) || std::strcmp(obs_source_get_unversioned_id(source), "browser_source") != 0)
+		return false;
+	obs_data_t *settings = obs_source_get_settings(source);
+	const QString url = QString::fromUtf8(obs_data_get_string(settings, "url"));
+	obs_data_release(settings);
+	return url.contains(QStringLiteral("/music-overlay"), Qt::CaseInsensitive);
 }
 
 bool isManagedSimpleScene(obs_source_t *source)
@@ -454,6 +480,107 @@ void applyBrowserSettings(obs_source_t *source)
 	obs_source_update(source, settings);
 	obs_data_release(settings);
 }
+
+void applyMusicOverlaySettings(obs_source_t *source)
+{
+	QSettings stored("RearSilver", "RearSilver-Stream-Suite");
+	obs_data_t *settings = obs_source_get_settings(source);
+	obs_data_set_string(settings, "url", RsMusicServer::instance().overlayUrl().toUtf8().constData());
+	obs_data_set_bool(settings, "is_local_file", false);
+	obs_data_set_int(settings, "width", stored.value("music/overlay/main/width", 800).toInt());
+	obs_data_set_int(settings, "height", stored.value("music/overlay/main/height", 240).toInt());
+	obs_data_set_int(settings, "fps", 30);
+	obs_data_set_bool(settings, "shutdown", false);
+	obs_data_set_bool(settings, "restart_when_active", false);
+	obs_data_set_string(settings, kOwnerKey, kOwnerValue);
+	obs_data_set_string(settings, kFeatureKey, "music_overlay");
+	obs_data_set_string(settings, kRoleKey, kRoleValue);
+	obs_source_update(source, settings);
+	obs_data_release(settings);
+}
+
+obs_source_t *findMusicOverlaySource(bool adoptLegacy)
+{
+	obs_source_t *source = obs_get_source_by_name(kMusicOverlaySourceName);
+	if (source || !adoptLegacy) return source;
+	source = obs_get_source_by_name(kLegacyMusicOverlaySourceName);
+	if (!source) return nullptr;
+	if (!isLegacyMusicOverlay(source)) {
+		obs_source_release(source);
+		return nullptr;
+	}
+	applyMusicOverlaySettings(source);
+	obs_source_set_name(source, kMusicOverlaySourceName);
+	return source;
+}
+
+QJsonObject musicOverlayAdvancedStatusFor(obs_source_t *source, bool conflict, const QString &message = {})
+{
+	bool placed = false, visible = false;
+	obs_source_t *sceneSource = nullptr;
+	if (source && !conflict) {
+		if (obs_sceneitem_t *item = currentSceneItem(source, &sceneSource, &visible)) {
+			placed = obs_sceneitem_get_source(item) == source;
+			visible = placed && visible;
+		}
+	} else {
+		currentSceneItem(nullptr, &sceneSource);
+	}
+	if (sceneSource) obs_source_release(sceneSource);
+	QJsonObject result{{"sourceExists", source != nullptr}, {"placedInCurrentScene", placed},
+		{"visibleInCurrentScene", visible}, {"conflict", conflict},
+		{"setupComplete", source != nullptr && !conflict}, {"placementMode", "advanced"}};
+	result["message"] = message.isEmpty()
+		? (conflict ? QString("A source named %1 already exists but is not managed by the Suite.").arg(kMusicOverlaySourceName)
+			: !source ? QString("Connected to OBS. Music Overlay will be created automatically when shown.")
+			: !placed ? QString("Connected to OBS. Music Overlay will be added to this scene when shown.")
+			: visible ? QString("Music Overlay is visible in the current scene.")
+			: QString("Music Overlay is ready in the current scene."))
+		: message;
+	return result;
+}
+
+QJsonObject musicOverlaySimpleStatusFor(obs_source_t *source, bool sourceConflict, const QString &message = {})
+{
+	obs_source_t *simpleSource = findManagedSimpleSceneSource();
+	bool sceneConflict = false;
+	if (!simpleSource) {
+		obs_source_t *named = obs_get_source_by_name(kSimpleSceneName);
+		sceneConflict = named && !isManagedSimpleScene(named);
+		if (named) obs_source_release(named);
+	}
+	bool setupComplete = false, placed = false, visible = false;
+	if (source && simpleSource && !sourceConflict && !sceneConflict) {
+		obs_scene_t *simpleScene = obs_scene_from_source(simpleSource);
+		obs_sceneitem_t *group = findManagedFeatureGroup(simpleScene, "music_overlay");
+		obs_scene_t *groupScene = group ? obs_sceneitem_group_get_scene(group) : nullptr;
+		bool innerVisible = false;
+		obs_sceneitem_t *inner = findSourceItem(groupScene, source, &innerVisible);
+		setupComplete = group && inner;
+		obs_source_t *activeSource = obs_frontend_get_current_scene();
+		obs_scene_t *activeScene = activeSource ? obs_scene_from_source(activeSource) : nullptr;
+		bool parentVisible = false;
+		obs_sceneitem_t *parent = activeSource == simpleSource ? nullptr : findSourceItem(activeScene, simpleSource, &parentVisible);
+		placed = group && inner && (activeSource == simpleSource || parent);
+		visible = placed && obs_sceneitem_visible(group) && innerVisible &&
+			(activeSource == simpleSource || parentVisible);
+		if (activeSource) obs_source_release(activeSource);
+	}
+	const bool conflict = sourceConflict || sceneConflict;
+	QJsonObject result{{"sourceExists", source != nullptr}, {"placedInCurrentScene", placed},
+		{"visibleInCurrentScene", visible}, {"conflict", conflict}, {"setupComplete", setupComplete},
+		{"placementMode", "simple"}};
+	result["message"] = message.isEmpty()
+		? (sourceConflict ? QString("A source named %1 already exists but is not managed by the Suite.").arg(kMusicOverlaySourceName)
+			: sceneConflict ? QString("A source named %1 already exists but is not managed by the Suite.").arg(kSimpleSceneName)
+			: !source || !simpleSource ? QString("Connected to OBS. Music Overlay will be created automatically when shown.")
+			: !placed ? QString("Connected to OBS. Music Overlay will be added to this scene when shown.")
+			: visible ? QString("Music Overlay is visible in the current scene.")
+			: QString("Music Overlay is ready in the current scene."))
+		: message;
+	if (simpleSource) obs_source_release(simpleSource);
+	return result;
+}
 }
 
 void RsStreamOverlayManager::setPlacementMode(const QString &mode)
@@ -729,6 +856,134 @@ QJsonObject RsStreamOverlayManager::setTimerVisibleInCurrentScene(bool visible)
 	if (item && obs_sceneitem_get_source(item) == source) obs_sceneitem_set_visible(item, visible);
 	if (sceneSource) obs_source_release(sceneSource);
 	const QJsonObject result = timerStatusFor(source, false);
+	obs_source_release(source);
+	return result;
+}
+
+QJsonObject RsStreamOverlayManager::musicOverlayStatus()
+{
+	obs_source_t *source = findMusicOverlaySource(true);
+	const bool conflict = source && !isManagedMusicOverlay(source);
+	const QJsonObject result = simplePlacementEnabled()
+		? musicOverlaySimpleStatusFor(source, conflict) : musicOverlayAdvancedStatusFor(source, conflict);
+	if (source) obs_source_release(source);
+	return result;
+}
+
+QJsonObject RsStreamOverlayManager::refreshMusicOverlaySettings()
+{
+	obs_source_t *source = findMusicOverlaySource(true);
+	if (!source) return musicOverlayStatus();
+	if (!isManagedMusicOverlay(source)) {
+		const QJsonObject result = simplePlacementEnabled()
+			? musicOverlaySimpleStatusFor(source, true) : musicOverlayAdvancedStatusFor(source, true);
+		obs_source_release(source);
+		return result;
+	}
+	applyMusicOverlaySettings(source);
+	const QJsonObject result = simplePlacementEnabled()
+		? musicOverlaySimpleStatusFor(source, false) : musicOverlayAdvancedStatusFor(source, false);
+	obs_source_release(source);
+	return result;
+}
+
+QJsonObject RsStreamOverlayManager::showMusicOverlayInCurrentScene()
+{
+	if (!RsMusicServer::instance().port())
+		return simplePlacementEnabled()
+			? musicOverlaySimpleStatusFor(nullptr, false, "Music Overlay cannot start because its local service is unavailable.")
+			: musicOverlayAdvancedStatusFor(nullptr, false, "Music Overlay cannot start because its local service is unavailable.");
+	obs_source_t *source = findMusicOverlaySource(true);
+	if (source && !isManagedMusicOverlay(source)) {
+		const QJsonObject result = simplePlacementEnabled()
+			? musicOverlaySimpleStatusFor(source, true) : musicOverlayAdvancedStatusFor(source, true);
+		obs_source_release(source);
+		return result;
+	}
+	if (!source) {
+		obs_data_t *settings = obs_data_create();
+		obs_data_set_string(settings, "url", RsMusicServer::instance().overlayUrl().toUtf8().constData());
+		obs_data_set_bool(settings, "is_local_file", false);
+		obs_data_set_string(settings, kOwnerKey, kOwnerValue);
+		obs_data_set_string(settings, kFeatureKey, "music_overlay");
+		obs_data_set_string(settings, kRoleKey, kRoleValue);
+		source = obs_source_create("browser_source", kMusicOverlaySourceName, settings, nullptr);
+		obs_data_release(settings);
+		if (!source)
+			return simplePlacementEnabled()
+				? musicOverlaySimpleStatusFor(nullptr, false, "OBS could not create the managed Music Overlay browser source.")
+				: musicOverlayAdvancedStatusFor(nullptr, false, "OBS could not create the managed Music Overlay browser source.");
+	}
+	applyMusicOverlaySettings(source);
+	if (simplePlacementEnabled()) {
+		obs_source_t *simpleSource = ensureManagedSimpleSceneSource();
+		if (!simpleSource) {
+			const QJsonObject result = musicOverlaySimpleStatusFor(source, false);
+			obs_source_release(source);
+			return result;
+		}
+		obs_scene_t *simpleScene = obs_scene_from_source(simpleSource);
+		obs_sceneitem_t *group = ensureManagedFeatureGroup(simpleScene, kMusicOverlayGroupName, "music_overlay");
+		obs_scene_t *groupScene = group ? obs_sceneitem_group_get_scene(group) : nullptr;
+		obs_sceneitem_t *inner = findSourceItem(groupScene, source);
+		if (!inner && groupScene) inner = obs_scene_add(groupScene, source);
+		if (inner) obs_sceneitem_set_visible(inner, true);
+		if (group) obs_sceneitem_set_visible(group, true);
+		obs_source_t *activeSource = nullptr;
+		bool cycleBlocked = false;
+		obs_sceneitem_t *parent = ensureSimpleSceneInstance(simpleSource, &activeSource, &cycleBlocked);
+		const bool ready = group && inner && (activeSource == simpleSource || parent);
+		const QJsonObject result = ready ? musicOverlaySimpleStatusFor(source, false)
+			: musicOverlaySimpleStatusFor(source, false, cycleBlocked
+				? "Music Overlay cannot place Stream Overlays here because that would create a scene cycle."
+				: "Music Overlay exists, but OBS could not place the managed Stream Overlays scene here.");
+		if (activeSource) obs_source_release(activeSource);
+		obs_source_release(simpleSource);
+		obs_source_release(source);
+		return result;
+	}
+	obs_source_t *sceneSource = nullptr;
+	obs_sceneitem_t *item = currentSceneItem(source, &sceneSource);
+	obs_scene_t *scene = sceneSource ? obs_scene_from_source(sceneSource) : nullptr;
+	if (!item && scene) item = obs_scene_add(scene, source);
+	if (item && obs_sceneitem_get_source(item) == source) obs_sceneitem_set_visible(item, true);
+	const QJsonObject result = item ? musicOverlayAdvancedStatusFor(source, false)
+		: musicOverlayAdvancedStatusFor(source, false, "Music Overlay exists, but OBS could not add it to the current scene.");
+	if (sceneSource) obs_source_release(sceneSource);
+	obs_source_release(source);
+	return result;
+}
+
+QJsonObject RsStreamOverlayManager::hideMusicOverlayInCurrentScene()
+{
+	obs_source_t *source = findMusicOverlaySource(true);
+	if (!source)
+		return simplePlacementEnabled() ? musicOverlaySimpleStatusFor(nullptr, false)
+			: musicOverlayAdvancedStatusFor(nullptr, false);
+	if (!isManagedMusicOverlay(source)) {
+		const QJsonObject result = simplePlacementEnabled()
+			? musicOverlaySimpleStatusFor(source, true) : musicOverlayAdvancedStatusFor(source, true);
+		obs_source_release(source);
+		return result;
+	}
+	if (simplePlacementEnabled()) {
+		obs_source_t *simpleSource = findManagedSimpleSceneSource();
+		if (simpleSource) {
+			obs_scene_t *simpleScene = obs_scene_from_source(simpleSource);
+			if (obs_sceneitem_t *group = findManagedFeatureGroup(simpleScene, "music_overlay"))
+				obs_sceneitem_set_visible(group, false);
+			obs_source_release(simpleSource);
+		}
+		const QJsonObject result = musicOverlaySimpleStatusFor(source, false);
+		obs_source_release(source);
+		return result;
+	}
+	obs_source_t *sceneSource = nullptr;
+	if (obs_sceneitem_t *item = currentSceneItem(source, &sceneSource)) {
+		if (obs_sceneitem_get_source(item) == source) obs_sceneitem_set_visible(item, false);
+	}
+	if (sceneSource) obs_source_release(sceneSource);
+	const QJsonObject result = musicOverlayAdvancedStatusFor(source, false);
 	obs_source_release(source);
 	return result;
 }

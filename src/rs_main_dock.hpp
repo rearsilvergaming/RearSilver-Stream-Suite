@@ -203,6 +203,7 @@ private:
 	QLabel *m_lblStreamToolReplay = nullptr;
 	QLabel *m_lblStreamToolQuickText = nullptr;
 	QLabel *m_lblStreamToolTimer = nullptr;
+	QLabel *m_lblStreamToolMusicOverlay = nullptr;
 	bool m_streamToolsHubConnected = false;
 	bool m_streamToolsQuickTextReady = false;
 	bool m_streamToolsQuickTextHasMessage = false;

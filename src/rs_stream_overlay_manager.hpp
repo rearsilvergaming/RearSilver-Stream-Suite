@@ -23,4 +23,8 @@ public:
 	static QJsonObject timerStatus();
 	static QJsonObject setupTimerInCurrentScene();
 	static QJsonObject setTimerVisibleInCurrentScene(bool visible);
+	static QJsonObject musicOverlayStatus();
+	static QJsonObject refreshMusicOverlaySettings();
+	static QJsonObject showMusicOverlayInCurrentScene();
+	static QJsonObject hideMusicOverlayInCurrentScene();
 };

@@ -1797,15 +1797,6 @@ public:
 								}
 								if(object->GetString("page").ToString()=="accounts"){
 									const std::string action=object->GetString("action").ToString(),account=object->GetString("account").ToString();
-									if(action=="copyDiagnostics"){
-										const TwitchAccountState streamer=g_streamerTwitch.state(),bot=g_botTwitch.state();
-										const std::string diagnostics="IPC: "+std::string(g_hostPipeConnected?"connected":"waiting")+
-											"\nStreamer state: "+(streamer.connected?"connected":"disconnected")+" ("+(streamer.login.empty()?"no login":streamer.login)+")"+
-											"\nBot state: "+(bot.connected?"connected":"disconnected")+" ("+(bot.login.empty()?"no login":bot.login)+")\n\n"+
-											g_spotify.diagnostics()+"\n"+g_streamerTwitch.diagnostics()+"\n"+g_botTwitch.diagnostics()+
-											"\nTwitch chat reader:\n"+g_twitchReader.diagnostics()+"\nTwitch chat sender:\n"+g_twitchSender.diagnostics();
-										copyTextToClipboard(m_parent,utf8ToWide(diagnostics)); return S_OK;
-									}
 									if(account=="spotify"){
 										if(action=="saveClientId")g_spotify.setClientIdAsync(object->GetString("value").ToString());
 										else if(action=="login")g_spotify.beginLogin();
@@ -2070,7 +2061,7 @@ private:
 		if(!m_ready||!m_webView||m_page!=2)return; CefRefPtr<CefDictionaryValue>d=CefDictionaryValue::Create(); d->SetString("url",g_hub.fallbackUrl()); d->SetString("status",wideToUtf8(g_libraryStatus)); d->SetString("label",g_hub.fallbackLabel()); d->SetInt("youtubeCount",int(g_hub.youtubeFallback().size())); d->SetInt("requestCount",int(g_hub.requests().size())); d->SetInt("localCount",int(g_hub.localLibrary().size())); d->SetString("source",g_hub.activeSource()); CefRefPtr<CefValue>root=CefValue::Create();root->SetDictionary(d);const std::wstring script=L"window.rsApplyLibrary("+utf8ToWide(CefWriteJSON(root,JSON_WRITER_DEFAULT).ToString())+L")";m_webView->ExecuteScript(script.c_str(),nullptr);
 	}
 	void sendSettingsConfig(){if(!m_ready||!m_webView||m_page!=4)return;CefRefPtr<CefDictionaryValue>d=CefDictionaryValue::Create();auto b=[&](const char*k,bool f){const auto w=utf8ToWide(k);d->SetBool(k,musicBool(w.c_str(),f));};auto s=[&](const char*k,const wchar_t*f){const auto w=utf8ToWide(k);d->SetString(k,wideToUtf8(musicSetting(w.c_str(),f)));};auto n=[&](const char*k,const wchar_t*stored,int f){d->SetInt(k,_wtoi(musicSetting(stored,std::to_wstring(f).c_str()).c_str()));};b("requestsEnabled",true);b("playlistOnly",false);b("preventDuplicates",true);b("announceTrackChanges",false);b("textOutputEnabled",false);s("minimumRole",L"everyone");const std::wstring legacy=musicSetting(L"exemptRole",L"moderator");d->SetBool("exemptSubscriber",musicBool(L"exemptSubscriber",legacy==L"subscriber"));d->SetBool("exemptVip",musicBool(L"exemptVip",legacy==L"subscriber"||legacy==L"vip"));d->SetBool("exemptModerator",musicBool(L"exemptModerator",legacy!=L"none"&&legacy!=L"broadcaster"));d->SetBool("exemptBroadcaster",musicBool(L"exemptBroadcaster",legacy!=L"none"));for(const char*cmd:{"sr","play","pause","skip","restart","previous","remove"})for(const char*role:{"everyone","subscriber","vip","moderator"}){const std::string key=std::string("command.")+cmd+"."+role;const bool fallback=std::string(cmd)=="sr"?std::string(role)=="everyone":std::string(role)=="moderator";b(key.c_str(),fallback);}s("nonRequestLabel",L"Stream DJ");s("textOutputFormat",L"{{title}} - {{artist}} - Requested by {{user}}");n("queueLimit",L"maxQueueTotal",50);n("userLimit",L"maxPerUser",2);n("maxTrackMinutes",L"maxTrackLengthMinutes",10);d->SetString("outputPath",wideToUtf8(textOutputPath()));d->SetBool("captureExists",g_captureExists);d->SetBool("autoStart",g_playerAutoStart);d->SetString("captureStatus",g_captureExists?"Music Capture exists. Use the button to review or change the captured application.":"Music Capture has not been created yet.");CefRefPtr<CefValue>root=CefValue::Create();root->SetDictionary(d);m_webView->ExecuteScript((L"window.rsApplySettings("+utf8ToWide(CefWriteJSON(root,JSON_WRITER_DEFAULT).ToString())+L")").c_str(),nullptr);}
-	void sendAccountsConfig(){if(!m_ready||!m_webView||m_page!=5)return;const SpotifyClientState spotify=g_spotify.state();const TwitchAccountState streamer=g_streamerTwitch.state(),bot=g_botTwitch.state();CefRefPtr<CefDictionaryValue>d=CefDictionaryValue::Create();d->SetDouble("revision",double(++g_accountsRevision));d->SetString("streamerState",streamer.busy?"connecting":streamer.connected?"connected":"disconnected");d->SetString("streamerLogin",streamer.login);d->SetString("streamerError",streamer.error);d->SetString("botState",bot.busy?"connecting":bot.connected?"connected":"disconnected");d->SetString("botLogin",bot.login);d->SetString("botError",bot.error);d->SetString("sender",g_authSender);d->SetBool("ipcConnected",g_hostPipeConnected);d->SetString("spotifyClientId",spotify.clientId);d->SetBool("spotifyAuthorized",spotify.authorized);d->SetBool("spotifyConnected",spotify.connected);d->SetBool("spotifyBusy",spotify.busy);d->SetBool("spotifyQueueChecked",spotify.queueChecked);d->SetBool("spotifyPlaybackAvailable",spotify.playbackAvailable);d->SetString("spotifyDisplayName",spotify.displayName);d->SetString("spotifyError",spotify.error);d->SetString("spotifyDiagnostics",g_spotify.diagnostics()+"\n"+g_streamerTwitch.diagnostics());d->SetInt("spotifyQueueCount",int(spotify.queue.size()));CefRefPtr<CefValue>root=CefValue::Create();root->SetDictionary(d);m_webView->ExecuteScript((L"window.rsApplyAccounts("+utf8ToWide(CefWriteJSON(root,JSON_WRITER_DEFAULT).ToString())+L")").c_str(),nullptr);}
+	void sendAccountsConfig(){if(!m_ready||!m_webView||m_page!=5)return;const SpotifyClientState spotify=g_spotify.state();const TwitchAccountState streamer=g_streamerTwitch.state(),bot=g_botTwitch.state();CefRefPtr<CefDictionaryValue>d=CefDictionaryValue::Create();d->SetDouble("revision",double(++g_accountsRevision));d->SetString("streamerState",streamer.busy?"connecting":streamer.connected?"connected":"disconnected");d->SetString("streamerLogin",streamer.login);d->SetString("streamerDisplayName",streamer.displayName);d->SetString("streamerError",streamer.error);d->SetString("botState",bot.busy?"connecting":bot.connected?"connected":"disconnected");d->SetString("botLogin",bot.login);d->SetString("botDisplayName",bot.displayName);d->SetString("botError",bot.error);d->SetString("sender",g_authSender);d->SetBool("ipcConnected",g_hostPipeConnected);d->SetString("spotifyClientId",spotify.clientId);d->SetBool("spotifyAuthorized",spotify.authorized);d->SetBool("spotifyConnected",spotify.connected);d->SetBool("spotifyBusy",spotify.busy);d->SetBool("spotifyQueueChecked",spotify.queueChecked);d->SetBool("spotifyPlaybackAvailable",spotify.playbackAvailable);d->SetString("spotifyDisplayName",spotify.displayName);d->SetString("spotifyError",spotify.error);d->SetInt("spotifyQueueCount",int(spotify.queue.size()));CefRefPtr<CefValue>root=CefValue::Create();root->SetDictionary(d);m_webView->ExecuteScript((L"window.rsApplyAccounts("+utf8ToWide(CefWriteJSON(root,JSON_WRITER_DEFAULT).ToString())+L")").c_str(),nullptr);}
 	void sendSuiteSettingsConfig()
 	{
 		if (!m_ready || !m_webView || m_page != 8)
@@ -2083,6 +2074,19 @@ private:
 		d->SetBool("openHubWithObs", musicBool(L"openHubWithObs", false));
 		d->SetString("overlayPlacementMode", wideToUtf8(overlayPlacementMode()));
 		d->SetBool("ipcConnected", g_hostPipeConnected);
+		const SpotifyClientState accountSpotify = g_spotify.state();
+		const TwitchAccountState accountStreamer = g_streamerTwitch.state(), accountBot = g_botTwitch.state();
+		d->SetDouble("accountsRevision", double(++g_accountsRevision));
+		d->SetString("streamerState", accountStreamer.busy ? "connecting" : accountStreamer.connected ? "connected" : "disconnected");
+		d->SetString("streamerLogin", accountStreamer.login); d->SetString("streamerDisplayName", accountStreamer.displayName); d->SetString("streamerError", accountStreamer.error);
+		d->SetString("botState", accountBot.busy ? "connecting" : accountBot.connected ? "connected" : "disconnected");
+		d->SetString("botLogin", accountBot.login); d->SetString("botDisplayName", accountBot.displayName); d->SetString("botError", accountBot.error);
+		d->SetString("sender", g_authSender); d->SetString("spotifyClientId", accountSpotify.clientId);
+		d->SetBool("spotifyAuthorized", accountSpotify.authorized); d->SetBool("spotifyConnected", accountSpotify.connected);
+		d->SetBool("spotifyBusy", accountSpotify.busy); d->SetBool("spotifyQueueChecked", accountSpotify.queueChecked);
+		d->SetBool("spotifyPlaybackAvailable", accountSpotify.playbackAvailable);
+		d->SetString("spotifyDisplayName", accountSpotify.displayName); d->SetString("spotifyError", accountSpotify.error);
+		d->SetInt("spotifyQueueCount", int(accountSpotify.queue.size()));
 		CefRefPtr<CefValue> programs = CefParseJSON(wideToUtf8(musicSetting(L"tool.programs", L"[]")), JSON_PARSER_RFC);
 		if (programs && programs->GetType() == VTYPE_LIST)
 			d->SetList("programs", programs->GetList());
@@ -3074,9 +3078,9 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int)
 		// Keep every WebView-backed page self-healing. This also retries the
 		// page-ready handshake if a document's first message was lost in a rapid
 		// Library/Accounts navigation or source switch.
-		if(g_page>=2&&g_page<=6&&g_overlayDesigner&&GetTickCount64()-lastSpotifyUiRefresh>=250){g_overlayDesigner->refresh();lastSpotifyUiRefresh=GetTickCount64();}
+		if(((g_page>=2&&g_page<=6)||g_page==8)&&g_overlayDesigner&&GetTickCount64()-lastSpotifyUiRefresh>=250){g_overlayDesigner->refresh();lastSpotifyUiRefresh=GetTickCount64();}
 		if(GetTickCount64()-lastTwitchValidation>=3600000){g_streamerTwitch.reconnect(false);g_botTwitch.reconnect(false);lastTwitchValidation=GetTickCount64();}
-		auto publishTwitch=[&](const char*name,TwitchAccount &auth,uint64_t &seen){const uint64_t revision=auth.revision();if(!connected||revision==seen)return;seen=revision;const auto state=auth.state();std::lock_guard<std::mutex>lock(g_hostEventMutex);g_hostEvents.push_back(std::string("HOST\tACCOUNT_STATE\t")+name+'\t'+(state.connected?"connected":"disconnected")+'\t'+state.login+"\n");};
+		auto publishTwitch=[&](const char*name,TwitchAccount &auth,uint64_t &seen){const uint64_t revision=auth.revision();if(!connected||revision==seen)return;seen=revision;const auto state=auth.state();const std::string shownName=state.displayName.empty()?state.login:state.displayName;std::lock_guard<std::mutex>lock(g_hostEventMutex);g_hostEvents.push_back(std::string("HOST\tACCOUNT_STATE\t")+name+'\t'+(state.connected?"connected":"disconnected")+'\t'+shownName+"\n");};
 		auto syncChat=[&]{
 			const auto streamer=g_streamerTwitch.state();const auto bot=g_botTwitch.state();const uint64_t sr=g_streamerTwitch.revision(),br=g_botTwitch.revision();
 			const bool streamerChanged=sr!=lastChatStreamerRevision;

@@ -11,6 +11,7 @@ struct TwitchAccountState {
 	bool connected = false;
 	bool busy = false;
 	std::string login;
+	std::string displayName;
 	std::string userId;
 	std::string error;
 };

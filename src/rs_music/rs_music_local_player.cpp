@@ -10,8 +10,14 @@
 #include <QLocalSocket>
 #include <QProcess>
 #include <QSaveFile>
+#include <QSettings>
 #include <QStandardPaths>
 #include <QTimer>
+
+#ifdef Q_OS_WIN
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+#endif
 
 extern "C" {
 #include <obs.h>
@@ -58,6 +64,26 @@ RsMusicLocalPlayer::RsMusicLocalPlayer()
 bool RsMusicLocalPlayer::isHubConnected() const
 {
 	return m_socket && m_socket->state() == QLocalSocket::ConnectedState;
+}
+
+bool RsMusicLocalPlayer::launchCompanionIfEnabled()
+{
+	if (!QSettings("RearSilver", "RearSilver-Stream-Suite").value("music/openHubWithObs", false).toBool())
+		return false;
+	if (isHubConnected())
+		return true;
+#ifdef Q_OS_WIN
+	if (HANDLE existing = OpenMutexW(SYNCHRONIZE, FALSE, L"Local\\RearSilverStreamSuiteMediaPlayer")) {
+		CloseHandle(existing);
+		return true;
+	}
+#endif
+	const QString executable = companionPath();
+	if (executable.isEmpty()) {
+		emit playbackError("The bundled Control Hub executable could not be found.");
+		return false;
+	}
+	return QProcess::startDetached(executable, {}, QFileInfo(executable).absolutePath());
 }
 
 void RsMusicLocalPlayer::connectToHub()

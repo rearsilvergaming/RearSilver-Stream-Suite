@@ -23,6 +23,7 @@
 #include "rs_music/rs_music_tls_probe.hpp"
 #include "rs_music/rs_music_pcm_source.hpp"
 #include "rs_music/rs_music_controller.hpp"
+#include "rs_music/rs_music_local_player.hpp"
 #include "enhancements/rs_auto_start.hpp"
 #include "rs_instant_replay.hpp"
 #include "rs_stream_overlay_server.hpp"
@@ -94,6 +95,7 @@ static void frontend_event_callback(enum obs_frontend_event event, void *)
 	case OBS_FRONTEND_EVENT_FINISHED_LOADING:
 		rsMusicPcmRemoveLegacyTestSource();
 		hub_replay::RsInstantReplay::applyCachedReplayBufferConfiguration();
+		RsMusicLocalPlayer::instance().launchCompanionIfEnabled();
 		create_rs_dock();
 		break;
 

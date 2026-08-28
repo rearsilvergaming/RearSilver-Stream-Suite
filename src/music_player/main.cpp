@@ -1792,6 +1792,7 @@ public:
 										CefRefPtr<CefDictionaryValue> value=object->GetDictionary("value");
 										if(value){setMusicSetting(L"suiteSettings.setupCompleted",value->GetBool("completed")?L"true":L"false");setMusicSetting(L"suiteSettings.setupStep",std::to_wstring(std::clamp(value->GetInt("step"),0,4)));setMusicSetting(L"suiteSettings.setupSchemaVersion",std::to_wstring(std::max(1,value->GetInt("schemaVersion"))));}
 									}
+									else if(object->GetString("action").ToString()=="setOpenHubWithObs")setMusicSetting(L"openHubWithObs",object->GetBool("value")?L"true":L"false");
 									sendSuiteSettingsConfig();return S_OK;
 								}
 								if(object->GetString("page").ToString()=="accounts"){
@@ -2079,6 +2080,10 @@ private:
 		d->SetBool("setupCompleted", musicBool(L"suiteSettings.setupCompleted", false));
 		d->SetInt("setupStep", std::clamp(_wtoi(musicSetting(L"suiteSettings.setupStep", L"0").c_str()), 0, 4));
 		d->SetInt("setupSchemaVersion", std::max(1, _wtoi(musicSetting(L"suiteSettings.setupSchemaVersion", L"1").c_str())));
+		d->SetBool("openHubWithObs", musicBool(L"openHubWithObs", false));
+		CefRefPtr<CefValue> programs = CefParseJSON(wideToUtf8(musicSetting(L"tool.programs", L"[]")), JSON_PARSER_RFC);
+		if (programs && programs->GetType() == VTYPE_LIST)
+			d->SetList("programs", programs->GetList());
 		CefRefPtr<CefValue> root = CefValue::Create();
 		root->SetDictionary(d);
 		m_webView->ExecuteScript((L"window.rsApplySuiteSettings(" +
@@ -3067,7 +3072,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int)
 		// Keep every WebView-backed page self-healing. This also retries the
 		// page-ready handshake if a document's first message was lost in a rapid
 		// Library/Accounts navigation or source switch.
-		if(((g_page>=2&&g_page<=6)||g_page==8)&&g_overlayDesigner&&GetTickCount64()-lastSpotifyUiRefresh>=250){g_overlayDesigner->refresh();lastSpotifyUiRefresh=GetTickCount64();}
+		if(g_page>=2&&g_page<=6&&g_overlayDesigner&&GetTickCount64()-lastSpotifyUiRefresh>=250){g_overlayDesigner->refresh();lastSpotifyUiRefresh=GetTickCount64();}
 		if(GetTickCount64()-lastTwitchValidation>=3600000){g_streamerTwitch.reconnect(false);g_botTwitch.reconnect(false);lastTwitchValidation=GetTickCount64();}
 		auto publishTwitch=[&](const char*name,TwitchAccount &auth,uint64_t &seen){const uint64_t revision=auth.revision();if(!connected||revision==seen)return;seen=revision;const auto state=auth.state();std::lock_guard<std::mutex>lock(g_hostEventMutex);g_hostEvents.push_back(std::string("HOST\tACCOUNT_STATE\t")+name+'\t'+(state.connected?"connected":"disconnected")+'\t'+state.login+"\n");};
 		auto syncChat=[&]{

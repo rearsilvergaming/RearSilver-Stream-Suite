@@ -32,6 +32,7 @@ public:
 	QString currentFile() const;
 	QString executablePath() const { return companionPath(); }
 	bool isHubConnected() const;
+	bool launchCompanionIfEnabled();
 
 signals:
 	void playbackStarted();

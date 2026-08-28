@@ -2074,6 +2074,7 @@ private:
 		d->SetBool("openHubWithObs", musicBool(L"openHubWithObs", false));
 		d->SetString("overlayPlacementMode", wideToUtf8(overlayPlacementMode()));
 		d->SetBool("ipcConnected", g_hostPipeConnected);
+		d->SetBool("captureExists", g_captureExists);
 		const SpotifyClientState accountSpotify = g_spotify.state();
 		const TwitchAccountState accountStreamer = g_streamerTwitch.state(), accountBot = g_botTwitch.state();
 		d->SetDouble("accountsRevision", double(++g_accountsRevision));

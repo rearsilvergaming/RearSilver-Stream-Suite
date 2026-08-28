@@ -129,6 +129,18 @@ RsMainDock::RsMainDock(QWidget *parent) : QWidget(parent)
 		updateStreamToolActionAvailability(connected);
 		if (auto *nowPlaying = qobject_cast<RsMusicNowPlaying *>(m_pageMusicNowPlaying))
 			nowPlaying->setHubConnected(connected);
+		if (!connected) {
+			RsSetTwitchDot(m_lblStreamerDot, "#7D8799");
+			RsSetTwitchDot(m_lblBotDot, "#7D8799");
+			if (m_lblStreamerText) {
+				m_lblStreamerText->setText("Streamer — Hub unavailable");
+				m_lblStreamerText->setToolTip("Control Hub unavailable");
+			}
+			if (m_lblBotText) {
+				m_lblBotText->setText("Bot — Hub unavailable");
+				m_lblBotText->setToolTip("Control Hub unavailable");
+			}
+		}
 	});
 	connect(&localPlayer, &RsMusicLocalPlayer::uiCommandSent, this, &RsMainDock::updateStreamToolState);
 	connect(m_musicController, &RsMusicController::quickTextConfigurationReady, this, [this](bool hasMessage) {
@@ -313,6 +325,18 @@ if (m_lblBotDot && m_botAuth && !m_botAuthResolved) {
 			m_lblBotText->setText("Bot — Not connected");
 		}
 	}
+	if (!localPlayer.isHubConnected()) {
+		RsSetTwitchDot(m_lblStreamerDot, "#7D8799");
+		RsSetTwitchDot(m_lblBotDot, "#7D8799");
+		if (m_lblStreamerText) {
+			m_lblStreamerText->setText("Streamer — Hub unavailable");
+			m_lblStreamerText->setToolTip("Control Hub unavailable");
+		}
+		if (m_lblBotText) {
+			m_lblBotText->setText("Bot — Hub unavailable");
+			m_lblBotText->setToolTip("Control Hub unavailable");
+		}
+	}
 
 	obs_frontend_add_event_callback(RsMainDock::onFrontendEvent, this);
 
@@ -382,9 +406,9 @@ void RsMainDock::createUi()
 	// Visual strength comes from theme, not hard-coded colours
 	m_twitchStatusBar->setStyleSheet("border-radius: 4px;");
 
-	auto *twitchStatusLayout = new QHBoxLayout(m_twitchStatusBar);
+	auto *twitchStatusLayout = new QVBoxLayout(m_twitchStatusBar);
 	twitchStatusLayout->setContentsMargins(8, 4, 8, 4);
-	twitchStatusLayout->setSpacing(12);
+	twitchStatusLayout->setSpacing(2);
 
 // Streamer dot + text (dot colour is universal; text is theme-aware)
 	m_lblStreamerDot = new QLabel("●");
@@ -402,12 +426,22 @@ void RsMainDock::createUi()
 	m_lblBotText->setObjectName("rs-twitch-bot-text");
 	m_lblBotText->setToolTip("Bot account: Not connected");
 
-	twitchStatusLayout->addWidget(m_lblStreamerDot);
-	twitchStatusLayout->addWidget(m_lblStreamerText);
-	twitchStatusLayout->addSpacing(10);
-	twitchStatusLayout->addWidget(m_lblBotDot);
-	twitchStatusLayout->addWidget(m_lblBotText);
-	twitchStatusLayout->addStretch(1);
+	auto *streamerStatusLayout = new QHBoxLayout();
+	streamerStatusLayout->setContentsMargins(0, 0, 0, 0);
+	streamerStatusLayout->setSpacing(6);
+	streamerStatusLayout->addWidget(m_lblStreamerDot);
+	streamerStatusLayout->addWidget(m_lblStreamerText);
+	streamerStatusLayout->addStretch(1);
+
+	auto *botStatusLayout = new QHBoxLayout();
+	botStatusLayout->setContentsMargins(0, 0, 0, 0);
+	botStatusLayout->setSpacing(6);
+	botStatusLayout->addWidget(m_lblBotDot);
+	botStatusLayout->addWidget(m_lblBotText);
+	botStatusLayout->addStretch(1);
+
+	twitchStatusLayout->addLayout(streamerStatusLayout);
+	twitchStatusLayout->addLayout(botStatusLayout);
 
 	m_sidebarLayout->addWidget(m_twitchStatusBar);
 	m_twitchStatusBar->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);

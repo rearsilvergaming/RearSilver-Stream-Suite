@@ -560,8 +560,6 @@ void RsInstantReplay::configureReplayBuffer(int seconds, bool autoStart, bool au
 	if (durationChanged && obs_frontend_replay_buffer_active()) {
 		s_restartReplayBufferAfterStop = true;
 		obs_frontend_replay_buffer_stop();
-	} else if (autoStart && !obs_frontend_replay_buffer_active()) {
-		tryStartReplayBuffer();
 	}
 }
 

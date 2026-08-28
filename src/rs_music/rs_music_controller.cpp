@@ -31,12 +31,19 @@ void rsPublishStreamOverlayPlacementState()
 	RsMusicLocalPlayer::instance().sendUiCommand("QUICK_TEXT_STATE", QString::fromUtf8(quickText));
 	const QByteArray timer = QJsonDocument(RsStreamTimer::instance().status()).toJson(QJsonDocument::Compact);
 	RsMusicLocalPlayer::instance().sendUiCommand("TIMER_STATE", QString::fromUtf8(timer));
+	const QByteArray replay = QJsonDocument(hub_replay::RsInstantReplay::replayState()).toJson(QJsonDocument::Compact);
+	RsMusicLocalPlayer::instance().sendUiCommand("REPLAY_STATE", QString::fromUtf8(replay));
+}
+
+static void publishReplayState(const QJsonObject &state)
+{
+	const QByteArray json = QJsonDocument(state).toJson(QJsonDocument::Compact);
+	RsMusicLocalPlayer::instance().sendUiCommand("REPLAY_STATE", QString::fromUtf8(json));
 }
 
 static void publishReplayState()
 {
-	const QByteArray json = QJsonDocument(hub_replay::RsInstantReplay::replayState()).toJson(QJsonDocument::Compact);
-	RsMusicLocalPlayer::instance().sendUiCommand("REPLAY_STATE", QString::fromUtf8(json));
+	publishReplayState(hub_replay::RsInstantReplay::replayState());
 }
 
 static void publishTimerState(const QJsonObject &state)
@@ -63,16 +70,13 @@ void rsExecuteStreamToolQuickAction(RsStreamToolQuickAction action)
 		RsMusicLocalPlayer::instance().sendUiCommand("BROWSER_REFRESH_STATE", "all");
 		break;
 	case RsStreamToolQuickAction::TriggerReplay:
-		hub_replay::RsInstantReplay::triggerReplay();
-		publishReplayState();
+		publishReplayState(hub_replay::RsInstantReplay::triggerReplay());
 		break;
 	case RsStreamToolQuickAction::ShowReplay:
-		hub_replay::RsInstantReplay::showReplaySource();
-		publishReplayState();
+		publishReplayState(hub_replay::RsInstantReplay::showReplaySource());
 		break;
 	case RsStreamToolQuickAction::HideReplay:
-		hub_replay::RsInstantReplay::hideReplaySource();
-		publishReplayState();
+		publishReplayState(hub_replay::RsInstantReplay::hideReplaySource());
 		break;
 	case RsStreamToolQuickAction::ShowQuickText:
 		publishQuickTextState(RsStreamOverlayManager::showQuickTextInCurrentScene());
@@ -111,7 +115,10 @@ RsMusicController::RsMusicController(RsMusicState *state, QObject *parent) : QOb
 	hub_replay::RsInstantReplay::setStateChangedCallback(publishReplayState);
 	auto &localPlayer = RsMusicLocalPlayer::instance();
 	connect(&localPlayer, &RsMusicLocalPlayer::hubConnectionChanged, this, [this](bool connected) {
-		if (connected) return;
+		if (connected) {
+			rsPublishStreamOverlayPlacementState();
+			return;
+		}
 		m_replayBufferConfigurationReceived = false;
 		m_replayFrameConfigurationReceived = false;
 	});
@@ -155,6 +162,7 @@ RsMusicController::RsMusicController(RsMusicState *state, QObject *parent) : QOb
 			else if (key == "maxTrackMinutes") rsMusicSetMaxTrackLengthSec(value.toInt() * 60);
 			else if (key == "overlayPlacementMode") {
 				RsStreamOverlayManager::setPlacementMode(value);
+				hub_replay::RsInstantReplay::reconcilePlacementMode();
 				rsPublishStreamOverlayPlacementState();
 			}
 			else if (key.startsWith("command.")) {
@@ -198,7 +206,7 @@ RsMusicController::RsMusicController(RsMusicState *state, QObject *parent) : QOb
 			else if (action == "triggerReplay") rsExecuteStreamToolQuickAction(RsStreamToolQuickAction::TriggerReplay);
 			else if (action == "hideReplay") rsExecuteStreamToolQuickAction(RsStreamToolQuickAction::HideReplay);
 			else if (action == "replayShow") rsExecuteStreamToolQuickAction(RsStreamToolQuickAction::ShowReplay);
-			else if (action == "replayRepair") hub_replay::RsInstantReplay::repairReplaySource();
+			else if (action == "replayRepair") publishReplayState(hub_replay::RsInstantReplay::repairReplaySource());
 			else if (action == "replayStart") hub_replay::RsInstantReplay::startReplayBuffer();
 			else if (action == "replayStop") hub_replay::RsInstantReplay::stopReplayBuffer();
 			else if (action == "openReplayFolder") hub_replay::RsInstantReplay::openReplayFolder();

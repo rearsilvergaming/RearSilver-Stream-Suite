@@ -211,6 +211,7 @@ static std::wstring g_libraryStatus = L"Paste a YouTube or YouTube Music playlis
 static constexpr UINT WM_HUB_PLAYLIST_RESULT = WM_APP + 40;
 static constexpr UINT WM_HUB_REQUEST_RESULT = WM_APP + 41;
 static constexpr UINT WM_TWITCH_CHAT = WM_APP + 42;
+static constexpr UINT WM_OBS_CONNECTION_CHANGED = WM_APP + 43;
 static constexpr int ID_IMPORT_PLAYLIST = 4101;
 static constexpr int ID_ADD_LOCAL_FILES = 4102, ID_ADD_LOCAL_FOLDER = 4103, ID_USE_LOCAL = 4104,
 	ID_USE_YOUTUBE = 4105, ID_CLEAR_LOCAL = 4106, ID_USE_EXTERNAL = 4107;
@@ -1045,7 +1046,9 @@ static int g_page = 7;
 static std::string g_streamerAuthState = "disconnected", g_streamerLogin;
 static std::string g_botAuthState = "disconnected", g_botLogin, g_authSender = "streamer";
 static bool g_captureExists = false, g_playerAutoStart = false, g_hostPipeConnected = false,
-	g_replayBufferActive = false, g_replaySceneExists = false;
+	g_replayBufferActive = false, g_replaySceneExists = false, g_replayPlaced = false,
+	g_replayVisible = false, g_replayPlaying = false, g_replayConflict = false, g_replaySetupComplete = false;
+static std::string g_replayMessage;
 static bool g_quickTextSourceExists = false, g_quickTextPlaced = false,
 	g_quickTextVisible = false, g_quickTextConflict = false, g_quickTextSetupComplete = false;
 static std::string g_quickTextMessage = "Quick Text has not been added to OBS yet.";
@@ -1061,7 +1064,6 @@ struct ReplayPreviewGeometry {
 	int titleX = 0, titleY = 0, titleWidth = 0, titleHeight = 0;
 };
 static ReplayPreviewGeometry g_replayPreviewGeometry;
-static std::atomic<bool> g_replaySetupPending{false};
 static std::atomic<uint64_t> g_accountsRevision{0};
 static bool externalActive();
 static void sendTwitchMessage(const std::string &message)
@@ -1827,18 +1829,7 @@ public:
 										}
 										return S_OK;
 									}
-									if(action=="triggerReplay"||action=="replayShow"){
-										const bool setupComplete=g_replaySceneExists&&musicBool(L"tool.replaySetupCompleted",false);
-										if(!setupComplete){
-											m_webView->ExecuteScript(L"window.rsReplaySetupRequired&&window.rsReplaySetupRequired()",nullptr);
-											return S_OK;
-										}
-										std::lock_guard<std::mutex>lock(g_hostEventMutex);
-										g_hostEvents.push_back("HOST\tTOOL\treplayRepair\t\"\"\n");
-										g_hostEvents.push_back("HOST\tTOOL\t"+action+"\t\"\"\n");
-										return S_OK;
-									}
-									if(action=="replayRepair")g_replaySetupPending.store(true);
+									if((action=="triggerReplay"||action=="replayShow"||action=="hideReplay"||action=="replayRepair"||action=="replayStart"||action=="replayStop"||action=="openReplayFolder")&&!g_hostPipeConnected)return S_OK;
 									std::string value;
 									if(object->HasKey("value")){CefRefPtr<CefValue>v=object->GetValue("value");value=CefWriteJSON(v,JSON_WRITER_DEFAULT).ToString();}
 									// Optional applications belong to the Control Hub. OBS starts/stops
@@ -2000,7 +1991,13 @@ private:
 		d->SetBool("replayAutoStart",musicBool(L"tool.replayAutoStart",false));
 		d->SetBool("replayAutoHide",musicBool(L"tool.replayAutoHide",true));
 		d->SetBool("replayBufferActive",g_replayBufferActive);
-		d->SetBool("replaySetupComplete",g_replaySceneExists&&musicBool(L"tool.replaySetupCompleted",false));
+		d->SetBool("replaySceneExists",g_replaySceneExists);
+		d->SetBool("replayPlaced",g_replayPlaced);
+		d->SetBool("replayVisible",g_replayVisible);
+		d->SetBool("replayPlaying",g_replayPlaying);
+		d->SetBool("replayConflict",g_replayConflict);
+		d->SetBool("replaySetupComplete",g_replaySetupComplete);
+		d->SetString("replayMessage",g_replayMessage);
 		d->SetString("replayTitle",wideToUtf8(musicSetting(L"tool.replayTitle",L"INSTANT REPLAY")));
 		d->SetString("replayFont",wideToUtf8(normalisedMusicFontSetting(L"tool.replayFont",L"Sora")));
 		d->SetString("replayFontWeight",wideToUtf8(replayFontWeight()));
@@ -2211,6 +2208,7 @@ static void handleTwitchChat(HWND window, const TwitchChatMessage &m)
 static LRESULT CALLBACK windowProc(HWND window, UINT message, WPARAM wParam, LPARAM lParam)
 {
 	if(message==WM_TWITCH_CHAT){std::unique_ptr<TwitchChatMessage>m(reinterpret_cast<TwitchChatMessage*>(lParam));if(m)handleTwitchChat(window,*m);return 0;}
+	if(message==WM_OBS_CONNECTION_CHANGED){if(g_overlayDesigner)g_overlayDesigner->refresh();return 0;}
 	if (message == WM_CLOSE) { traceLog("window-close-request"); g_closeRequested = true; return 0; }
 	if (message == WM_DESTROY) traceLog("window-destroy");
 	if (message == WM_NCDESTROY) traceLog("window-nc-destroy");
@@ -3034,7 +3032,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int)
 			if(br!=lastChatBotRevision||streamerChanged||lastChatSender!=g_authSender){lastChatBotRevision=br;lastChatSender=g_authSender;g_twitchSender.disconnect();if(streamer.connected&&bot.connected&&g_authSender=="bot")g_twitchSender.connect(bot.login,g_botTwitch.accessToken(),streamer.login,streamer.userId);}
 		};
 		syncChat();
-		if (!connected) { connected = ConnectNamedPipe(pipe, nullptr) || GetLastError() == ERROR_PIPE_CONNECTED; g_hostPipeConnected=connected; if (connected) { send(pipe, player.status()); queueOverlayPlacementMode(); queueReplayConfiguration(); lastStreamerRevision=lastBotRevision=0; } }
+		if (!connected) { connected = ConnectNamedPipe(pipe, nullptr) || GetLastError() == ERROR_PIPE_CONNECTED; g_hostPipeConnected=connected; if (connected) { PostMessageW(window,WM_OBS_CONNECTION_CHANGED,TRUE,0); send(pipe, player.status()); queueOverlayPlacementMode(); queueReplayConfiguration(); lastStreamerRevision=lastBotRevision=0; } }
 		publishTwitch("streamer",g_streamerTwitch,lastStreamerRevision);publishTwitch("bot",g_botTwitch,lastBotRevision);
 		if (connected) {
 			{ std::lock_guard<std::mutex> lock(g_hostEventMutex); for(const auto &event:g_hostEvents)send(pipe,event); g_hostEvents.clear(); }
@@ -3047,7 +3045,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int)
 					if (line.rfind("SETUP_STATE\t", 0) == 0) {
 						const size_t tab=line.find('\t',12);if(tab!=std::string::npos){g_captureExists=line.substr(12,tab-12)=="true";g_playerAutoStart=line.substr(tab+1)=="true";if(g_overlayDesigner)g_overlayDesigner->refresh();}
 					} else if (line.rfind("REPLAY_STATE\t", 0) == 0) {
-						CefRefPtr<CefValue>state=CefParseJSON(line.substr(13),JSON_PARSER_RFC);if(state&&state->GetType()==VTYPE_DICTIONARY){auto dictionary=state->GetDictionary();g_replayBufferActive=dictionary->GetBool("bufferActive");g_replaySceneExists=dictionary->GetBool("sceneExists");if(dictionary->HasKey("geometry")){auto geometry=dictionary->GetDictionary("geometry");if(geometry){g_replayPreviewGeometry.width=geometry->GetInt("width");g_replayPreviewGeometry.height=geometry->GetInt("height");g_replayPreviewGeometry.scalePercent=geometry->GetInt("scalePercent");g_replayPreviewGeometry.titlePixelSize=geometry->GetInt("titlePixelSize");g_replayPreviewGeometry.border=geometry->GetInt("border");g_replayPreviewGeometry.outerRadius=geometry->GetInt("outerRadius");g_replayPreviewGeometry.innerRadius=geometry->GetInt("innerRadius");g_replayPreviewGeometry.apertureX=geometry->GetInt("apertureX");g_replayPreviewGeometry.apertureY=geometry->GetInt("apertureY");g_replayPreviewGeometry.apertureWidth=geometry->GetInt("apertureWidth");g_replayPreviewGeometry.apertureHeight=geometry->GetInt("apertureHeight");g_replayPreviewGeometry.titleX=geometry->GetInt("titleX");g_replayPreviewGeometry.titleY=geometry->GetInt("titleY");g_replayPreviewGeometry.titleWidth=geometry->GetInt("titleWidth");g_replayPreviewGeometry.titleHeight=geometry->GetInt("titleHeight");g_replayPreviewGeometry.available=g_replayPreviewGeometry.width>0&&g_replayPreviewGeometry.height>0;}}const bool setupResponse=g_replaySetupPending.exchange(false);if(setupResponse&&g_replaySceneExists)setMusicSetting(L"tool.replaySetupCompleted",L"true");if(g_overlayDesigner)g_overlayDesigner->refresh();}
+						CefRefPtr<CefValue>state=CefParseJSON(line.substr(13),JSON_PARSER_RFC);if(state&&state->GetType()==VTYPE_DICTIONARY){auto dictionary=state->GetDictionary();g_replayBufferActive=dictionary->GetBool("bufferActive");g_replaySceneExists=dictionary->GetBool("sceneExists");g_replayPlaced=dictionary->GetBool("placedInCurrentScene");g_replayVisible=dictionary->GetBool("visible");g_replayPlaying=dictionary->GetBool("playing");g_replayConflict=dictionary->GetBool("conflict");g_replaySetupComplete=dictionary->GetBool("setupComplete");g_replayMessage=dictionary->GetString("message").ToString();if(dictionary->HasKey("geometry")){auto geometry=dictionary->GetDictionary("geometry");if(geometry){g_replayPreviewGeometry.width=geometry->GetInt("width");g_replayPreviewGeometry.height=geometry->GetInt("height");g_replayPreviewGeometry.scalePercent=geometry->GetInt("scalePercent");g_replayPreviewGeometry.titlePixelSize=geometry->GetInt("titlePixelSize");g_replayPreviewGeometry.border=geometry->GetInt("border");g_replayPreviewGeometry.outerRadius=geometry->GetInt("outerRadius");g_replayPreviewGeometry.innerRadius=geometry->GetInt("innerRadius");g_replayPreviewGeometry.apertureX=geometry->GetInt("apertureX");g_replayPreviewGeometry.apertureY=geometry->GetInt("apertureY");g_replayPreviewGeometry.apertureWidth=geometry->GetInt("apertureWidth");g_replayPreviewGeometry.apertureHeight=geometry->GetInt("apertureHeight");g_replayPreviewGeometry.titleX=geometry->GetInt("titleX");g_replayPreviewGeometry.titleY=geometry->GetInt("titleY");g_replayPreviewGeometry.titleWidth=geometry->GetInt("titleWidth");g_replayPreviewGeometry.titleHeight=geometry->GetInt("titleHeight");g_replayPreviewGeometry.available=g_replayPreviewGeometry.width>0&&g_replayPreviewGeometry.height>0;}}if(g_overlayDesigner)g_overlayDesigner->refresh();}
 					} else if (line.rfind("QUICK_TEXT_STATE\t", 0) == 0) {
 						CefRefPtr<CefValue>state=CefParseJSON(line.substr(17),JSON_PARSER_RFC);if(state&&state->GetType()==VTYPE_DICTIONARY){auto dictionary=state->GetDictionary();g_quickTextSourceExists=dictionary->GetBool("sourceExists");g_quickTextPlaced=dictionary->GetBool("placedInCurrentScene");g_quickTextVisible=dictionary->GetBool("visibleInCurrentScene");g_quickTextConflict=dictionary->GetBool("conflict");g_quickTextSetupComplete=dictionary->GetBool("setupComplete");if(dictionary->HasKey("placementMode"))g_overlayPlacementMode=dictionary->GetString("placementMode").ToString();g_quickTextMessage=dictionary->GetString("message").ToString();if(g_overlayDesigner)g_overlayDesigner->refresh();}
 					} else if (line.rfind("TIMER_STATE\t", 0) == 0) {
@@ -3137,7 +3135,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int)
 						}
 					}
 				}
-			} else {const DWORD error=GetLastError();if(error==ERROR_BROKEN_PIPE||error==ERROR_PIPE_NOT_CONNECTED){DisconnectNamedPipe(pipe);connected=false;g_hostPipeConnected=false;input.clear();}}
+			} else {const DWORD error=GetLastError();if(error==ERROR_BROKEN_PIPE||error==ERROR_PIPE_NOT_CONNECTED){DisconnectNamedPipe(pipe);connected=false;g_hostPipeConnected=false;input.clear();PostMessageW(window,WM_OBS_CONNECTION_CHANGED,FALSE,0);}}
 			if (connected && GetTickCount64() - lastHubStatus >= 500) {
 				const std::string hubStatus = externalActive() ? wideToUtf8(currentState()) : (g_youtubePlayer->active() ?
 					(g_youtubePlayer->playing() ? "playing" : "paused") : wideToUtf8(player.state()));

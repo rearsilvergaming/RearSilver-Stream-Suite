@@ -51,12 +51,12 @@
 <label class="check"><input id="replayAutoStart" type="checkbox">Start buffer with OBS</label>
 <label class="check"><input id="replayAutoHide" type="checkbox" checked>Hide replay when playback ends</label></div>
 <div class="status">OBS treats this as a maximum duration. A newly started buffer, or normal timing variation, can produce a slightly shorter clip.</div>
-<div class="row"><button data-action="replayStart" class="primary">Start buffer</button><button data-action="replayStop">Stop buffer</button><button id="replaySavePlayButton" data-action="triggerReplay" class="primary">Save &amp; play</button></div>
+<div class="row"><button id="replayStartButton" data-action="replayStart" class="primary">Start buffer</button><button id="replayStopButton" data-action="replayStop">Stop buffer</button><button id="replaySavePlayButton" data-action="triggerReplay" class="primary">Save &amp; play</button></div>
 </div>
-<div class="subcard"><h3>OBS source</h3>
-<div class="row"><button id="replaySetupButton" data-action="replayRepair">Set up replay scene</button><button id="replayShowButton" data-action="replayShow">Show</button><button id="replayHideButton" data-action="hideReplay">Hide</button></div>
-<div id="replaySetupStatus" class="status">Set up the managed replay scene before using Save &amp; play.</div>
-<div class="row"><button data-action="openReplayFolder" class="small">Open replay folder</button></div>
+<div class="subcard"><h3>Replay display</h3>
+<div class="row"><button id="replayShowButton" data-action="replayShow">Show</button><button id="replayHideButton" data-action="hideReplay">Hide</button></div>
+<div id="replayStatus" class="status">Connect OBS to use Instant Replay.</div>
+<div class="row"><button id="replayOpenFolderButton" data-action="openReplayFolder" class="small">Open replay folder</button></div>
 <div class="status">Replays are saved to OBS's recording folder. Change it in OBS Settings → Output → Recording.</div></div>
 </div>
 <div class="subcard"><h3>Frame Designer</h3>
@@ -252,8 +252,6 @@ const byId=id=>document.getElementById(id),post=(action,value='')=>parent.rsNati
 let replayFontFamilies=['Sora'];
 const renderReplayFonts=(selected='Sora')=>{const fonts=[...replayFontFamilies];if(!fonts.some(font=>font.toLowerCase()===selected.toLowerCase()))fonts.push(selected);byId('replayFont').replaceChildren(...fonts.map(font=>new Option(font,font)));byId('replayFont').value=selected};
 let ready=false,saveTimer=0;
-byId('replaySetupButton').addEventListener('click',()=>{byId('replaySetupStatus').textContent='Setting up or repairing the managed replay scene…'});
-window.rsReplaySetupRequired=()=>{byId('replaySetupStatus').textContent='Set up the replay scene before using Save & play.';byId('replaySetupButton').focus()};
 const validHex=value=>/^#[0-9a-f]{6}$/i.test(value);
 const rgba=(hex,opacity)=>{const value=parseInt(hex.slice(1),16);return `rgba(${value>>16},${value>>8&255},${value&255},${opacity/100})`};
 const bufferConfig=()=>({
@@ -296,10 +294,10 @@ byId('replaySeconds').onchange=save;
 const priorApply=window.rsApplyTools;
 window.rsApplyTools=config=>{
  if(priorApply)priorApply(config);ready=false;
- const setupComplete=!!config.replaySetupComplete;
- byId('replaySetupButton').textContent=setupComplete?'Repair replay scene':'Set up replay scene';
- byId('replaySetupStatus').textContent=setupComplete?'Replay scene is set up. Do not rename the managed scene or its sources.':'Set up the managed replay scene before using Save & play.';
- byId('replaySavePlayButton').disabled=!setupComplete;byId('replayShowButton').disabled=!setupComplete;byId('replayHideButton').disabled=!setupComplete;
+ const obsConnected=!!config.ipcConnected,conflict=!!config.replayConflict;
+ ['replayStartButton','replayStopButton','replaySavePlayButton','replayShowButton','replayHideButton','replayOpenFolderButton'].forEach(id=>byId(id).disabled=!obsConnected||(conflict&&['replaySavePlayButton','replayShowButton'].includes(id)));
+ byId('replayStatus').textContent=!obsConnected?'OBS is not connected. Replay settings can still be edited.':config.replayMessage||'Connected to OBS. Instant Replay will be created automatically when shown or played.';
+ byId('replayStatus').style.color=conflict?'#ff9caa':'';
  byId('replaySeconds').value=config.replaySeconds??10;byId('replayAutoStart').checked=!!config.replayAutoStart;byId('replayAutoHide').checked=config.replayAutoHide!==false;
 replayFontFamilies=Array.isArray(config.fontFamilies)&&config.fontFamilies.length?config.fontFamilies:['Sora'];const selectedFont=config.replayFont||'Sora';renderReplayFonts(selectedFont);
 byId('replayTitle').value=config.replayTitle||'INSTANT REPLAY';byId('replayFont').title=replayFontFamilies.some(font=>font.toLowerCase()===selectedFont.toLowerCase())?'':`${selectedFont} is unavailable; OBS will use Sora.`;byId('replayFontWeight').value=config.replayFontWeight||'bold';byId('replayAlignment').value=config.replayAlignment||config.alignment||'left';

@@ -23,14 +23,14 @@ public:
 	static void playReplay(const QString &filePath);
 
 	// Hide replay source (safe no-op if missing)
-	static void hideReplaySource();
+	static QJsonObject hideReplaySource();
 
 	// Register OBS frontend callbacks (called once)
 	static void registerFrontendCallbacks();
 	static void shutdown();
 
 	// Trigger a replay save (Play button / hotkey)
-	static void triggerReplay();
+	static QJsonObject triggerReplay();
 
 	static void openReplayFolder();
 	static void ensureReplayBgSource();
@@ -42,14 +42,15 @@ public:
 	static void configureReplayBuffer(int seconds, bool autoStart, bool autoHide);
 	static void startReplayBuffer();
 	static void stopReplayBuffer();
-	static void showReplaySource();
-	static void repairReplaySource();
+	static QJsonObject showReplaySource();
+	static QJsonObject repairReplaySource();
 	static void configureReplayFrame(const QString &title, const QString &font, const QString &fontWeight,
 					 const QString &alignment,
 					 const QString &background, const QString &accent,
 					 const QString &textColour, int opacity,
 					 const QString &sizeStep, const QString &borderStep, const QString &radiusStep);
 	static QJsonObject replayState();
+	static QJsonObject reconcilePlacementMode();
 	static void setStateChangedCallback(void (*callback)());
 };
 

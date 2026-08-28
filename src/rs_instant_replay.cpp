@@ -1,4 +1,5 @@
 #include "rs_instant_replay.hpp"
+#include "rs_stream_overlay_manager.hpp"
 #include <QFileInfo>
 #include <QDir>  
 #include <QTimer>
@@ -309,12 +310,20 @@ static obs_source_t *findReplaySceneSource()
 	obs_source_t *result = nullptr;
 	for (size_t i = 0; i < scenes.sources.num; ++i) {
 		obs_source_t *source = scenes.sources.array[i];
-		if (sourceHasManagedRole(source, kSceneRole)) {
+		if (!obs_source_removed(source) && sourceHasManagedRole(source, kSceneRole) && obs_scene_from_source(source)) {
 			result = obs_source_get_ref(source);
 			break;
 		}
 	}
 	obs_frontend_source_list_free(&scenes);
+	if (result)
+		return result;
+
+	obs_source_t *named = obs_get_source_by_name(kReplaySceneName);
+	if (named && !obs_source_removed(named) && sourceHasManagedRole(named, kSceneRole) && obs_scene_from_source(named))
+		return named;
+	if (named)
+		obs_source_release(named);
 	return result;
 }
 
@@ -325,7 +334,7 @@ static obs_source_t *ensureReplaySceneSource()
 
 	obs_source_t *named = obs_get_source_by_name(kReplaySceneName);
 	if (named) {
-		if (sourceHasManagedRole(named, kSceneRole) && obs_scene_from_source(named))
+		if (!obs_source_removed(named) && sourceHasManagedRole(named, kSceneRole) && obs_scene_from_source(named))
 			return named;
 		blog(LOG_ERROR,
 		     "[RearSilver Stream Suite] Instant Replay cannot create its service scene because an unmanaged source named '%s' already exists. Rename that source and try again.",
@@ -575,41 +584,10 @@ void RsInstantReplay::stopReplayBuffer()
 		obs_frontend_replay_buffer_stop();
 }
 
-void RsInstantReplay::showReplaySource()
-{
-	obs_source_t *serviceSource = ensureReplaySceneSource();
-	obs_source_t *parentSource = obs_frontend_get_current_scene();
-	if (!serviceSource || !parentSource) {
-		if (serviceSource)
-			obs_source_release(serviceSource);
-		if (parentSource)
-			obs_source_release(parentSource);
-		return;
-	}
-	obs_scene_t *serviceScene = obs_scene_from_source(serviceSource);
-	obs_scene_t *parentScene = obs_scene_from_source(parentSource);
-	const bool alreadyInServiceScene = parentSource == serviceSource;
-	if (serviceScene && parentScene &&
-	    (alreadyInServiceScene || ensureSceneInstance(parentScene, serviceSource))) {
-		ensureReplayBgSource();
-		ensureReplaySource();
-		if (obs_sceneitem_t *group = findReplayGroup(serviceScene)) {
-			obs_sceneitem_set_visible(group, true);
-			obs_scene_t *groupScene = obs_sceneitem_group_get_scene(group);
-			if (obs_sceneitem_t *background = findManagedItem(groupScene, kFrameRole))
-				obs_sceneitem_set_visible(background, true);
-			if (obs_sceneitem_t *video = findManagedItem(groupScene, kVideoRole))
-				obs_sceneitem_set_visible(video, true);
-		}
-	}
-	obs_source_release(parentSource);
-	obs_source_release(serviceSource);
-	notifyReplayStateChanged();
-}
-
+static QJsonObject replayStateWithMessage(const QString &message);
 static void fitReplayInsideBackground(obs_scene_t *groupScene);
 
-void RsInstantReplay::repairReplaySource()
+static QJsonObject ensureReplayInCurrentScene(bool visible)
 {
 	obs_source_t *serviceSource = ensureReplaySceneSource();
 	obs_source_t *parentSource = obs_frontend_get_current_scene();
@@ -618,28 +596,108 @@ void RsInstantReplay::repairReplaySource()
 			obs_source_release(serviceSource);
 		if (parentSource)
 			obs_source_release(parentSource);
-		return;
+		QJsonObject state = replayStateWithMessage(QString());
+		if (!serviceSource && !state.value("conflict").toBool())
+			state["message"] = QStringLiteral("OBS could not create the managed Instant Replay scene.");
+		else if (!parentSource)
+			state["message"] = QStringLiteral("OBS has no active scene available for Instant Replay.");
+		return state;
 	}
 	obs_scene_t *serviceScene = obs_scene_from_source(serviceSource);
 	obs_scene_t *parentScene = obs_scene_from_source(parentSource);
-	const bool alreadyInServiceScene = parentSource == serviceSource;
-	if (!serviceScene || !parentScene ||
-	    (!alreadyInServiceScene && !ensureSceneInstance(parentScene, serviceSource))) {
+	if (!serviceScene || !parentScene) {
 		obs_source_release(parentSource);
 		obs_source_release(serviceSource);
-		return;
+		return replayStateWithMessage(QStringLiteral("OBS could not resolve the active or managed Instant Replay scene."));
 	}
-	ensureReplayBgSource();
-	ensureReplaySource();
+
+	bool placementReady = parentSource == serviceSource;
+	QString placementError;
+	if (RsStreamOverlayManager::simplePlacementEnabled() && parentSource != serviceSource) {
+		bool simpleConflict = false;
+		obs_source_t *simpleSource = RsStreamOverlayManager::managedSimpleSceneSource(true, &simpleConflict);
+		obs_scene_t *simpleScene = simpleSource ? obs_scene_from_source(simpleSource) : nullptr;
+		if (!simpleSource || !simpleScene) {
+			placementError = simpleConflict
+				? QStringLiteral("A source named RearSilver Stream Suite | Stream Overlays blocks Simple placement.")
+				: QStringLiteral("OBS could not create the managed Stream Overlays scene.");
+		} else if (RsStreamOverlayManager::wouldCreateSceneCycle(simpleScene, serviceSource)) {
+			placementError = QStringLiteral("OBS prevented an Instant Replay scene nesting cycle.");
+		} else {
+			obs_sceneitem_t *replayInSimple = findSceneInstance(simpleScene, serviceSource);
+			if (!replayInSimple) replayInSimple = obs_scene_add(simpleScene, serviceSource);
+			if (replayInSimple) {
+				markManagedItem(replayInSimple, kParentItemRole);
+				obs_sceneitem_set_visible(replayInSimple, visible);
+			}
+			if (parentSource != simpleSource) {
+				if (obs_sceneitem_t *advancedItem = findSceneInstance(parentScene, serviceSource))
+					obs_sceneitem_set_visible(advancedItem, false);
+			}
+			obs_source_t *activeSource = nullptr;
+			bool cycleBlocked = false;
+			obs_sceneitem_t *simpleParent = RsStreamOverlayManager::ensureManagedSimpleSceneInCurrentScene(
+				simpleSource, &activeSource, &cycleBlocked);
+			placementReady = replayInSimple &&
+				(activeSource == simpleSource || simpleParent != nullptr);
+			if (!placementReady)
+				placementError = cycleBlocked
+					? QStringLiteral("OBS prevented a Stream Overlays scene nesting cycle.")
+					: QStringLiteral("Instant Replay exists, but OBS could not place Stream Overlays in the current scene.");
+			if (activeSource) obs_source_release(activeSource);
+		}
+		if (simpleSource) obs_source_release(simpleSource);
+	} else if (!placementReady) {
+		obs_source_t *simpleSource = RsStreamOverlayManager::managedSimpleSceneSource(false);
+		if (simpleSource) {
+			obs_scene_t *simpleScene = obs_scene_from_source(simpleSource);
+			if (obs_sceneitem_t *simpleItem = findSceneInstance(simpleScene, serviceSource))
+				obs_sceneitem_set_visible(simpleItem, false);
+			obs_source_release(simpleSource);
+		}
+		obs_sceneitem_t *advancedItem = ensureSceneInstance(parentScene, serviceSource);
+		placementReady = advancedItem != nullptr;
+		if (advancedItem) obs_sceneitem_set_visible(advancedItem, visible);
+		if (!placementReady)
+			placementError = QStringLiteral("Instant Replay exists, but OBS could not add it to the current scene.");
+	}
+
+	RsInstantReplay::ensureReplayBgSource();
+	RsInstantReplay::ensureReplaySource();
 	obs_sceneitem_t *group = findReplayGroup(serviceScene);
-	if (group) {
-		obs_source_t *groupSource = obs_sceneitem_get_source(group);
-		obs_scene_t *groupScene = groupSource ? obs_group_from_source(groupSource) : nullptr;
+	obs_scene_t *groupScene = group ? obs_sceneitem_group_get_scene(group) : nullptr;
+	obs_sceneitem_t *background = findManagedItem(groupScene, kFrameRole);
+	obs_sceneitem_t *video = findManagedItem(groupScene, kVideoRole);
+	if (group && groupScene) {
 		fitReplayInsideBackground(groupScene);
 		initReplayGroupTransform(group);
 	}
+	if (visible && group && background && video) {
+		obs_sceneitem_set_visible(background, true);
+		obs_sceneitem_set_visible(video, true);
+		obs_sceneitem_set_visible(group, true);
+	}
 	obs_source_release(parentSource);
 	obs_source_release(serviceSource);
+	if (!placementReady)
+		return replayStateWithMessage(placementError);
+	if (!group || !background || !video)
+		return replayStateWithMessage(QStringLiteral("OBS could not create or repair every managed Instant Replay source."));
+	return replayStateWithMessage(QString());
+}
+
+QJsonObject RsInstantReplay::showReplaySource()
+{
+	const QJsonObject state = ensureReplayInCurrentScene(true);
+	notifyReplayStateChanged();
+	return state;
+}
+
+QJsonObject RsInstantReplay::repairReplaySource()
+{
+	const QJsonObject state = ensureReplayInCurrentScene(false);
+	notifyReplayStateChanged();
+	return state;
 }
 
 void RsInstantReplay::configureReplayFrame(const QString &title, const QString &font, const QString &fontWeight,
@@ -735,23 +793,77 @@ void RsInstantReplay::configureReplayFrame(const QString &title, const QString &
 	}
 }
 
-QJsonObject RsInstantReplay::replayState()
+static QJsonObject replayStateWithMessage(const QString &message)
 {
 	obs_source_t *serviceSource = findReplaySceneSource();
 	const bool sceneExists = serviceSource != nullptr;
+	bool conflict = false;
+	QString conflictName;
+	if (!serviceSource) {
+		obs_source_t *named = obs_get_source_by_name(kReplaySceneName);
+		conflict = named && (!sourceHasManagedRole(named, kSceneRole) || !obs_scene_from_source(named) || obs_source_removed(named));
+		if (conflict) conflictName = QString::fromUtf8(kReplaySceneName);
+		if (named) obs_source_release(named);
+	}
 	obs_scene_t *serviceScene = serviceSource ? obs_scene_from_source(serviceSource) : nullptr;
 	obs_sceneitem_t *group = findReplayGroup(serviceScene);
+	obs_scene_t *groupScene = group ? obs_sceneitem_group_get_scene(group) : nullptr;
+	const bool frameExists = findManagedItem(groupScene, kFrameRole) != nullptr;
+	const bool videoExists = findManagedItem(groupScene, kVideoRole) != nullptr;
+	auto detectBlockingName = [&](bool managedItemExists, const char *name) {
+		if (managedItemExists || conflict) return;
+		obs_source_t *named = obs_get_source_by_name(name);
+		if (named) {
+			conflict = true;
+			conflictName = QString::fromUtf8(name);
+			obs_source_release(named);
+		}
+	};
+	detectBlockingName(group != nullptr, kReplayGroupName);
+	detectBlockingName(frameExists, kReplayBgSourceName);
+	detectBlockingName(videoExists, kReplaySourceName);
+	const bool simpleMode = RsStreamOverlayManager::simplePlacementEnabled();
+	bool simpleConflict = false;
+	obs_source_t *simpleSource = simpleMode
+		? RsStreamOverlayManager::managedSimpleSceneSource(false, &simpleConflict) : nullptr;
+	if (simpleConflict && !conflict) {
+		conflict = true;
+		conflictName = QStringLiteral("RearSilver Stream Suite | Stream Overlays");
+	}
 	const bool groupVisible = group && obs_sceneitem_visible(group);
 	obs_source_t *activeSource = obs_frontend_get_current_scene();
-	bool parentVisible = false;
-	if (activeSource && activeSource != serviceSource) {
+	bool placed = false, parentVisible = false;
+	bool routeReady = !simpleMode;
+	if (simpleMode && simpleSource && serviceSource) {
+		obs_scene_t *simpleScene = obs_scene_from_source(simpleSource);
+		bool replayInSimpleVisible = false;
+		obs_sceneitem_t *replayInSimple = findSceneInstance(simpleScene, serviceSource, &replayInSimpleVisible);
+		routeReady = replayInSimple != nullptr;
+		if (activeSource == serviceSource) {
+			placed = true;
+			parentVisible = true;
+		} else if (activeSource == simpleSource) {
+			placed = routeReady;
+			parentVisible = replayInSimpleVisible;
+		} else if (activeSource) {
+			obs_scene_t *activeScene = obs_scene_from_source(activeSource);
+			bool simpleParentVisible = false;
+			obs_sceneitem_t *simpleParent = findSceneInstance(activeScene, simpleSource, &simpleParentVisible);
+			placed = routeReady && simpleParent;
+			parentVisible = replayInSimpleVisible && simpleParentVisible;
+		}
+	} else if (activeSource && activeSource != serviceSource) {
 		obs_scene_t *activeScene = obs_scene_from_source(activeSource);
-		findSceneInstance(activeScene, serviceSource, &parentVisible);
+		placed = findSceneInstance(activeScene, serviceSource, &parentVisible) != nullptr;
 	}
+	if (activeSource && activeSource == serviceSource)
+		placed = parentVisible = true;
+	const bool setupComplete = sceneExists && group && frameExists && videoExists && routeReady && !conflict;
 	const bool visible = groupVisible && activeSource &&
 		(activeSource == serviceSource || parentVisible);
 	const bool playing = s_replayStartedGeneration.load() != 0;
 	if (activeSource) obs_source_release(activeSource);
+	if (simpleSource) obs_source_release(simpleSource);
 	if (serviceSource) obs_source_release(serviceSource);
 	const ReplayFrameLayout &layout = s_replayFrameLayout;
 	QJsonObject geometry{{"width", layout.width}, {"height", layout.height}, {"scalePercent", layout.scalePercent},
@@ -761,12 +873,54 @@ QJsonObject RsInstantReplay::replayState()
 		{"apertureWidth", layout.aperture.width()}, {"apertureHeight", layout.aperture.height()},
 		{"titleX", layout.titleRect.x()}, {"titleY", layout.titleRect.y()},
 		{"titleWidth", layout.titleRect.width()}, {"titleHeight", layout.titleRect.height()}};
-	return {{"bufferActive", replayBufferActive()}, {"sceneExists", sceneExists},
-		{"visible", visible}, {"playing", playing},
-		{"seconds", replaySeconds()}, {"autoStart", replayAutoStart()}, {"autoHide", replayAutoHide()},
+	QJsonObject result{{"bufferActive", RsInstantReplay::replayBufferActive()}, {"sceneExists", sceneExists},
+		{"placedInCurrentScene", placed}, {"visible", visible}, {"playing", playing},
+		{"conflict", conflict}, {"setupComplete", setupComplete},
+		{"placementMode", simpleMode ? QStringLiteral("simple") : QStringLiteral("advanced")},
+		{"seconds", RsInstantReplay::replaySeconds()}, {"autoStart", RsInstantReplay::replayAutoStart()},
+		{"autoHide", RsInstantReplay::replayAutoHide()},
 		{"sizeStep", s_replaySizeStep}, {"borderStep", s_replayBorderStep},
 		{"radiusStep", s_replayRadiusStep}, {"alignment", s_replayAlignment},
 		{"fontWeight", s_replayFontWeight}, {"geometry", geometry}};
+	result["message"] = message.isEmpty()
+		? (conflict ? QStringLiteral("A source named %1 blocks the managed Instant Replay setup.").arg(conflictName)
+			: !sceneExists ? QStringLiteral("Connected to OBS. Instant Replay will be created automatically when shown or played.")
+			: !setupComplete ? QStringLiteral("Connected to OBS. Instant Replay will repair its managed sources when shown or played.")
+			: !placed ? QStringLiteral("Connected to OBS. Instant Replay will be added to this scene when shown or played.")
+			: playing ? QStringLiteral("Instant Replay is visible and playing in the current scene.")
+			: visible ? QStringLiteral("Instant Replay is visible in the current scene.")
+			: QStringLiteral("Instant Replay is ready in the current scene."))
+		: message;
+	return result;
+}
+
+QJsonObject RsInstantReplay::replayState()
+{
+	return replayStateWithMessage(QString());
+}
+
+QJsonObject RsInstantReplay::reconcilePlacementMode()
+{
+	obs_source_t *serviceSource = findReplaySceneSource();
+	if (!serviceSource) return replayState();
+	obs_source_t *simpleSource = RsStreamOverlayManager::managedSimpleSceneSource(false);
+	if (RsStreamOverlayManager::simplePlacementEnabled()) {
+		obs_source_t *activeSource = obs_frontend_get_current_scene();
+		if (activeSource && activeSource != serviceSource && activeSource != simpleSource) {
+			obs_scene_t *activeScene = obs_scene_from_source(activeSource);
+			if (obs_sceneitem_t *advancedItem = findSceneInstance(activeScene, serviceSource))
+				obs_sceneitem_set_visible(advancedItem, false);
+		}
+		if (activeSource) obs_source_release(activeSource);
+	} else if (simpleSource) {
+		obs_scene_t *simpleScene = obs_scene_from_source(simpleSource);
+		if (obs_sceneitem_t *simpleItem = findSceneInstance(simpleScene, serviceSource))
+			obs_sceneitem_set_visible(simpleItem, false);
+	}
+	if (simpleSource) obs_source_release(simpleSource);
+	obs_source_release(serviceSource);
+	notifyReplayStateChanged();
+	return replayState();
 }
 
 void RsInstantReplay::setStateChangedCallback(void (*callback)())
@@ -980,33 +1134,24 @@ void RsInstantReplay::playReplay(const QString &filePath)
 	const quint64 playbackGeneration = s_replayPlaybackGeneration.fetch_add(1) + 1;
 	s_replayStartedGeneration.store(0);
 
-	obs_source_t *serviceSource = ensureReplaySceneSource();
-	obs_source_t *parentSource = obs_frontend_get_current_scene();
-	if (!serviceSource || !parentSource) {
-		if (serviceSource)
-			obs_source_release(serviceSource);
-		if (parentSource)
-			obs_source_release(parentSource);
+	const QJsonObject prepared = ensureReplayInCurrentScene(true);
+	if (!prepared.value("setupComplete").toBool() ||
+	    !prepared.value("placedInCurrentScene").toBool() || prepared.value("conflict").toBool())
 		return;
-	}
+	obs_source_t *serviceSource = findReplaySceneSource();
+	if (!serviceSource)
+		return;
 	obs_scene_t *serviceScene = obs_scene_from_source(serviceSource);
-	obs_scene_t *parentScene = obs_scene_from_source(parentSource);
-	const bool alreadyInServiceScene = parentSource == serviceSource;
-	if (!serviceScene || !parentScene ||
-	    (!alreadyInServiceScene && !ensureSceneInstance(parentScene, serviceSource))) {
-		obs_source_release(parentSource);
+	if (!serviceScene) {
 		obs_source_release(serviceSource);
 		return;
 	}
-	ensureReplayBgSource();
-	ensureReplaySource();
 	obs_sceneitem_t *group = findReplayGroup(serviceScene);
 	obs_scene_t *groupScene = group ? obs_sceneitem_group_get_scene(group) : nullptr;
 	obs_sceneitem_t *videoItem = findManagedItem(groupScene, kVideoRole);
 	obs_sceneitem_t *frameItem = findManagedItem(groupScene, kFrameRole);
 	obs_source_t *src = videoItem ? obs_sceneitem_get_source(videoItem) : nullptr;
 	if (!group || !groupScene || !src) {
-		obs_source_release(parentSource);
 		obs_source_release(serviceSource);
 		return;
 	}
@@ -1039,21 +1184,20 @@ void RsInstantReplay::playReplay(const QString &filePath)
 				RsInstantReplay::hideReplaySource();
 		});
 	}
-	obs_source_release(parentSource);
 	obs_source_release(serviceSource);
 }
 
 // ------------------------------------------------------------
 // Hide replay source
 // ------------------------------------------------------------
-void RsInstantReplay::hideReplaySource()
+QJsonObject RsInstantReplay::hideReplaySource()
 {
 	s_replayStartedGeneration.store(0);
 	obs_source_t *serviceSource = findReplaySceneSource();
 	if (!serviceSource) {
 		disconnectReplayMediaSignals();
 		notifyReplayStateChanged();
-		return;
+		return replayState();
 	}
 	obs_scene_t *serviceScene = obs_scene_from_source(serviceSource);
 	obs_sceneitem_t *group = findReplayGroup(serviceScene);
@@ -1066,6 +1210,7 @@ void RsInstantReplay::hideReplaySource()
 	obs_source_release(serviceSource);
 	disconnectReplayMediaSignals();
 	notifyReplayStateChanged();
+	return replayState();
 }
 
 
@@ -1165,17 +1310,15 @@ void RsInstantReplay::shutdown()
 // ------------------------------------------------------------
 // Trigger replay buffer save
 // ------------------------------------------------------------
-void RsInstantReplay::triggerReplay()
+QJsonObject RsInstantReplay::triggerReplay()
 {
-	// First-time provisioning belongs to the explicit Hub setup action. The Hub
-	// repairs an already-configured replay scene before forwarding Save & Play.
-	obs_source_t *serviceSource = findReplaySceneSource();
-	if (!serviceSource) {
-		blog(LOG_WARNING,
-		     "[RearSilver Stream Suite] Instant Replay setup is required before Save & Play or its hotkey can run");
-		return;
+	const QJsonObject prepared = ensureReplayInCurrentScene(false);
+	if (!prepared.value("setupComplete").toBool() ||
+	    !prepared.value("placedInCurrentScene").toBool() || prepared.value("conflict").toBool()) {
+		blog(LOG_WARNING, "[RearSilver Stream Suite] Instant Replay could not prepare the current scene for Save & Play");
+		notifyReplayStateChanged();
+		return prepared;
 	}
-	obs_source_release(serviceSource);
 
 	// Mark the moment THIS replay was requested
 	s_lastReplayRequestTime = QDateTime::currentMSecsSinceEpoch();
@@ -1205,5 +1348,6 @@ void RsInstantReplay::triggerReplay()
 	} else {
 		obs_frontend_replay_buffer_save();
 	}
+	return replayState();
 }
 } // namespace hub_replay

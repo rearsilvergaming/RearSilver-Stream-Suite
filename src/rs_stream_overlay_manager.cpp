@@ -2,6 +2,7 @@
 #include "rs_stream_overlay_server.hpp"
 
 #include <cstring>
+#include <unordered_set>
 #include <obs-module.h>
 #include <obs-frontend-api.h>
 
@@ -169,11 +170,53 @@ obs_sceneitem_t *ensureManagedFeatureGroup(obs_scene_t *scene, const char *name,
 	return group;
 }
 
-obs_sceneitem_t *ensureSimpleSceneInstance(obs_source_t *simpleSource, obs_source_t **activeSourceOut = nullptr)
+bool sceneContainsSourceRecursive(obs_scene_t *scene, obs_source_t *target,
+				  std::unordered_set<obs_source_t *> &visited)
 {
+	if (!scene || !target) return false;
+	obs_source_t *sceneSource = obs_scene_get_source(scene);
+	if (!sceneSource || !visited.insert(sceneSource).second) return false;
+	struct Search {
+		obs_source_t *target;
+		std::unordered_set<obs_source_t *> *visited;
+		bool found;
+	} search{target, &visited, false};
+	obs_scene_enum_items(scene, [](obs_scene_t *, obs_sceneitem_t *item, void *parameter) {
+		auto *search = static_cast<Search *>(parameter);
+		obs_source_t *source = obs_sceneitem_get_source(item);
+		if (source == search->target) {
+			search->found = true;
+			return false;
+		}
+		obs_scene_t *nested = obs_sceneitem_is_group(item)
+			? obs_sceneitem_group_get_scene(item) : obs_scene_from_source(source);
+		if (nested && sceneContainsSourceRecursive(nested, search->target, *search->visited)) {
+			search->found = true;
+			return false;
+		}
+		return true;
+	}, &search);
+	return search.found;
+}
+
+bool sceneContainsSource(obs_scene_t *scene, obs_source_t *target)
+{
+	std::unordered_set<obs_source_t *> visited;
+	return sceneContainsSourceRecursive(scene, target, visited);
+}
+
+obs_sceneitem_t *ensureSimpleSceneInstance(obs_source_t *simpleSource, obs_source_t **activeSourceOut = nullptr,
+					   bool *cycleBlocked = nullptr)
+{
+	if (cycleBlocked) *cycleBlocked = false;
 	obs_source_t *activeSource = obs_frontend_get_current_scene();
 	if (activeSourceOut) *activeSourceOut = activeSource;
 	if (!activeSource || activeSource == simpleSource) return nullptr;
+	obs_scene_t *simpleScene = obs_scene_from_source(simpleSource);
+	if (sceneContainsSource(simpleScene, activeSource)) {
+		if (cycleBlocked) *cycleBlocked = true;
+		return nullptr;
+	}
 	obs_scene_t *activeScene = obs_scene_from_source(activeSource);
 	obs_sceneitem_t *parent = findSourceItem(activeScene, simpleSource);
 	if (!parent && activeScene) parent = obs_scene_add(activeScene, simpleSource);
@@ -427,6 +470,33 @@ QString RsStreamOverlayManager::placementMode()
 bool RsStreamOverlayManager::simplePlacementEnabled()
 {
 	return s_placementMode == QStringLiteral("simple");
+}
+
+obs_source_t *RsStreamOverlayManager::managedSimpleSceneSource(bool create, bool *conflict)
+{
+	if (conflict) *conflict = false;
+	if (obs_source_t *managed = findManagedSimpleSceneSource()) return managed;
+	obs_source_t *named = obs_get_source_by_name(kSimpleSceneName);
+	if (named) {
+		if (!obs_source_removed(named) && isManagedSimpleScene(named)) return named;
+		if (conflict) *conflict = true;
+		obs_source_release(named);
+		return nullptr;
+	}
+	return create ? ensureManagedSimpleSceneSource() : nullptr;
+}
+
+obs_sceneitem_t *RsStreamOverlayManager::ensureManagedSimpleSceneInCurrentScene(obs_source_t *simpleSource,
+		obs_source_t **activeSourceOut, bool *cycleBlocked)
+{
+	return ensureSimpleSceneInstance(simpleSource, activeSourceOut, cycleBlocked);
+}
+
+bool RsStreamOverlayManager::wouldCreateSceneCycle(obs_scene_t *parentScene, obs_source_t *childSource)
+{
+	obs_scene_t *childScene = childSource ? obs_scene_from_source(childSource) : nullptr;
+	obs_source_t *parentSource = parentScene ? obs_scene_get_source(parentScene) : nullptr;
+	return childScene && parentSource && sceneContainsSource(childScene, parentSource);
 }
 
 QJsonObject RsStreamOverlayManager::quickTextStatus()

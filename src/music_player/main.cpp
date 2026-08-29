@@ -31,6 +31,7 @@
 #include "include/cef_parser.h"
 #include "include/cef_task.h"
 #include "music_hub.hpp"
+#include "command_catalogue.hpp"
 #include "local_library.hpp"
 #include "youtube_resolver.hpp"
 #include "system_media_provider.hpp"
@@ -1545,6 +1546,41 @@ static void setFontFamilies(CefRefPtr<CefDictionaryValue> dictionary, const char
 static std::wstring musicSetting(const wchar_t *name,const wchar_t *fallback){HKEY key{};if(RegOpenKeyExW(HKEY_CURRENT_USER,kMusicSettingsRegistry,0,KEY_READ,&key)!=ERROR_SUCCESS)return fallback;wchar_t value[1024]{};DWORD type=0,bytes=sizeof(value);const LSTATUS result=RegQueryValueExW(key,name,nullptr,&type,reinterpret_cast<BYTE*>(value),&bytes);RegCloseKey(key);return result==ERROR_SUCCESS&&type==REG_SZ?value:fallback;}
 static void setMusicSetting(const wchar_t *name,const std::wstring &value){HKEY key{};DWORD d=0;if(RegCreateKeyExW(HKEY_CURRENT_USER,kMusicSettingsRegistry,0,nullptr,0,KEY_WRITE,nullptr,&key,&d)!=ERROR_SUCCESS)return;RegSetValueExW(key,name,0,REG_SZ,reinterpret_cast<const BYTE*>(value.c_str()),DWORD((value.size()+1)*sizeof(wchar_t)));RegCloseKey(key);}
 static bool musicBool(const wchar_t *name,bool fallback){const auto value=musicSetting(name,fallback?L"true":L"false");return value==L"true"||value==L"1";}
+static void appendChatCommandConfig(CefRefPtr<CefDictionaryValue> config)
+{
+	CefRefPtr<CefListValue> roles = CefListValue::Create();
+	const std::array<std::pair<std::string_view, std::string_view>, 4> roleLabels{{
+		{"everyone", "Everyone"}, {"subscriber", "Subscribers"}, {"vip", "VIPs"}, {"moderator", "Moderators"},
+	}};
+	for (size_t index = 0; index < roleLabels.size(); ++index) {
+		CefRefPtr<CefDictionaryValue> role = CefDictionaryValue::Create();
+		role->SetString("id", std::string(roleLabels[index].first));
+		role->SetString("label", std::string(roleLabels[index].second));
+		roles->SetDictionary(index, role);
+	}
+	config->SetList("commandRoles", roles);
+
+	CefRefPtr<CefListValue> commands = CefListValue::Create();
+	for (size_t index = 0; index < kRsChatCommands.size(); ++index) {
+		const auto &definition = kRsChatCommands[index];
+		CefRefPtr<CefDictionaryValue> command = CefDictionaryValue::Create();
+		command->SetString("id", std::string(definition.id));
+		command->SetString("category", std::string(definition.category));
+		command->SetString("label", std::string(definition.label));
+		command->SetString("syntax", std::string(definition.syntax));
+		command->SetString("description", std::string(definition.description));
+		CefRefPtr<CefDictionaryValue> defaults = CefDictionaryValue::Create();
+		for (const auto &[role, flag] : kRsChatRoles) {
+			const bool fallback = (definition.defaultRoles & flag) != 0;
+			const std::string key = "command." + std::string(definition.id) + "." + std::string(role);
+			config->SetBool(key, musicBool(utf8ToWide(key).c_str(), fallback));
+			defaults->SetBool(std::string(role), fallback);
+		}
+		command->SetDictionary("defaults", defaults);
+		commands->SetDictionary(index, command);
+	}
+	config->SetList("commandDefinitions", commands);
+}
 static std::wstring replaySizeStep(){const auto step=musicSetting(L"tool.replaySizeStep",L"");if(step==L"small"||step==L"medium"||step==L"large"||step==L"fullscreen")return step;const int value=_wtoi(musicSetting(L"tool.replayScale",L"80").c_str());return value<50?L"small":value<70?L"medium":value<90?L"large":L"fullscreen";}
 static std::wstring replayBorderStep(){const auto step=musicSetting(L"tool.replayBorderStep",L"");if(step==L"none"||step==L"subtle"||step==L"medium"||step==L"bold"||step==L"statement")return step;if(step==L"thin")return L"subtle";if(step==L"thick")return L"bold";const int value=_wtoi(musicSetting(L"tool.replayBorderWidth",L"8").c_str());return value<2?L"none":value<6?L"subtle":value<10?L"medium":L"bold";}
 static std::wstring replayRadiusStep(){const auto step=musicSetting(L"tool.replayRadiusStep",L"");if(step==L"square"||step==L"subtle"||step==L"rounded"||step==L"soft"||step==L"dramatic")return step;const int value=_wtoi(musicSetting(L"tool.replayRadius",L"20").c_str());return value<5?L"square":value<15?L"subtle":value<26?L"rounded":L"soft";}
@@ -1803,6 +1839,9 @@ public:
 										if(value){setMusicSetting(L"suiteSettings.setupCompleted",value->GetBool("completed")?L"true":L"false");setMusicSetting(L"suiteSettings.setupStep",std::to_wstring(std::clamp(value->GetInt("step"),0,4)));setMusicSetting(L"suiteSettings.setupSchemaVersion",std::to_wstring(std::max(1,value->GetInt("schemaVersion"))));}
 									}
 									else if(object->GetString("action").ToString()=="setOpenHubWithObs")setMusicSetting(L"openHubWithObs",object->GetBool("value")?L"true":L"false");
+									else if(object->GetString("action").ToString()=="openCommands"){
+										g_page=6;showPage(g_page);InvalidateRect(m_parent,nullptr,FALSE);return S_OK;
+									}
 									sendSuiteSettingsConfig();return S_OK;
 								}
 								if(object->GetString("page").ToString()=="accounts"){
@@ -1979,7 +2018,7 @@ private:
 		setFontFamilies(d, "fontFamilies");
 		CefRefPtr<CefValue> root=CefValue::Create(); root->SetDictionary(d); const std::wstring script=L"window.rsApplyConfig("+utf8ToWide(CefWriteJSON(root,JSON_WRITER_DEFAULT).ToString())+L")"; m_webView->ExecuteScript(script.c_str(),nullptr);
 	}
-	void sendCommandsConfig(){if(!m_ready||!m_webView||m_page!=6)return;CefRefPtr<CefDictionaryValue>d=CefDictionaryValue::Create();for(const char*cmd:{"sr","play","pause","skip","restart","previous","remove"})for(const char*role:{"everyone","subscriber","vip","moderator"}){const std::string key=std::string("command.")+cmd+"."+role;const bool fallback=std::string(cmd)=="sr"?std::string(role)=="everyone":std::string(role)=="moderator";d->SetBool(key,musicBool(utf8ToWide(key).c_str(),fallback));}d->SetBool("spotifyAuthorized",g_spotify.state().authorized);CefRefPtr<CefValue>root=CefValue::Create();root->SetDictionary(d);m_webView->ExecuteScript((L"window.rsApplyCommands("+utf8ToWide(CefWriteJSON(root,JSON_WRITER_DEFAULT).ToString())+L")").c_str(),nullptr);}
+	void sendCommandsConfig(){if(!m_ready||!m_webView||m_page!=6)return;CefRefPtr<CefDictionaryValue>d=CefDictionaryValue::Create();appendChatCommandConfig(d);d->SetBool("spotifyAuthorized",g_spotify.state().authorized);CefRefPtr<CefValue>root=CefValue::Create();root->SetDictionary(d);m_webView->ExecuteScript((L"window.rsApplyCommands("+utf8ToWide(CefWriteJSON(root,JSON_WRITER_DEFAULT).ToString())+L")").c_str(),nullptr);}
 	void sendToolsConfig(){
 		if(!m_ready||!m_webView||m_page!=7)return;
 		CefRefPtr<CefDictionaryValue>d=CefDictionaryValue::Create();
@@ -2096,6 +2135,7 @@ private:
 		settingString("nowPlayingSymbol", L"▶️"); settingString("textOutputFormat", L"{{title}} - {{artist}} - Requested by {{user}}");
 		settingInt("queueLimit", L"maxQueueTotal", 50); settingInt("userLimit", L"maxPerUser", 2);
 		settingInt("maxTrackMinutes", L"maxTrackLengthMinutes", 10);
+		appendChatCommandConfig(d);
 		const std::wstring legacyExemption = musicSetting(L"exemptRole", L"moderator");
 		d->SetBool("exemptSubscriber", musicBool(L"exemptSubscriber", legacyExemption == L"subscriber"));
 		d->SetBool("exemptVip", musicBool(L"exemptVip", legacyExemption == L"subscriber" || legacyExemption == L"vip"));
@@ -2242,11 +2282,10 @@ static bool chatCommandAllowed(const char *command, const TwitchChatMessage &m)
 {
 	if (m.broadcaster) return true;
 	const std::string base = std::string("command.") + command + ".";
-	const bool request = std::string(command) == "sr";
-	auto enabled=[&](const char *role,bool fallback){const std::wstring key=utf8ToWide(base+role);return musicBool(key.c_str(),fallback);};
-	if (enabled("everyone", request)) return true;
-	return (m.subscriber && enabled("subscriber", false)) || (m.vip && enabled("vip", false)) ||
-		(m.moderator && enabled("moderator", !request));
+	auto enabled=[&](const char *role){const std::wstring key=utf8ToWide(base+role);return musicBool(key.c_str(),rsChatCommandDefault(command,role));};
+	if (enabled("everyone")) return true;
+	return (m.subscriber && enabled("subscriber")) || (m.vip && enabled("vip")) ||
+		(m.moderator && enabled("moderator"));
 }
 
 static std::string nextChatRequestId()

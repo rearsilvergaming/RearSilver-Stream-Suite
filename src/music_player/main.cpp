@@ -1811,7 +1811,6 @@ public:
 								// ready or it can remain stuck showing its default/disconnected state.
 								if (message == "ready") { if (m_page == 3) { m_ready = true; sendConfig(); } return S_OK; }
 								if (message == "library-ready") { if (m_page == 2) { m_ready = true; sendLibraryConfig(); } return S_OK; }
-								if (message == "settings-ready") { if (m_page == 4) { m_ready = true; sendSettingsConfig(); } return S_OK; }
 								if (message == "commands-ready") { if (m_page == 6) { m_ready = true; sendCommandsConfig(); } return S_OK; }
 								if (message == "accounts-ready") { if (m_page == 5) { m_ready = true; sendAccountsConfig(); } return S_OK; }
 								if (message == "tools-ready") { if (m_page == 7) { m_ready = true; sendToolsConfig(); } return S_OK; }
@@ -1831,7 +1830,7 @@ public:
 									else if(action=="autostart"){std::lock_guard<std::mutex>lock(g_hostEventMutex);g_hostEvents.push_back(std::string("HOST\tAUTOSTART\t")+(object->GetBool("value")?"true":"false")+"\n");}
 									else if(action=="setupStatus"){std::lock_guard<std::mutex>lock(g_hostEventMutex);g_hostEvents.push_back("HOST\tSETUP_STATUS\n");}
 									else if(action=="openOutputFolder")ShellExecuteW(m_parent,L"open",textOutputFolder().c_str(),nullptr,nullptr,SW_SHOWNORMAL);
-									sendSettingsConfig();return S_OK;
+									sendSuiteSettingsConfig();return S_OK;
 								}
 								if(object->GetString("page").ToString()=="suiteSettings"){
 									if(object->GetString("action").ToString()=="saveState"){
@@ -1936,7 +1935,7 @@ public:
 			}).Get());
 	}
 	void showPage(int page) {
-		const bool visible = page >= 2 && page <= 8;
+		const bool visible = page >= 2 && page <= 8 && page != 4;
 		if (visible && page != m_page && m_webView) {
 			m_page = page;
 			m_ready = false;
@@ -1954,11 +1953,10 @@ public:
 		if (visible) refresh();
 	}
 	void refresh() {
-		if (!m_webView || m_page < 2 || m_page > 8) return;
+		if (!m_webView || m_page < 2 || m_page > 8 || m_page == 4) return;
 		if (!m_ready) { probePageReady(); return; }
 		if (m_page == 2) sendLibraryConfig();
 		else if (m_page == 3) sendConfig();
-		else if (m_page == 4) sendSettingsConfig();
 		else if (m_page == 5) sendAccountsConfig();
 		else if (m_page == 6) sendCommandsConfig();
 		else if (m_page == 7) sendToolsConfig();
@@ -1981,26 +1979,27 @@ private:
 	RECT m_bounds{};
 	static bool validColour(const std::wstring &value) { return value.size() == 7 && value[0] == L'#' && std::all_of(value.begin() + 1, value.end(), [](wchar_t c) { return iswxdigit(c) != 0; }); }
 	void showCurrentPage() {
-		if (!m_webView || m_page < 2 || m_page > 8) return;
+		if (!m_webView || m_page < 2 || m_page > 8 || m_page == 4) return;
 		const wchar_t *name = m_page == 2 ? L"library.html" : m_page == 3 ? L"overlay-designer.html" :
-			m_page == 4 ? L"settings.html" : m_page == 5 ? L"accounts.html" : m_page == 6 ? L"commands.html" :
+			m_page == 5 ? L"accounts.html" : m_page == 6 ? L"commands.html" :
 			m_page == 8 ? L"suite-settings.html" : L"stream-tools.html";
 		const wchar_t *functionName = m_page == 2 ? L"rsApplyLibrary" : m_page == 3 ? L"rsApplyConfig" :
-			m_page == 4 ? L"rsApplySettings" : m_page == 5 ? L"rsApplyAccounts" : m_page == 6 ? L"rsApplyCommands" :
+			m_page == 5 ? L"rsApplyAccounts" : m_page == 6 ? L"rsApplyCommands" :
 			m_page == 8 ? L"rsApplySuiteSettings" : L"rsApplyTools";
 		const wchar_t *readyMessage = m_page == 2 ? L"library-ready" : m_page == 3 ? L"ready" :
-			m_page == 4 ? L"settings-ready" : m_page == 5 ? L"accounts-ready" : m_page == 6 ? L"commands-ready" :
+			m_page == 5 ? L"accounts-ready" : m_page == 6 ? L"commands-ready" :
 			m_page == 8 ? L"suite-settings-ready" : L"tools-ready";
 		const std::wstring script = L"window.rsShowPage&&window.rsShowPage('https://rearsilver.local/" + std::wstring(name) +
 			L"','" + functionName + L"','" + readyMessage + L"')";
 		m_webView->ExecuteScript(script.c_str(), nullptr);
 	}
 	void probePageReady() {
+		if (m_page == 4) return;
 		const wchar_t *functionName = m_page == 2 ? L"rsApplyLibrary" : m_page == 3 ? L"rsApplyConfig" :
-			m_page == 4 ? L"rsApplySettings" : m_page == 5 ? L"rsApplyAccounts" : m_page == 6 ? L"rsApplyCommands" :
+			m_page == 5 ? L"rsApplyAccounts" : m_page == 6 ? L"rsApplyCommands" :
 			m_page == 8 ? L"rsApplySuiteSettings" : L"rsApplyTools";
 		const wchar_t *readyMessage = m_page == 2 ? L"library-ready" : m_page == 3 ? L"ready" :
-			m_page == 4 ? L"settings-ready" : m_page == 5 ? L"accounts-ready" : m_page == 6 ? L"commands-ready" :
+			m_page == 5 ? L"accounts-ready" : m_page == 6 ? L"commands-ready" :
 			m_page == 8 ? L"suite-settings-ready" : L"tools-ready";
 		const std::wstring script = L"if(window.rsActiveHas&&window.rsActiveHas('" + std::wstring(functionName) +
 			L"')) window.chrome.webview.postMessage('" + readyMessage + L"');";
@@ -2109,7 +2108,6 @@ private:
 	void sendLibraryConfig() {
 		if(!m_ready||!m_webView||m_page!=2)return; CefRefPtr<CefDictionaryValue>d=CefDictionaryValue::Create(); d->SetString("url",g_hub.fallbackUrl()); d->SetString("status",wideToUtf8(g_libraryStatus)); d->SetString("label",g_hub.fallbackLabel()); d->SetInt("youtubeCount",int(g_hub.youtubeFallback().size())); d->SetInt("requestCount",int(g_hub.requests().size())); d->SetInt("localCount",int(g_hub.localLibrary().size())); d->SetString("source",g_hub.activeSource()); CefRefPtr<CefValue>root=CefValue::Create();root->SetDictionary(d);const std::wstring script=L"window.rsApplyLibrary("+utf8ToWide(CefWriteJSON(root,JSON_WRITER_DEFAULT).ToString())+L")";m_webView->ExecuteScript(script.c_str(),nullptr);
 	}
-	void sendSettingsConfig(){if(!m_ready||!m_webView||m_page!=4)return;CefRefPtr<CefDictionaryValue>d=CefDictionaryValue::Create();auto b=[&](const char*k,bool f){const auto w=utf8ToWide(k);d->SetBool(k,musicBool(w.c_str(),f));};auto s=[&](const char*k,const wchar_t*f){const auto w=utf8ToWide(k);d->SetString(k,wideToUtf8(musicSetting(w.c_str(),f)));};auto n=[&](const char*k,const wchar_t*stored,int f){d->SetInt(k,_wtoi(musicSetting(stored,std::to_wstring(f).c_str()).c_str()));};b("requestsEnabled",true);b("playlistOnly",false);b("preventDuplicates",true);b("announceTrackChanges",false);b("textOutputEnabled",false);b("youtubeMusicOnly",false);b("youtubeRejectAgeRestricted",true);s("minimumRole",L"everyone");s("youtubeSafeSearch",L"strict");const std::wstring legacy=musicSetting(L"exemptRole",L"moderator");d->SetBool("exemptSubscriber",musicBool(L"exemptSubscriber",legacy==L"subscriber"));d->SetBool("exemptVip",musicBool(L"exemptVip",legacy==L"subscriber"||legacy==L"vip"));d->SetBool("exemptModerator",musicBool(L"exemptModerator",legacy!=L"none"&&legacy!=L"broadcaster"));d->SetBool("exemptBroadcaster",musicBool(L"exemptBroadcaster",legacy!=L"none"));for(const char*cmd:{"sr","play","pause","skip","restart","previous","remove"})for(const char*role:{"everyone","subscriber","vip","moderator"}){const std::string key=std::string("command.")+cmd+"."+role;const bool fallback=std::string(cmd)=="sr"?std::string(role)=="everyone":std::string(role)=="moderator";b(key.c_str(),fallback);}s("nonRequestLabel",L"Stream DJ");s("nowPlayingSymbol",L"▶️");s("textOutputFormat",L"{{title}} - {{artist}} - Requested by {{user}}");n("queueLimit",L"maxQueueTotal",50);n("userLimit",L"maxPerUser",2);n("maxTrackMinutes",L"maxTrackLengthMinutes",10);d->SetString("outputPath",wideToUtf8(textOutputPath()));d->SetBool("captureExists",g_captureExists);d->SetBool("autoStart",g_playerAutoStart);d->SetString("captureStatus",g_captureExists?"Music Capture exists. Use the button to review or change the captured application.":"Music Capture has not been created yet.");CefRefPtr<CefValue>root=CefValue::Create();root->SetDictionary(d);m_webView->ExecuteScript((L"window.rsApplySettings("+utf8ToWide(CefWriteJSON(root,JSON_WRITER_DEFAULT).ToString())+L")").c_str(),nullptr);}
 	void sendAccountsConfig(){if(!m_ready||!m_webView||m_page!=5)return;const SpotifyClientState spotify=g_spotify.state();const TwitchAccountState streamer=g_streamerTwitch.state(),bot=g_botTwitch.state();const std::string streamerState=streamer.busy?"connecting":!streamer.connected?"disconnected":g_twitchReader.connected()?"connected":"chat-reconnecting";const std::string botState=bot.busy?"connecting":!bot.connected?"disconnected":g_authSender=="bot"&&!g_twitchSender.connected()?"chat-reconnecting":"connected";CefRefPtr<CefDictionaryValue>d=CefDictionaryValue::Create();d->SetDouble("revision",double(++g_accountsRevision));d->SetString("streamerState",streamerState);d->SetString("streamerLogin",streamer.login);d->SetString("streamerDisplayName",streamer.displayName);d->SetString("streamerError",streamer.error);d->SetString("botState",botState);d->SetString("botLogin",bot.login);d->SetString("botDisplayName",bot.displayName);d->SetString("botError",bot.error);d->SetString("sender",g_authSender);d->SetBool("ipcConnected",g_hostPipeConnected);d->SetString("spotifyClientId",spotify.clientId);d->SetBool("spotifyAuthorized",spotify.authorized);d->SetBool("spotifyConnected",spotify.connected);d->SetBool("spotifyBusy",spotify.busy);d->SetBool("spotifyQueueChecked",spotify.queueChecked);d->SetBool("spotifyPlaybackAvailable",spotify.playbackAvailable);d->SetString("spotifyDisplayName",spotify.displayName);d->SetString("spotifyError",spotify.error);d->SetInt("spotifyQueueCount",int(spotify.queue.size()));CefRefPtr<CefValue>root=CefValue::Create();root->SetDictionary(d);m_webView->ExecuteScript((L"window.rsApplyAccounts("+utf8ToWide(CefWriteJSON(root,JSON_WRITER_DEFAULT).ToString())+L")").c_str(),nullptr);}
 	void sendSuiteSettingsConfig()
 	{
@@ -2590,9 +2588,9 @@ static LRESULT CALLBACK windowProc(HWND window, UINT message, WPARAM wParam, LPA
 			}
 		}
 		const int navStart = 104;
-		if (point.x < sidebar && point.y >= navStart && point.y < navStart + 468) {
-			static const int navOrder[] = {7, 0, 1, 2, 3, 8, 4, 5, 6};
-			g_page = navOrder[std::clamp((static_cast<int>(point.y) - navStart) / 52, 0, 8)];
+		if (point.x < sidebar && point.y >= navStart && point.y < navStart + 416) {
+			static const int navOrder[] = {7, 0, 1, 2, 3, 8, 5, 6};
+			g_page = navOrder[std::clamp((static_cast<int>(point.y) - navStart) / 52, 0, 7)];
 			positionLibraryControls(window);
 			positionOverlayControls(window);
 			if (g_youtubePlayer && g_youtubePlayer->active())
@@ -2678,9 +2676,9 @@ static LRESULT CALLBACK windowProc(HWND window, UINT message, WPARAM wParam, LPA
 		RectF(float(g_sidebarToggle.left), float(g_sidebarToggle.top), 26, 26), secondary, StringAlignmentCenter);
 	const wchar_t *pages[] = {L"Now Playing", L"Queue & Requests", L"Library", L"Music Overlay", L"Settings", L"Accounts", L"Commands", L"Stream Tools", L"Suite Settings"};
 	const wchar_t *icons[] = {L"\u25B6", L"\u2261", L"\u266B", L"\u25C7", L"\u2699", L"@", L"!", L"+", L"\u2637"};
-	static const int navOrder[] = {7, 0, 1, 2, 3, 8, 4, 5, 6};
+	static const int navOrder[] = {7, 0, 1, 2, 3, 8, 5, 6};
 	const float navStart = 104.0f;
-	for (int i = 0; i < 9; ++i) {
+	for (int i = 0; i < 8; ++i) {
 		const float y = navStart + i * 52.0f;
 		const int page = navOrder[i];
 		if (page == g_page) {

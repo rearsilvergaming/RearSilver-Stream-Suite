@@ -89,9 +89,6 @@ if(WIN32)
 			"${CMAKE_CURRENT_SOURCE_DIR}/src/music_player/library.html"
 			"$<TARGET_FILE_DIR:RearSilver-Music-Player>/library.html"
 		COMMAND "${CMAKE_COMMAND}" -E copy_if_different
-			"${CMAKE_CURRENT_SOURCE_DIR}/src/music_player/settings.html"
-			"$<TARGET_FILE_DIR:RearSilver-Music-Player>/settings.html"
-		COMMAND "${CMAKE_COMMAND}" -E copy_if_different
 			"${CMAKE_CURRENT_SOURCE_DIR}/src/music_player/suite-settings.html"
 			"$<TARGET_FILE_DIR:RearSilver-Music-Player>/suite-settings.html"
 		COMMAND "${CMAKE_COMMAND}" -E copy_if_different

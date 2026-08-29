@@ -17,5 +17,12 @@ struct HubSearchResult {
 	std::string error;
 };
 
+struct HubYouTubeSafetyOptions {
+	std::string safeSearch = "strict";
+	bool musicOnly = false;
+	bool rejectAgeRestricted = true;
+};
+
 HubPlaylistResult resolveHubPlaylist(const std::string &playlistUrl);
-HubSearchResult resolveHubSearch(const std::string &query, const std::string &requestedBy);
+HubSearchResult resolveHubSearch(const std::string &query, const std::string &requestedBy,
+	const HubYouTubeSafetyOptions &options = HubYouTubeSafetyOptions{});

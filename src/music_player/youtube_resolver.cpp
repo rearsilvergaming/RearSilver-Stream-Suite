@@ -83,9 +83,13 @@ HubPlaylistResult resolveHubPlaylist(const std::string &playlistUrl)
 	return result;
 }
 
-HubSearchResult resolveHubSearch(const std::string &query, const std::string &requestedBy)
+HubSearchResult resolveHubSearch(const std::string &query, const std::string &requestedBy,
+	const HubYouTubeSafetyOptions &options)
 {
-	HubSearchResult result; const std::string body = get(L"/v1/youtube/search?q=" + encode(query), result.error);
+	const std::string safeSearch = options.safeSearch == "moderate" ? "moderate" : "strict";
+	HubSearchResult result; const std::string body = get(L"/v1/youtube/search?q=" + encode(query) +
+		L"&safeSearch=" + wide(safeSearch) + L"&musicOnly=" + (options.musicOnly ? L"true" : L"false") +
+		L"&rejectAgeRestricted=" + (options.rejectAgeRestricted ? L"true" : L"false"), result.error);
 	if (body.empty()) return result;
 	CefRefPtr<CefValue> root = CefParseJSON(body, JSON_PARSER_RFC);
 	if (!root || root->GetType() != VTYPE_DICTIONARY) { result.error = "The resolver returned invalid search data."; return result; }

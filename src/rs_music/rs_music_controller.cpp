@@ -163,7 +163,7 @@ RsMusicController::RsMusicController(RsMusicState *state, QObject *parent) : QOb
 		if (command == "AUTH_STATUS") { emit twitchAuthStatusRequested(); return; }
 		if (command.startsWith("ACCOUNT_STATE\t")) {
 			const QStringList parts = command.split('\t');
-			if (parts.size() >= 4) emit twitchAccountStateReceived(parts[1], parts[2] == "connected", parts[3]);
+			if (parts.size() >= 4) emit twitchAccountStateReceived(parts[1], parts[2], parts[3]);
 			return;
 		}
 		if (command.startsWith("SETTING\t")) {
@@ -235,6 +235,9 @@ RsMusicController::RsMusicController(RsMusicState *state, QObject *parent) : QOb
 		}
 		if (command.startsWith("REQUEST_ACCEPTED\t")) {
 			const QStringList parts = command.split('\t');
+			const QString pendingId = parts.value(6);
+			if (!pendingId.isEmpty())
+				rsMusicRemoveRequestByTrackId(pendingId);
 			emit songRequestAccepted(parts.value(1), parts.value(2), parts.value(3), parts.value(4), parts.value(5).toInt());
 			return;
 		}

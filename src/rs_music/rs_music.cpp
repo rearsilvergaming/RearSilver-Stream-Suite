@@ -36,7 +36,7 @@ static QString g_sessionId;
 // Authoritative settings (Phase 6A)
 // -----------------------
 static bool g_requestsEnabled = true;
-static quint64 g_nextRequestNumber = 0;
+static quint64 g_nextPendingRequestNumber = 1;
 static int g_maxQueueTotal = 50;
 static int g_maxPerUser = 2;
 static int g_maxTrackLengthSec = 600; // 10m default
@@ -669,20 +669,18 @@ RsMusicRequestResult rsMusicRequestSong(const QString &requesterId, const QStrin
 		}
 	}
 
-	RsMusicTrack it;
-	if (g_nextRequestNumber == 0)
-		g_nextRequestNumber = QSettings("RearSilver", "RearSilver-Stream-Suite").value("music/nextRequestNumber", 1).toULongLong();
-	it.trackId = QString("R%1").arg(g_nextRequestNumber++);
-	QSettings("RearSilver", "RearSilver-Stream-Suite").setValue("music/nextRequestNumber", g_nextRequestNumber);
-	it.requestedById = requesterId;
-	it.requestedBy = requesterDisplay;
-	it.enqueuedTimestampMs = nowMs();
-
 	const RsMusicRequestTarget target = rsMusicParseRequestTarget(trimmed);
 	if (target.unsupportedUrl) {
 		out.reason = "That link is not a supported YouTube or Spotify track URL.";
 		return out;
 	}
+
+	RsMusicTrack it;
+	it.trackId = QString("P%1").arg(g_nextPendingRequestNumber++);
+	it.requestedById = requesterId;
+	it.requestedBy = requesterDisplay;
+	it.enqueuedTimestampMs = nowMs();
+
 	if (target.directTrack) {
 		it.provider = target.provider;
 		it.providerTrackId = target.providerTrackId;
@@ -712,11 +710,10 @@ RsMusicRequestResult rsMusicRequestSong(const QString &requesterId, const QStrin
 // -----------------------
 void rsMusicClearRequestsQueue()
 {
+	g_nextPendingRequestNumber = 1;
 	if (g_scheduler.requests().isEmpty())
 		return;
 	g_scheduler.clearRequests();
-	g_nextRequestNumber = 1;
-	QSettings("RearSilver", "RearSilver-Stream-Suite").setValue("music/nextRequestNumber", g_nextRequestNumber);
 	emit rsMusicBackendEvents().queueChanged();
 	rsMusicPushStateFull();
 }

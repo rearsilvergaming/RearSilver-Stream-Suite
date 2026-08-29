@@ -15,7 +15,7 @@ let latestRevision=0;
 window.rsApplyAccounts=c=>{
  if((c.revision||0)<latestRevision)return;
  latestRevision=c.revision||latestRevision;
- for(const a of ['streamer','bot']){const state=c[a+'State'],connected=state==='connected',busy=state==='connecting',s=document.getElementById(a+'Status');s.textContent=busy?'Connecting…':connected?'Connected':'Not connected';s.className='status'+(connected?' connected':busy?' busy':'');document.getElementById(a+'Identity').textContent=connected?(c[a+'DisplayName']||c[a+'Login']||'Connected'):('No '+(a==='bot'?'bot':'Twitch')+' account connected');document.getElementById(a+'Error').textContent=c[a+'Error']||''}
+ for(const a of ['streamer','bot']){const state=c[a+'State'],connected=state==='connected',reconnecting=state==='chat-reconnecting',busy=state==='connecting',authorised=connected||reconnecting,s=document.getElementById(a+'Status');s.textContent=busy?'Connecting…':reconnecting?'Chat reconnecting…':connected?'Connected':'Not connected';s.className='status'+(connected?' connected':busy||reconnecting?' busy':'');document.getElementById(a+'Identity').textContent=authorised?(c[a+'DisplayName']||c[a+'Login']||'Authorised'):('No '+(a==='bot'?'bot':'Twitch')+' account connected');document.getElementById(a+'Error').textContent=c[a+'Error']||''}
  document.getElementById('sender').value=c.sender||'streamer';
  const input=document.getElementById('spotifyClientId');if(document.activeElement!==input)input.value=c.spotifyClientId||'';
  const status=document.getElementById('spotifyStatus');status.className='status'+(c.spotifyConnected?' connected':c.spotifyBusy?' busy':'');status.textContent=c.spotifyBusy?'Connecting…':c.spotifyConnected?'Connected':c.spotifyClientId?'Ready to connect':'Not configured';

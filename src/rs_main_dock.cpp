@@ -166,11 +166,14 @@ RsMainDock::RsMainDock(QWidget *parent) : QWidget(parent)
 	if (auto *nowPlaying = qobject_cast<RsMusicNowPlaying *>(m_pageMusicNowPlaying))
 		nowPlaying->setHubConnected(localPlayer.isHubConnected());
 	connect(m_musicController, &RsMusicController::twitchAccountStateReceived, this,
-		[this](const QString &account, bool connected, const QString &login) {
+		[this](const QString &account, const QString &state, const QString &login) {
 			QLabel *dot = account == "bot" ? m_lblBotDot : m_lblStreamerDot;
 			QLabel *text = account == "bot" ? m_lblBotText : m_lblStreamerText;
-			RsSetTwitchDot(dot, connected ? "#00C853" : "#FF3B30");
+			const bool connected = state == "connected";
+			const bool reconnecting = state == "chat-reconnecting";
+			RsSetTwitchDot(dot, connected ? "#00C853" : reconnecting ? "#FFB800" : "#FF3B30");
 			if (text) text->setText(connected ? QString("%1: %2").arg(account == "bot" ? "Bot" : "Streamer", login)
+				: reconnecting ? QString("%1 — Chat reconnecting").arg(account == "bot" ? "Bot" : "Streamer")
 				: QString("%1 — Not connected").arg(account == "bot" ? "Bot" : "Streamer"));
 			if (account == "bot") m_botAuthResolved = true; else m_streamerAuthResolved = true;
 		});

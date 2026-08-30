@@ -1569,6 +1569,24 @@ static void appendChatCommandConfig(CefRefPtr<CefDictionaryValue> config)
 		command->SetString("label", std::string(definition.label));
 		command->SetString("syntax", std::string(definition.syntax));
 		command->SetString("description", std::string(definition.description));
+		CefRefPtr<CefListValue> examples = CefListValue::Create();
+		size_t exampleIndex = 0;
+		for (const auto &entry : kRsChatCommandExamples) {
+			if (entry.command != definition.id)
+				continue;
+			CefRefPtr<CefDictionaryValue> example = CefDictionaryValue::Create();
+			example->SetString("label", std::string(entry.label));
+			example->SetString("syntax", std::string(entry.syntax));
+			example->SetString("provider", std::string(entry.provider));
+			examples->SetDictionary(exampleIndex++, example);
+		}
+		command->SetList("examples", examples);
+		CefRefPtr<CefListValue> notes = CefListValue::Create();
+		size_t noteIndex = 0;
+		for (const auto &entry : kRsChatCommandNotes)
+			if (entry.command == definition.id)
+				notes->SetString(noteIndex++, std::string(entry.text));
+		command->SetList("notes", notes);
 		CefRefPtr<CefDictionaryValue> defaults = CefDictionaryValue::Create();
 		for (const auto &[role, flag] : kRsChatRoles) {
 			const bool fallback = (definition.defaultRoles & flag) != 0;
@@ -1812,7 +1830,6 @@ public:
 								if (message == "ready") { if (m_page == 3) { m_ready = true; sendConfig(); } return S_OK; }
 								if (message == "library-ready") { if (m_page == 2) { m_ready = true; sendLibraryConfig(); } return S_OK; }
 								if (message == "commands-ready") { if (m_page == 6) { m_ready = true; sendCommandsConfig(); } return S_OK; }
-								if (message == "accounts-ready") { if (m_page == 5) { m_ready = true; sendAccountsConfig(); } return S_OK; }
 								if (message == "tools-ready") { if (m_page == 7) { m_ready = true; sendToolsConfig(); } return S_OK; }
 								if (message == "suite-settings-ready") { if (m_page == 8) { m_ready = true; sendSuiteSettingsConfig(); } return S_OK; }
 								CefRefPtr<CefValue> parsed = CefParseJSON(message, JSON_PARSER_RFC); if (!parsed || parsed->GetType() != VTYPE_DICTIONARY) return S_OK;
@@ -1854,7 +1871,7 @@ public:
 										return S_OK;
 									}
 									if(action=="sender"){g_authSender=object->GetString("value").ToString();setMusicSetting(L"authSender",utf8ToWide(g_authSender));}
-									else {TwitchAccount &auth=account=="bot"?g_botTwitch:g_streamerTwitch;if(action=="login")auth.beginLogin();else if(action=="reconnect")auth.reconnect();else if(action=="logout")auth.logout();} sendAccountsConfig();return S_OK;
+									else {TwitchAccount &auth=account=="bot"?g_botTwitch:g_streamerTwitch;if(action=="login")auth.beginLogin();else if(action=="reconnect")auth.reconnect();else if(action=="logout")auth.logout();} sendSuiteSettingsConfig();return S_OK;
 								}
 								if(object->GetString("page").ToString()=="overlay"){
 									const std::string action=object->GetString("action").ToString();
@@ -1935,7 +1952,7 @@ public:
 			}).Get());
 	}
 	void showPage(int page) {
-		const bool visible = page >= 2 && page <= 8 && page != 4;
+		const bool visible = page >= 2 && page <= 8 && page != 4 && page != 5;
 		if (visible && page != m_page && m_webView) {
 			m_page = page;
 			m_ready = false;
@@ -1953,11 +1970,10 @@ public:
 		if (visible) refresh();
 	}
 	void refresh() {
-		if (!m_webView || m_page < 2 || m_page > 8 || m_page == 4) return;
+		if (!m_webView || m_page < 2 || m_page > 8 || m_page == 4 || m_page == 5) return;
 		if (!m_ready) { probePageReady(); return; }
 		if (m_page == 2) sendLibraryConfig();
 		else if (m_page == 3) sendConfig();
-		else if (m_page == 5) sendAccountsConfig();
 		else if (m_page == 6) sendCommandsConfig();
 		else if (m_page == 7) sendToolsConfig();
 		else if (m_page == 8) sendSuiteSettingsConfig();
@@ -1979,27 +1995,27 @@ private:
 	RECT m_bounds{};
 	static bool validColour(const std::wstring &value) { return value.size() == 7 && value[0] == L'#' && std::all_of(value.begin() + 1, value.end(), [](wchar_t c) { return iswxdigit(c) != 0; }); }
 	void showCurrentPage() {
-		if (!m_webView || m_page < 2 || m_page > 8 || m_page == 4) return;
+		if (!m_webView || m_page < 2 || m_page > 8 || m_page == 4 || m_page == 5) return;
 		const wchar_t *name = m_page == 2 ? L"library.html" : m_page == 3 ? L"overlay-designer.html" :
-			m_page == 5 ? L"accounts.html" : m_page == 6 ? L"commands.html" :
+			m_page == 6 ? L"commands.html" :
 			m_page == 8 ? L"suite-settings.html" : L"stream-tools.html";
 		const wchar_t *functionName = m_page == 2 ? L"rsApplyLibrary" : m_page == 3 ? L"rsApplyConfig" :
-			m_page == 5 ? L"rsApplyAccounts" : m_page == 6 ? L"rsApplyCommands" :
+			m_page == 6 ? L"rsApplyCommands" :
 			m_page == 8 ? L"rsApplySuiteSettings" : L"rsApplyTools";
 		const wchar_t *readyMessage = m_page == 2 ? L"library-ready" : m_page == 3 ? L"ready" :
-			m_page == 5 ? L"accounts-ready" : m_page == 6 ? L"commands-ready" :
+			m_page == 6 ? L"commands-ready" :
 			m_page == 8 ? L"suite-settings-ready" : L"tools-ready";
 		const std::wstring script = L"window.rsShowPage&&window.rsShowPage('https://rearsilver.local/" + std::wstring(name) +
 			L"','" + functionName + L"','" + readyMessage + L"')";
 		m_webView->ExecuteScript(script.c_str(), nullptr);
 	}
 	void probePageReady() {
-		if (m_page == 4) return;
+		if (m_page == 4 || m_page == 5) return;
 		const wchar_t *functionName = m_page == 2 ? L"rsApplyLibrary" : m_page == 3 ? L"rsApplyConfig" :
-			m_page == 5 ? L"rsApplyAccounts" : m_page == 6 ? L"rsApplyCommands" :
+			m_page == 6 ? L"rsApplyCommands" :
 			m_page == 8 ? L"rsApplySuiteSettings" : L"rsApplyTools";
 		const wchar_t *readyMessage = m_page == 2 ? L"library-ready" : m_page == 3 ? L"ready" :
-			m_page == 5 ? L"accounts-ready" : m_page == 6 ? L"commands-ready" :
+			m_page == 6 ? L"commands-ready" :
 			m_page == 8 ? L"suite-settings-ready" : L"tools-ready";
 		const std::wstring script = L"if(window.rsActiveHas&&window.rsActiveHas('" + std::wstring(functionName) +
 			L"')) window.chrome.webview.postMessage('" + readyMessage + L"');";
@@ -2108,7 +2124,6 @@ private:
 	void sendLibraryConfig() {
 		if(!m_ready||!m_webView||m_page!=2)return; CefRefPtr<CefDictionaryValue>d=CefDictionaryValue::Create(); d->SetString("url",g_hub.fallbackUrl()); d->SetString("status",wideToUtf8(g_libraryStatus)); d->SetString("label",g_hub.fallbackLabel()); d->SetInt("youtubeCount",int(g_hub.youtubeFallback().size())); d->SetInt("requestCount",int(g_hub.requests().size())); d->SetInt("localCount",int(g_hub.localLibrary().size())); d->SetString("source",g_hub.activeSource()); CefRefPtr<CefValue>root=CefValue::Create();root->SetDictionary(d);const std::wstring script=L"window.rsApplyLibrary("+utf8ToWide(CefWriteJSON(root,JSON_WRITER_DEFAULT).ToString())+L")";m_webView->ExecuteScript(script.c_str(),nullptr);
 	}
-	void sendAccountsConfig(){if(!m_ready||!m_webView||m_page!=5)return;const SpotifyClientState spotify=g_spotify.state();const TwitchAccountState streamer=g_streamerTwitch.state(),bot=g_botTwitch.state();const std::string streamerState=streamer.busy?"connecting":!streamer.connected?"disconnected":g_twitchReader.connected()?"connected":"chat-reconnecting";const std::string botState=bot.busy?"connecting":!bot.connected?"disconnected":g_authSender=="bot"&&!g_twitchSender.connected()?"chat-reconnecting":"connected";CefRefPtr<CefDictionaryValue>d=CefDictionaryValue::Create();d->SetDouble("revision",double(++g_accountsRevision));d->SetString("streamerState",streamerState);d->SetString("streamerLogin",streamer.login);d->SetString("streamerDisplayName",streamer.displayName);d->SetString("streamerError",streamer.error);d->SetString("botState",botState);d->SetString("botLogin",bot.login);d->SetString("botDisplayName",bot.displayName);d->SetString("botError",bot.error);d->SetString("sender",g_authSender);d->SetBool("ipcConnected",g_hostPipeConnected);d->SetString("spotifyClientId",spotify.clientId);d->SetBool("spotifyAuthorized",spotify.authorized);d->SetBool("spotifyConnected",spotify.connected);d->SetBool("spotifyBusy",spotify.busy);d->SetBool("spotifyQueueChecked",spotify.queueChecked);d->SetBool("spotifyPlaybackAvailable",spotify.playbackAvailable);d->SetString("spotifyDisplayName",spotify.displayName);d->SetString("spotifyError",spotify.error);d->SetInt("spotifyQueueCount",int(spotify.queue.size()));CefRefPtr<CefValue>root=CefValue::Create();root->SetDictionary(d);m_webView->ExecuteScript((L"window.rsApplyAccounts("+utf8ToWide(CefWriteJSON(root,JSON_WRITER_DEFAULT).ToString())+L")").c_str(),nullptr);}
 	void sendSuiteSettingsConfig()
 	{
 		if (!m_ready || !m_webView || m_page != 8)
@@ -2319,7 +2334,7 @@ static void handleTwitchChat(HWND window, const TwitchChatMessage &m)
 {
 	std::string text=m.text;while(!text.empty()&&std::isspace((unsigned char)text.front()))text.erase(text.begin());while(!text.empty()&&std::isspace((unsigned char)text.back()))text.pop_back();
 	std::string lower=text;std::transform(lower.begin(),lower.end(),lower.begin(),[](unsigned char c){return char(std::tolower(c));});
-	if(lower.rfind("!sr",0)==0){if(!chatCommandAllowed("sr",m)){sendTwitchMessage(m.displayName+": you don't have permission to request songs.");return;}std::string q=text.size()>3?text.substr(3):"";while(!q.empty()&&std::isspace((unsigned char)q.front()))q.erase(q.begin());if(q.empty()){sendTwitchMessage(m.displayName+": usage is !sr <song name or url>");return;}beginChatRequest(window,m,q);return;}
+	if(lower.rfind("!sr",0)==0){if(!chatCommandAllowed("sr",m)){sendTwitchMessage(m.displayName+": you don't have permission to request songs.");return;}std::string q=text.size()>3?text.substr(3):"";while(!q.empty()&&std::isspace((unsigned char)q.front()))q.erase(q.begin());if(q.empty()){sendTwitchMessage(m.displayName+": usage is !sr <song name or supported music link>");return;}beginChatRequest(window,m,q);return;}
 	struct Command{const char*text;const char*key;const char*action;const char*reply;};
 	for(const Command &c:std::initializer_list<Command>{{"!play","play","PLAY","Playback resumed"},{"!pause","pause","PAUSE","Playback paused"},{"!skip","skip","SKIP","Track skipped"},{"!restart","restart","RESTART","Track restarted"},{"!previous","previous","PREVIOUS","Playing the previous track"},{"!prev","previous","PREVIOUS","Playing the previous track"}}){if(lower==c.text){if(!chatCommandAllowed(c.key,m)){sendTwitchMessage(m.displayName+": you don't have permission to control playback.");return;}runChatTransport(c.action);sendTwitchMessage(c.reply);return;}}
 	if(lower=="!remove"||lower.rfind("!remove ",0)==0){if(!chatCommandAllowed("remove",m)){sendTwitchMessage(m.displayName+": you don't have permission to remove requests.");return;}std::string id=text.size()>7?text.substr(7):"";while(!id.empty()&&(id.front()==' '||id.front()=='#'))id.erase(id.begin());if(!id.empty()&&(id.front()=='r'||id.front()=='R'))id.front()='R';else if(!id.empty())id='R'+id;if(id.empty()){sendTwitchMessage("Usage: !remove #<request ID>");return;}HubTrack removed;for(const auto&t:g_hub.requests())if(t.id==id){removed=t;break;}if(removed.provider=="spotify"){g_hub.cancelRequest(id);saveHubState();syncHubQueueView();sendTwitchMessage("Removed request #"+id+": "+removed.title+" - "+removed.artist);return;}if(!removed.id.empty()&&g_hub.removeRequest(id)){saveHubState();syncHubQueueView();sendTwitchMessage("Removed request #"+id+": "+removed.title+" - "+removed.artist);}else sendTwitchMessage("Could not remove request #"+id+": That request is not waiting in the queue.");}
@@ -2588,9 +2603,9 @@ static LRESULT CALLBACK windowProc(HWND window, UINT message, WPARAM wParam, LPA
 			}
 		}
 		const int navStart = 104;
-		if (point.x < sidebar && point.y >= navStart && point.y < navStart + 416) {
-			static const int navOrder[] = {7, 0, 1, 2, 3, 8, 5, 6};
-			g_page = navOrder[std::clamp((static_cast<int>(point.y) - navStart) / 52, 0, 7)];
+		if (point.x < sidebar && point.y >= navStart && point.y < navStart + 364) {
+			static const int navOrder[] = {7, 0, 1, 2, 3, 8, 6};
+			g_page = navOrder[std::clamp((static_cast<int>(point.y) - navStart) / 52, 0, 6)];
 			positionLibraryControls(window);
 			positionOverlayControls(window);
 			if (g_youtubePlayer && g_youtubePlayer->active())
@@ -2676,9 +2691,9 @@ static LRESULT CALLBACK windowProc(HWND window, UINT message, WPARAM wParam, LPA
 		RectF(float(g_sidebarToggle.left), float(g_sidebarToggle.top), 26, 26), secondary, StringAlignmentCenter);
 	const wchar_t *pages[] = {L"Now Playing", L"Queue & Requests", L"Library", L"Music Overlay", L"Settings", L"Accounts", L"Commands", L"Stream Tools", L"Suite Settings"};
 	const wchar_t *icons[] = {L"\u25B6", L"\u2261", L"\u266B", L"\u25C7", L"\u2699", L"@", L"!", L"+", L"\u2637"};
-	static const int navOrder[] = {7, 0, 1, 2, 3, 8, 5, 6};
+	static const int navOrder[] = {7, 0, 1, 2, 3, 8, 6};
 	const float navStart = 104.0f;
-	for (int i = 0; i < 8; ++i) {
+	for (int i = 0; i < 7; ++i) {
 		const float y = navStart + i * 52.0f;
 		const int page = navOrder[i];
 		if (page == g_page) {

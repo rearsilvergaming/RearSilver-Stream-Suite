@@ -26,9 +26,23 @@ RsMusicState::PlaybackStatus RsMusicState::playbackStatus() const
 
 void RsMusicState::setCurrentTrack(const RsMusicTrack &track)
 {
+	const auto sameTrack = [](const RsMusicTrack &left, const RsMusicTrack &right) {
+		return left.trackId == right.trackId && left.provider == right.provider &&
+		       left.providerTrackId == right.providerTrackId && left.providerUri == right.providerUri &&
+		       left.title == right.title && left.artist == right.artist && left.album == right.album &&
+		       left.artworkUri == right.artworkUri && left.durationSeconds == right.durationSeconds &&
+		       left.requestedById == right.requestedById && left.requestedBy == right.requestedBy &&
+		       left.isFromPlaylist == right.isFromPlaylist &&
+		       left.enqueuedTimestampMs == right.enqueuedTimestampMs;
+	};
+	if (m_hasCurrentTrack && sameTrack(m_currentTrack, track))
+		return;
+	const bool sameIdentity = m_hasCurrentTrack && m_currentTrack.trackId == track.trackId &&
+		m_currentTrack.provider == track.provider && m_currentTrack.providerTrackId == track.providerTrackId;
 	m_currentTrack = track;
 	m_hasCurrentTrack = true;
-	m_playbackPositionMs = 0;
+	if (!sameIdentity)
+		m_playbackPositionMs = 0;
 	emit stateChanged();
 }
 
@@ -90,6 +104,26 @@ RsMusicProvider RsMusicState::activeProvider() const
 
 void RsMusicState::setQueue(const QVector<RsMusicTrack> &queue)
 {
+	const auto sameTrack = [](const RsMusicTrack &left, const RsMusicTrack &right) {
+		return left.trackId == right.trackId && left.provider == right.provider &&
+		       left.providerTrackId == right.providerTrackId && left.providerUri == right.providerUri &&
+		       left.title == right.title && left.artist == right.artist && left.album == right.album &&
+		       left.artworkUri == right.artworkUri && left.durationSeconds == right.durationSeconds &&
+		       left.requestedById == right.requestedById && left.requestedBy == right.requestedBy &&
+		       left.isFromPlaylist == right.isFromPlaylist &&
+		       left.enqueuedTimestampMs == right.enqueuedTimestampMs;
+	};
+	if (m_queue.size() == queue.size()) {
+		bool unchanged = true;
+		for (qsizetype i = 0; i < queue.size(); ++i) {
+			if (!sameTrack(m_queue.at(i), queue.at(i))) {
+				unchanged = false;
+				break;
+			}
+		}
+		if (unchanged)
+			return;
+	}
 	m_queue = queue;
 	emit stateChanged();
 }

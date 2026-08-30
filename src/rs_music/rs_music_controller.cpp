@@ -320,10 +320,16 @@ RsMusicController::RsMusicController(RsMusicState *state, QObject *parent) : QOb
 			auto trackFromJson = [](const QJsonObject &value) {
 				RsMusicTrack track;
 				track.trackId = value.value("id").toString();
-				track.provider = value.value("provider").toString() == "local" ? RsMusicProvider::LocalFile : RsMusicProvider::YouTube;
+				const QString provider = value.value("provider").toString();
+				if (provider == "local") track.provider = RsMusicProvider::LocalFile;
+				else if (provider == "spotify") track.provider = RsMusicProvider::Spotify;
+				else if (provider == "external" || provider == "system") track.provider = RsMusicProvider::SystemMedia;
+				else if (provider == "youtube") track.provider = RsMusicProvider::YouTube;
 				track.providerTrackId = value.value("providerId").toString();
-				track.providerUri = track.provider == RsMusicProvider::LocalFile ? track.providerTrackId :
-					QString("https://www.youtube.com/watch?v=%1").arg(track.providerTrackId);
+				if (track.provider == RsMusicProvider::YouTube)
+					track.providerUri = QString("https://www.youtube.com/watch?v=%1").arg(track.providerTrackId);
+				else
+					track.providerUri = track.providerTrackId;
 				track.title = value.value("title").toString();
 				track.artist = value.value("artist").toString();
 				track.album = value.value("album").toString();
@@ -347,10 +353,19 @@ RsMusicController::RsMusicController(RsMusicState *state, QObject *parent) : QOb
 			for (const QJsonValue &value : root.value("queue").toArray())
 				if (value.isObject()) queue.append(trackFromJson(value.toObject()));
 			m_state->setQueue(queue);
-			const bool localSource = root.value("activeSource").toString() == "local";
-			m_state->setActiveProvider(localSource ? RsMusicProvider::LocalFile : RsMusicProvider::YouTube);
-			m_state->setPlaylistLabel(localSource ? "Local files" : root.value("fallbackLabel").toString("YouTube fallback"));
-			m_state->setRequestsEnabled(localSource ? false : rsMusicRequestsEnabled());
+			const QString activeSource = root.value("activeSource").toString();
+			RsMusicProvider activeProvider = RsMusicProvider::YouTube;
+			if (activeSource == "local") activeProvider = RsMusicProvider::LocalFile;
+			else if (activeSource == "external") {
+				activeProvider = m_state->hasCurrentTrack() ? m_state->currentTrack().provider : RsMusicProvider::SystemMedia;
+				if (activeProvider != RsMusicProvider::Spotify && activeProvider != RsMusicProvider::SystemMedia)
+					activeProvider = RsMusicProvider::SystemMedia;
+			}
+			m_state->setActiveProvider(activeProvider);
+			m_state->setPlaylistLabel(activeSource == "local" ? "Local files" :
+				(activeSource == "external" ? rsMusicProviderDisplayName(activeProvider) :
+				 root.value("fallbackLabel").toString("YouTube fallback")));
+			m_state->setRequestsEnabled(activeSource == "local" ? false : rsMusicRequestsEnabled());
 			m_state->setPlaybackProgress(root.value("positionMs").toVariant().toLongLong(),
 				root.value("durationMs").toVariant().toLongLong());
 			const QString status = root.value("status").toString();

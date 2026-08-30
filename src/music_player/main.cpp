@@ -222,8 +222,15 @@ static constexpr int ID_OVERLAY_TITLE_SIZE = 4121, ID_OVERLAY_BODY_SIZE = 4122,
 	ID_OVERLAY_OPACITY = 4123, ID_OVERLAY_BACKGROUND_COLOUR = 4124, ID_OVERLAY_TEXT_COLOUR = 4125,
 	ID_OVERLAY_ACCENT_COLOUR = 4126, ID_OVERLAY_WIDTH = 4127, ID_OVERLAY_HEIGHT = 4128;
 static int g_queuePage = 0;
+static RECT g_transportProgress{};
+static bool g_transportSeeking = false;
+static int64_t g_transportSeekTargetMs = 0;
+static bool g_transportSeekWasPlaying = false;
+static bool g_transportSeekPending = false;
+static ULONGLONG g_transportSeekPendingSince = 0;
 static std::mutex g_hostEventMutex;
 static std::vector<std::string> g_hostEvents;
+static bool g_hubMediaKeysRegistered = false;
 static RECT g_queuePreviousPage{}, g_queueNextPage{}, g_queueShuffle{};
 
 class SuiteCefApp final : public CefApp, public CefBrowserProcessHandler {
@@ -1357,6 +1364,8 @@ static std::wstring clockText(float seconds)
 }
 
 static RECT g_transportButtons[5]{};
+static int g_transportPressed = -1;
+static ULONGLONG g_transportPressedUntil = 0;
 static RECT g_sidebarToggle{};
 static RECT g_overlayOptions[10]{};
 static RECT g_overlayReset{};
@@ -2220,6 +2229,40 @@ static void label(Graphics &graphics, const std::wstring &text, Font &font, cons
 	graphics.DrawString(text.c_str(), -1, &font, rect, &format, &brush);
 }
 
+static void drawTransportIcon(Graphics &graphics, int action, const RECT &bounds, bool playing,
+	const Color &colour)
+{
+	SolidBrush brush(colour);
+	const float cx = (float(bounds.left) + float(bounds.right)) * 0.5f;
+	const float cy = (float(bounds.top) + float(bounds.bottom)) * 0.5f;
+	auto triangle = [&](float centreX, bool pointsRight) {
+		const float direction = pointsRight ? 1.0f : -1.0f;
+		PointF points[] = {
+			PointF(centreX + direction * 7.0f, cy),
+			PointF(centreX - direction * 5.0f, cy - 8.0f),
+			PointF(centreX - direction * 5.0f, cy + 8.0f),
+		};
+		graphics.FillPolygon(&brush, points, 3);
+	};
+	if (action == 0) {
+		graphics.FillRectangle(&brush, cx - 9.0f, cy - 8.0f, 3.0f, 16.0f);
+		triangle(cx + 2.0f, false);
+	} else if (action == 1) {
+		triangle(cx - 5.5f, false);
+		triangle(cx + 6.5f, false);
+	} else if (action == 2 && playing) {
+		graphics.FillRectangle(&brush, cx - 7.0f, cy - 8.0f, 4.0f, 16.0f);
+		graphics.FillRectangle(&brush, cx + 3.0f, cy - 8.0f, 4.0f, 16.0f);
+	} else if (action == 2) {
+		triangle(cx, true);
+	} else if (action == 3) {
+		triangle(cx - 2.0f, true);
+		graphics.FillRectangle(&brush, cx + 7.0f, cy - 8.0f, 3.0f, 16.0f);
+	} else if (action == 4) {
+		graphics.FillRectangle(&brush, cx - 7.0f, cy - 7.0f, 14.0f, 14.0f);
+	}
+}
+
 static void drawBrandedButton(const DRAWITEMSTRUCT &item)
 {
 	Graphics graphics(item.hDC); graphics.SetSmoothingMode(SmoothingModeHighQuality);
@@ -2306,18 +2349,84 @@ static std::string nextChatRequestId()
 	return "R" + std::to_string(g_sessionRequestNumber++);
 }
 
+static void runTransportAction(int action)
+{
+	const bool youtubeActive = g_youtubePlayer && g_youtubePlayer->active();
+	const bool currentlyPlaying = youtubeActive ? g_youtubePlayer->playing() : currentPlaying();
+	if (externalActive()) {
+		const SystemMediaProvider::Action externalAction = action == 0 ? SystemMediaProvider::Action::Previous :
+			(action == 1 ? SystemMediaProvider::Action::Restart : (action == 3 ? SystemMediaProvider::Action::Next :
+			(action == 4 || currentlyPlaying ? SystemMediaProvider::Action::Pause : SystemMediaProvider::Action::Play)));
+		commandExternalPlayer(externalAction);
+		return;
+	}
+	if (action == 2 && !youtubeActive && (!g_player || g_player->state() == L"stopped") && !g_hub.hasCurrent())
+		playHubNext();
+	else if (action == 0) {
+		HubTrack previous;
+		if (g_hub.takePrevious(previous)) startHubTrack(previous, false);
+	} else if (action == 3)
+		playHubNext();
+	else {
+		const char *command = action == 1 ? "RESTART" :
+			(action == 4 ? "STOP" : (currentlyPlaying ? "PAUSE" : "PLAY"));
+		if (youtubeActive) g_youtubePlayer->command(command);
+		else if (g_player) g_player->command(command);
+	}
+}
+
 static void runChatTransport(const std::string &action)
 {
+	if (action == "PREVIOUS") runTransportAction(0);
+	else if (action == "RESTART") runTransportAction(1);
+	else if (action == "SKIP") runTransportAction(3);
+	else if (action == "PLAY") {
+		const bool playing = g_youtubePlayer && g_youtubePlayer->active() ? g_youtubePlayer->playing() : currentPlaying();
+		if (!playing) runTransportAction(2);
+	} else if (action == "PAUSE") {
+		const bool playing = g_youtubePlayer && g_youtubePlayer->active() ? g_youtubePlayer->playing() : currentPlaying();
+		if (playing) runTransportAction(2);
+	}
+}
+
+static constexpr int ID_MEDIA_PLAY_PAUSE = 4301;
+static constexpr int ID_MEDIA_STOP = 4302;
+static constexpr int ID_MEDIA_PREVIOUS = 4303;
+static constexpr int ID_MEDIA_NEXT = 4304;
+
+static void releaseHubMediaKeys(HWND window)
+{
+	if (!g_hubMediaKeysRegistered) return;
+	UnregisterHotKey(window, ID_MEDIA_PLAY_PAUSE);
+	UnregisterHotKey(window, ID_MEDIA_STOP);
+	UnregisterHotKey(window, ID_MEDIA_PREVIOUS);
+	UnregisterHotKey(window, ID_MEDIA_NEXT);
+	g_hubMediaKeysRegistered = false;
+	traceLog("media-keys-released");
+}
+
+static void updateHubMediaKeyRegistration(HWND window)
+{
 	if (externalActive()) {
-		if(action=="PLAY")commandExternalPlayer(SystemMediaProvider::Action::Play);
-		else if(action=="PAUSE")commandExternalPlayer(SystemMediaProvider::Action::Pause);
-		else if(action=="SKIP")commandExternalPlayer(SystemMediaProvider::Action::Next);
-		else if(action=="PREVIOUS")commandExternalPlayer(SystemMediaProvider::Action::Previous);
-		else if(action=="RESTART")commandExternalPlayer(SystemMediaProvider::Action::Restart);
-	} else if (action == "SKIP") playHubNext();
-	else if (action == "PREVIOUS") { HubTrack previous; if(g_hub.takePrevious(previous))startHubTrack(previous,false); }
-	else if (g_youtubePlayer && g_youtubePlayer->active()) g_youtubePlayer->command(action);
-	else if (g_player) g_player->command(action);
+		releaseHubMediaKeys(window);
+		return;
+	}
+	if (g_hubMediaKeysRegistered) return;
+	const bool playPause = RegisterHotKey(window, ID_MEDIA_PLAY_PAUSE, MOD_NOREPEAT, VK_MEDIA_PLAY_PAUSE) != FALSE;
+	const bool stop = RegisterHotKey(window, ID_MEDIA_STOP, MOD_NOREPEAT, VK_MEDIA_STOP) != FALSE;
+	const bool previous = RegisterHotKey(window, ID_MEDIA_PREVIOUS, MOD_NOREPEAT, VK_MEDIA_PREV_TRACK) != FALSE;
+	const bool next = RegisterHotKey(window, ID_MEDIA_NEXT, MOD_NOREPEAT, VK_MEDIA_NEXT_TRACK) != FALSE;
+	const DWORD registrationError = GetLastError();
+	if (playPause && stop && previous && next) {
+		g_hubMediaKeysRegistered = true;
+		traceLog("media-keys-registered");
+		return;
+	}
+	if (playPause) UnregisterHotKey(window, ID_MEDIA_PLAY_PAUSE);
+	if (stop) UnregisterHotKey(window, ID_MEDIA_STOP);
+	if (previous) UnregisterHotKey(window, ID_MEDIA_PREVIOUS);
+	if (next) UnregisterHotKey(window, ID_MEDIA_NEXT);
+	traceLog("media-keys-registration-failed", "error=" + std::to_string(registrationError));
 }
 
 static void beginChatRequest(HWND window, const TwitchChatMessage &m, const std::string &query)
@@ -2344,6 +2453,20 @@ static LRESULT CALLBACK windowProc(HWND window, UINT message, WPARAM wParam, LPA
 {
 	if(message==WM_TWITCH_CHAT){std::unique_ptr<TwitchChatMessage>m(reinterpret_cast<TwitchChatMessage*>(lParam));if(m)handleTwitchChat(window,*m);return 0;}
 	if(message==WM_OBS_CONNECTION_CHANGED){if(g_overlayDesigner)g_overlayDesigner->refresh();return 0;}
+	if (message == WM_HOTKEY && g_hubMediaKeysRegistered) {
+		if (wParam == ID_MEDIA_PLAY_PAUSE)
+			runTransportAction(2);
+		else if (wParam == ID_MEDIA_STOP)
+			runTransportAction(4);
+		else if (wParam == ID_MEDIA_PREVIOUS)
+			runTransportAction(0);
+		else if (wParam == ID_MEDIA_NEXT)
+			runTransportAction(3);
+		else
+			return DefWindowProcW(window, message, wParam, lParam);
+		InvalidateRect(window, nullptr, FALSE);
+		return 0;
+	}
 	if (message == WM_CLOSE) { traceLog("window-close-request"); g_closeRequested = true; return 0; }
 	if (message == WM_DESTROY) traceLog("window-destroy");
 	if (message == WM_NCDESTROY) traceLog("window-nc-destroy");
@@ -2396,6 +2519,7 @@ static LRESULT CALLBACK windowProc(HWND window, UINT message, WPARAM wParam, LPA
 			else {
 				if (g_player) g_player->command("STOP"); if (g_youtubePlayer) { g_youtubePlayer->command("STOP"); g_youtubePlayer->hide(); }
 				g_hub.activateSource(source); syncHubQueueView(); if (source != "external") playHubNext();
+				updateHubMediaKeyRegistration(window);
 				traceLog("provider-switch-complete", "active=" + g_hub.activeSource());
 				g_libraryStatus = source == "local" ? L"Local files are now the active music source. Chat requests are unavailable." : (source == "external" ? L"External player selected. Start Spotify or another compatible desktop player." : L"YouTube is now the active music source.");
 			}
@@ -2523,12 +2647,58 @@ static LRESULT CALLBACK windowProc(HWND window, UINT message, WPARAM wParam, LPA
 		}
 		InvalidateRect(window, nullptr, FALSE); return 0;
 	}
-	if ((message == WM_MOUSEMOVE || message == WM_LBUTTONDOWN) && g_page == 0 && g_youtubePlayer &&
+	if (!g_transportSeeking && g_transportPressed < 0 &&
+	    (message == WM_MOUSEMOVE || message == WM_LBUTTONDOWN) &&
+	    g_page == 0 && g_youtubePlayer &&
 	    g_youtubePlayer->sendMouse(message, wParam, lParam)) return 0;
+	if (message == WM_LBUTTONDOWN) {
+		POINT point{static_cast<short>(LOWORD(lParam)), static_cast<short>(HIWORD(lParam))};
+		if (PtInRect(&g_transportProgress, point)) {
+			const bool youtubeActive = g_youtubePlayer && g_youtubePlayer->active();
+			const float duration = youtubeActive ? g_youtubePlayer->duration() : currentDuration();
+			if (duration > 0.0f) {
+				const int width = std::max(1L, g_transportProgress.right - g_transportProgress.left);
+				const double fraction = std::clamp(double(point.x - g_transportProgress.left) / width, 0.0, 1.0);
+				g_transportSeeking = true;
+				g_transportSeekWasPlaying = youtubeActive ? g_youtubePlayer->playing() : currentPlaying();
+				g_transportSeekTargetMs = int64_t(fraction * duration * 1000.0);
+				SetCapture(window);
+				InvalidateRect(window, nullptr, FALSE);
+				return 0;
+			}
+		}
+		for (int i = 0; i < 5; ++i) {
+			if (!PtInRect(&g_transportButtons[i], point)) continue;
+			g_transportPressed = i;
+			g_transportPressedUntil = 0;
+			SetCapture(window);
+			InvalidateRect(window, nullptr, FALSE);
+			return 0;
+		}
+	}
+	if (message == WM_MOUSEMOVE && g_transportSeeking) {
+		POINT point{static_cast<short>(LOWORD(lParam)), static_cast<short>(HIWORD(lParam))};
+		const bool youtubeActive = g_youtubePlayer && g_youtubePlayer->active();
+		const float duration = youtubeActive ? g_youtubePlayer->duration() : currentDuration();
+		const int width = std::max(1L, g_transportProgress.right - g_transportProgress.left);
+		const double fraction = std::clamp(double(point.x - g_transportProgress.left) / width, 0.0, 1.0);
+		g_transportSeekTargetMs = int64_t(fraction * std::max(0.0f, duration) * 1000.0);
+		InvalidateRect(window, nullptr, FALSE);
+		return 0;
+	}
 	if (message == WM_GETMINMAXINFO) {
 		auto *limits = reinterpret_cast<MINMAXINFO *>(lParam);
 		limits->ptMinTrackSize = POINT{760, 560};
 		return 0;
+	}
+	if (message == WM_SETCURSOR && LOWORD(lParam) == HTCLIENT) {
+		POINT point{};
+		GetCursorPos(&point);
+		ScreenToClient(window, &point);
+		if (PtInRect(&g_transportProgress, point)) {
+			SetCursor(LoadCursorW(nullptr, MAKEINTRESOURCEW(32649)));
+			return TRUE;
+		}
 	}
 	if (message == WM_SIZE) {
 		if (g_youtubePlayer) g_youtubePlayer->resize();
@@ -2538,26 +2708,42 @@ static LRESULT CALLBACK windowProc(HWND window, UINT message, WPARAM wParam, LPA
 		return 0;
 	}
 	if (message == WM_LBUTTONUP) {
+		if (g_transportSeeking) {
+			g_transportSeeking = false;
+			ReleaseCapture();
+			g_transportSeekPending = true;
+			g_transportSeekPendingSince = GetTickCount64();
+			const std::string target = std::to_string(g_transportSeekTargetMs);
+			if (externalActive()) {
+				commandExternalPlayer(SystemMediaProvider::Action::Seek, g_transportSeekTargetMs);
+				if (g_transportSeekWasPlaying) commandExternalPlayer(SystemMediaProvider::Action::Play);
+			} else if (g_youtubePlayer && g_youtubePlayer->active()) {
+				g_youtubePlayer->command("SEEK", target);
+				if (g_transportSeekWasPlaying) g_youtubePlayer->command("PLAY");
+			} else if (g_player) {
+				g_player->command("SEEK\t" + target);
+				if (g_transportSeekWasPlaying) g_player->command("PLAY");
+			}
+			InvalidateRect(window, nullptr, FALSE);
+			return 0;
+		}
 		if (g_page == 0 && g_youtubePlayer && g_youtubePlayer->sendMouse(message, wParam, lParam)) return 0;
 		POINT point{static_cast<short>(LOWORD(lParam)), static_cast<short>(HIWORD(lParam))};
+		if (g_transportPressed >= 0) {
+			const bool releasedOnButton = PtInRect(&g_transportButtons[g_transportPressed], point) != FALSE;
+			ReleaseCapture();
+			if (releasedOnButton)
+				g_transportPressedUntil = GetTickCount64() + 160;
+			else {
+				g_transportPressed = -1;
+				g_transportPressedUntil = 0;
+				InvalidateRect(window, nullptr, FALSE);
+				return 0;
+			}
+		}
 		for (int i = 0; i < 5; ++i) {
 			if (!PtInRect(&g_transportButtons[i], point)) continue;
-			const bool youtubeActive = g_youtubePlayer && g_youtubePlayer->active();
-			const bool currentlyPlaying = youtubeActive ? g_youtubePlayer->playing() : currentPlaying();
-			const char *command = i == 0 ? "PREVIOUS" : (i == 1 ? "RESTART" :
-				(i == 3 ? "SKIP" : (i == 4 ? "STOP" : (currentlyPlaying ? "PAUSE" : "PLAY"))));
-			if (externalActive()) {
-				const SystemMediaProvider::Action action = i == 0 ? SystemMediaProvider::Action::Previous :
-					(i == 1 ? SystemMediaProvider::Action::Restart : (i == 3 ? SystemMediaProvider::Action::Next :
-					(i == 4 || currentlyPlaying ? SystemMediaProvider::Action::Pause : SystemMediaProvider::Action::Play)));
-				commandExternalPlayer(action); InvalidateRect(window, nullptr, FALSE); return 0;
-			}
-			if (i == 2 && !youtubeActive && (!g_player || g_player->state() == L"stopped") && g_hub.hasCurrent() == false)
-				playHubNext();
-			else if (i == 0) { HubTrack previous; if (g_hub.takePrevious(previous)) startHubTrack(previous, false); }
-			else if (i == 3) playHubNext();
-			else if (youtubeActive) g_youtubePlayer->command(command);
-			else if (g_player) g_player->command(command);
+			runTransportAction(i);
 			InvalidateRect(window, nullptr, FALSE);
 			return 0;
 		}
@@ -2848,8 +3034,15 @@ static LRESULT CALLBACK windowProc(HWND window, UINT message, WPARAM wParam, LPA
 	const bool youtubeActive = g_youtubePlayer && g_youtubePlayer->active();
 	const std::wstring transportTitle = youtubeActive ? g_youtubePlayer->title() :
 		(g_player ? g_player->title() : L"No track playing");
-	const float playbackPosition = youtubeActive ? g_youtubePlayer->position() : currentPosition();
+	const float reportedPlaybackPosition = youtubeActive ? g_youtubePlayer->position() : currentPosition();
 	const float playbackDuration = youtubeActive ? g_youtubePlayer->duration() : currentDuration();
+	const int64_t reportedPlaybackPositionMs = int64_t(reportedPlaybackPosition * 1000.0f);
+	if (g_transportSeekPending &&
+	    (std::abs(reportedPlaybackPositionMs - g_transportSeekTargetMs) <= 1500 ||
+	     GetTickCount64() - g_transportSeekPendingSince >= 5000))
+		g_transportSeekPending = false;
+	const float playbackPosition = (g_transportSeeking || g_transportSeekPending) ?
+		float(g_transportSeekTargetMs) / 1000.0f : reportedPlaybackPosition;
 	const bool playbackPlaying = youtubeActive ? g_youtubePlayer->playing() : currentPlaying();
 	const int controlX = width / 2 - 129;
 	// Keep the title in its own responsive column. A fixed 260px title box
@@ -2860,25 +3053,48 @@ static LRESULT CALLBACK windowProc(HWND window, UINT message, WPARAM wParam, LPA
 		label(graphics, transportTitle, bodyBold,
 			RectF(titleX, float(transportTop + 12), titleWidth, 28), primary);
 	const int buttonX[] = {controlX, controlX + 52, controlX + 104, controlX + 166, controlX + 218};
-	const wchar_t *buttonLabels[] = {L"|\u25C0", L"\u21BA", playbackPlaying ? L"II" : L"\u25B6", L"\u25B6|", L"\u25A0"};
+	const ULONGLONG paintTick = GetTickCount64();
+	if (g_transportPressed >= 0 && g_transportPressedUntil != 0 && paintTick >= g_transportPressedUntil) {
+		g_transportPressed = -1;
+		g_transportPressedUntil = 0;
+	}
 	for (int i = 0; i < 5; ++i) {
 		const int size = i == 2 ? 50 : 42, y = transportTop + (i == 2 ? 8 : 12);
 		g_transportButtons[i] = RECT{buttonX[i], y, buttonX[i] + size, y + size};
-		if (i == 2) roundedPanel(graphics, RectF(float(buttonX[i]), float(y), float(size), float(size)), 25, accent);
-		label(graphics, buttonLabels[i], bodyBold, RectF(float(buttonX[i]), float(y), float(size), float(size)),
-			i == 2 ? Color(255,255,255,255) : secondary, StringAlignmentCenter);
+		const bool pressed = g_transportPressed == i;
+		if (i == 2)
+			roundedPanel(graphics, RectF(float(buttonX[i]), float(y), float(size), float(size)), 25,
+				pressed ? Color(255, 84, 226, 255) : accent);
+		else if (pressed)
+			roundedPanel(graphics, RectF(float(buttonX[i]), float(y), float(size), float(size)), 21, accentSoft);
+		drawTransportIcon(graphics, i, g_transportButtons[i], playbackPlaying,
+			(i == 2 || pressed) ? Color(255,255,255,255) : secondary);
 	}
 	const float barX = float(sidebar + 34), barY = float(transportTop + 69), barWidth = float(width - sidebar - 68);
+	g_transportProgress = RECT{LONG(barX), LONG(barY - 8), LONG(barX + barWidth), LONG(barY + 12)};
 	SolidBrush track(border), progressBrush(accent);
 	graphics.FillRectangle(&track, barX, barY, barWidth, 4.0f);
 	const float progress = playbackDuration > 0 ? std::min(1.0f, playbackPosition / playbackDuration) : 0;
 	graphics.FillRectangle(&progressBrush, barX, barY, barWidth * progress, 4.0f);
+	const float handleX = barX + barWidth * progress;
+	graphics.FillEllipse(&progressBrush, handleX - 6.0f, barY - 4.0f, 12.0f, 12.0f);
 	const std::wstring timing = clockText(playbackPosition) + L" / " + clockText(playbackDuration);
 	label(graphics, timing, smallFont, RectF(float(width - 150), float(transportTop + 14), 110, 24), tertiary, StringAlignmentFar);
 
 	graphics.Flush();
 	SetViewportOrgEx(bufferDc, 0, 0, nullptr);
+	int destinationState = 0;
+	if (g_page == 0 && g_youtubePlayer && g_youtubePlayer->active()) {
+		// A CEF video-frame invalidation can be coalesced with the regularly
+		// refreshed transport region. Do not present the shell background over
+		// the existing video frame before paintTo() presents its replacement.
+		const RECT video = youtubeVideoBounds(window);
+		destinationState = SaveDC(dc);
+		ExcludeClipRect(dc, video.left, video.top, video.right, video.bottom);
+	}
 	BitBlt(dc, paint.rcPaint.left, paint.rcPaint.top, dirtyWidth, dirtyHeight, bufferDc, 0, 0, SRCCOPY);
+	if (destinationState)
+		RestoreDC(dc, destinationState);
 	SelectObject(bufferDc, previousBitmap); DeleteObject(bufferBitmap); DeleteDC(bufferDc);
 	if (g_page == 0 && g_youtubePlayer && g_youtubePlayer->active()) g_youtubePlayer->paintTo(dc);
 	EndPaint(window, &paint);
@@ -3104,16 +3320,22 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int)
 	// Spotify and Local operation therefore keep no idle OSR browser alive.
 	g_youtubePlayer->setParent(window);
 	// Restoring the provider does not pass through the Library button handler.
-	// Recreate the YouTube browser explicitly on cold start so a persisted
-	// YouTube session is immediately usable rather than waiting for the user to
-	// click "Use YouTube" again.
+	// Resume the persisted source explicitly so both YouTube and Local sessions
+	// are immediately usable without asking the user to reselect their library.
 	if (g_hub.activeSource() == "youtube") {
 		traceLog("youtube-restored-provider-init", g_hub.hasCurrent() ? "current=1" : "current=0");
 		if (g_hub.hasCurrent() && g_hub.current().provider != "local")
 			startHubTrack(g_hub.current(), false);
 		else
 			playHubNext();
+	} else if (g_hub.activeSource() == "local") {
+		traceLog("local-restored-provider-init", g_hub.hasCurrent() ? "current=1" : "current=0");
+		const bool restored = g_hub.hasCurrent() && g_hub.current().provider == "local" &&
+			startHubTrack(g_hub.current(), false);
+		if (!restored)
+			playHubNext();
 	}
+	updateHubMediaKeyRegistration(window);
 	// OBS launches the Hub; the Hub is the sole owner of its optional apps.
 	launchManagedPrograms();
 	HANDLE pipe = CreateNamedPipeW(L"\\\\.\\pipe\\RearSilverStreamSuiteMusicPlayer", PIPE_ACCESS_DUPLEX,
@@ -3312,6 +3534,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int)
 		Sleep(10);
 	}
 	traceLog("shutdown-begin", "provider=" + g_hub.activeSource());
+	releaseHubMediaKeys(window);
 	// Managed applications close first while the Hub is still fully alive. This
 	// preserves the successful ordering of the old OBS Auto-Start Manager and
 	// prevents both abandoned apps and a competing GPU/compositor teardown.

@@ -120,13 +120,14 @@ void SystemMediaProvider::worker()
 			{ std::lock_guard<std::mutex> lock(m_mutex); preferred = m_preferredApplication; }
 			for (const auto &session : manager.GetSessions()) {
 				const std::string source = utf8(session.SourceAppUserModelId());
-				if (!selected || (!preferred.empty() && lower(source).find(preferred) != std::string::npos)) selected = session;
-				if (!preferred.empty() && lower(source).find(preferred) != std::string::npos) break;
+				if (!preferred.empty() && lower(source) == preferred) {
+					selected = session;
+					break;
+				}
 			}
-			if (!selected) selected = manager.GetCurrentSession();
+			std::deque<PendingAction> actions;
+			{ std::lock_guard<std::mutex> lock(m_mutex); actions.swap(m_actions); }
 			if (selected) {
-				std::deque<PendingAction> actions;
-				{ std::lock_guard<std::mutex> lock(m_mutex); actions.swap(m_actions); }
 				for (const auto &action : actions) {
 					switch (action.action) {
 					case Action::Play: selected.TryPlayAsync().get(); break;

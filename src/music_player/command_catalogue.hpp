@@ -45,14 +45,21 @@ inline constexpr std::array<RsChatCommandDefinition, 7> kRsChatCommands{{
 inline constexpr std::array<RsChatCommandExample, 4> kRsChatCommandExamples{{
 	{"sr", "YouTube search", "!sr <title + artist>", "youtube"},
 	{"sr", "YouTube music link", "!sr <YouTube music URL>", "youtube"},
-	{"sr", "Spotify search (External mode)", "!sr <title + artist>", "spotify"},
+	{"sr", "Spotify search", "!sr <title + artist>", "spotify"},
 	{"sr", "Spotify track link", "!sr <Spotify track URL>", "spotify"},
 }};
 
-inline constexpr std::array<RsChatCommandNote, 3> kRsChatCommandNotes{{
+inline constexpr std::array<RsChatCommandNote, 10> kRsChatCommandNotes{{
 	{"sr", "Accepted requests join the queue and never interrupt the track already playing."},
 	{"sr", "Configured duration, category, age and search-safety checks apply to requests."},
 	{"sr", "Every accepted request receives a stable session ID for safe removal and moderation."},
+	{"sr", "Spotify requests require a Spotify Premium account connected in Suite Settings. YouTube requests work independently."},
+	{"play", "Spotify playback commands require a Spotify Premium account connected in Suite Settings."},
+	{"pause", "Spotify playback commands require a Spotify Premium account connected in Suite Settings."},
+	{"skip", "Spotify playback commands require a Spotify Premium account connected in Suite Settings."},
+	{"restart", "Spotify playback commands require a Spotify Premium account connected in Suite Settings."},
+	{"previous", "Spotify playback commands require a Spotify Premium account connected in Suite Settings."},
+	{"remove", "Managing Spotify requests requires a Spotify Premium account connected in Suite Settings."},
 }};
 
 inline constexpr std::array<std::pair<std::string_view, unsigned>, 4> kRsChatRoles{{

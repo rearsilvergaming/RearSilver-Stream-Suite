@@ -1250,7 +1250,16 @@ static void refreshExternalPlayer(HWND window)
 		g_externalPositionTrack = trackKey;
 	}
 	g_externalState = state;
-	if (!state.available || state.title.empty()) return;
+	if (!state.available || state.title.empty()) {
+		if (g_hub.hasCurrent() && g_hub.current().provider == "external") {
+			g_hub.clearCurrent();
+			if (g_player) g_player->setMetadata("No track playing\t\t\t");
+			syncHubQueueView();
+			saveHubState();
+			InvalidateRect(window, nullptr, FALSE);
+		}
+		return;
+	}
 	HubTrack track;
 	track.id = "external:" + state.sourceAppId + ":" + state.title + ":" + state.artist;
 	track.providerId = state.sourceAppId; track.provider = "external";
@@ -2518,10 +2527,20 @@ static LRESULT CALLBACK windowProc(HWND window, UINT message, WPARAM wParam, LPA
 			else if (source == "youtube" && g_hub.youtubeFallback().empty()) g_libraryStatus = L"Import a YouTube fallback playlist before selecting YouTube.";
 			else {
 				if (g_player) g_player->command("STOP"); if (g_youtubePlayer) { g_youtubePlayer->command("STOP"); g_youtubePlayer->hide(); }
-				g_hub.activateSource(source); syncHubQueueView(); if (source != "external") playHubNext();
+				g_hub.activateSource(source);
+				if (source == "external") {
+					g_hub.clearCurrent();
+					g_externalState = {};
+					g_externalPositionTrack.clear();
+					if (g_player) g_player->setMetadata("No track playing\t\t\t");
+					syncHubQueueView();
+				} else {
+					syncHubQueueView();
+					playHubNext();
+				}
 				updateHubMediaKeyRegistration(window);
 				traceLog("provider-switch-complete", "active=" + g_hub.activeSource());
-				g_libraryStatus = source == "local" ? L"Local files are now the active music source. Chat requests are unavailable." : (source == "external" ? L"External player selected. Start Spotify or another compatible desktop player." : L"YouTube is now the active music source.");
+				g_libraryStatus = source == "local" ? L"Local files are now the active music source. Chat requests are unavailable." : (source == "external" ? L"Spotify selected. Open the Spotify desktop app to begin playback." : L"YouTube is now the active music source.");
 			}
 		} else {
 			std::vector<HubTrack> imported;
@@ -3308,7 +3327,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int)
 	loadHubState();
 	g_hub.setNonRequestLabel(wideToUtf8(musicSetting(L"nonRequestLabel", L"Stream DJ")));
 	g_authSender = wideToUtf8(musicSetting(L"authSender", L"streamer"));
-	g_systemMedia.start("spotify");
+	g_systemMedia.start("spotify.exe");
 	g_spotify.start();
 	g_streamerTwitch.start(); g_botTwitch.start();
 	g_overlayDesigner = std::make_unique<OverlayDesignerSurface>();

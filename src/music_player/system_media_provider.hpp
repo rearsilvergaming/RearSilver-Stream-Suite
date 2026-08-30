@@ -34,7 +34,7 @@ public:
 	SystemMediaProvider(const SystemMediaProvider &) = delete;
 	SystemMediaProvider &operator=(const SystemMediaProvider &) = delete;
 
-	void start(std::string preferredApplication = "spotify");
+	void start(std::string preferredApplication = "spotify.exe");
 	void stop();
 	void setPreferredApplication(std::string preferredApplication);
 	void command(Action action, int64_t positionMs = 0);
@@ -48,7 +48,7 @@ private:
 	std::condition_variable m_wake;
 	std::thread m_thread;
 	std::atomic<bool> m_stop{false};
-	std::string m_preferredApplication = "spotify";
+	std::string m_preferredApplication = "spotify.exe";
 	std::deque<PendingAction> m_actions;
 	SystemMediaState m_state;
 };

@@ -1,7 +1,19 @@
 cmake_minimum_required(VERSION 3.20)
 project("RearSilver-Stream-Suite" LANGUAGES CXX)
 
+include(CTest)
+
 option(RS_BUILD_CEF_AUDIO_POC "Build the isolated CEF YouTube PCM capture experiment" OFF)
+
+if(BUILD_TESTING)
+	add_executable(RearSilver-Music-Hub-Tests
+		tests/music_hub_tests.cpp
+		src/music_player/music_hub.cpp)
+	target_include_directories(RearSilver-Music-Hub-Tests PRIVATE src/music_player)
+	set_target_properties(RearSilver-Music-Hub-Tests PROPERTIES
+		CXX_STANDARD 17 CXX_STANDARD_REQUIRED YES)
+	add_test(NAME RearSilver-Music-Hub-Tests COMMAND RearSilver-Music-Hub-Tests)
+endif()
 
 set(RS_DEFAULT_EDITION "pro" CACHE STRING "Default product edition: free or pro")
 set_property(CACHE RS_DEFAULT_EDITION PROPERTY STRINGS free pro)

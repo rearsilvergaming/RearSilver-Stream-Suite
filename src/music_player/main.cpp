@@ -231,7 +231,7 @@ static ULONGLONG g_transportSeekPendingSince = 0;
 static std::mutex g_hostEventMutex;
 static std::vector<std::string> g_hostEvents;
 static bool g_hubMediaKeysRegistered = false;
-static RECT g_queuePreviousPage{}, g_queueNextPage{}, g_queueShuffle{};
+static RECT g_queuePreviousPage{}, g_queueNextPage{}, g_queueShuffle{}, g_queuePlayFromBeginning{};
 
 class SuiteCefApp final : public CefApp, public CefBrowserProcessHandler {
 public:
@@ -1293,7 +1293,7 @@ static void saveHubState()
 {
 	const std::wstring path = hubStatePath(); if (path.empty()) return;
 	std::ofstream output(path, std::ios::binary | std::ios::trunc);
-	if (output) output << g_hub.snapshotJson("stopped", 0, 0);
+	if (output) output << g_hub.persistentJson();
 }
 
 static void loadHubState()
@@ -1311,7 +1311,8 @@ static void loadHubState()
 		track.album = value->GetString("album").ToString(); track.artworkUrl = value->GetString("artworkUrl").ToString();
 		track.requestedBy = value->GetString("requestedBy").ToString(); track.requesterId = value->GetString("requesterId").ToString();
 		track.requesterLevel = value->GetInt("requesterLevel"); track.durationSeconds = value->GetInt("durationSeconds");
-		track.cancelled = value->GetBool("cancelled"); return track;
+		track.discNumber = value->GetInt("discNumber"); track.trackNumber = value->GetInt("trackNumber");
+		track.request = value->GetBool("request"); track.cancelled = value->GetBool("cancelled"); return track;
 	};
 	auto readTracks = [&readTrack](CefRefPtr<CefListValue> list) {
 		std::vector<HubTrack> tracks; if (!list) return tracks;
@@ -1322,14 +1323,31 @@ static void loadHubState()
 	};
 	std::vector<HubTrack> youtube = readTracks(object->GetList("youtubeLibrary"));
 	if (youtube.empty()) {
-		for (HubTrack &track : readTracks(object->GetList("queue"))) if (track.provider != "local") youtube.push_back(std::move(track));
+		for (HubTrack &track : readTracks(object->GetList("queue")))
+			if (!track.request && track.provider == "youtube") youtube.push_back(std::move(track));
 	}
 	g_hub.replaceFallback(std::move(youtube), object->GetString("fallbackLabel").ToString(), object->GetString("fallbackUrl").ToString());
 	g_hub.replaceLocalLibrary(readTracks(object->GetList("localLibrary")));
 	g_hub.clearRequests();
-	g_hub.activateSource(object->GetString("activeSource").ToString());
-	HubTrack current = readTrack(object->GetDictionary("current"));
-	if (!current.providerId.empty()) {
+	HubTrack youtubeContinuation = readTrack(object->GetDictionary("youtubeContinuation"));
+	HubTrack localContinuation = readTrack(object->GetDictionary("localContinuation"));
+	const HubTrack legacyCurrent = readTrack(object->GetDictionary("current"));
+	if (!legacyCurrent.request && !legacyCurrent.providerId.empty()) {
+		if (legacyCurrent.provider == "local" && localContinuation.providerId.empty()) localContinuation = legacyCurrent;
+		if (legacyCurrent.provider == "youtube" && youtubeContinuation.providerId.empty()) youtubeContinuation = legacyCurrent;
+	}
+	if (!youtubeContinuation.providerId.empty()) g_hub.restoreFallbackPosition(youtubeContinuation);
+	if (!localContinuation.providerId.empty()) g_hub.restoreFallbackPosition(localContinuation);
+	const std::string savedSource = object->GetString("activeSource").ToString();
+	const std::string activeSource = savedSource == "local" || savedSource == "external" ? savedSource : "youtube";
+	g_hub.activateSource(activeSource);
+	HubTrack current = activeSource == "local" ? localContinuation :
+		(activeSource == "youtube" ? youtubeContinuation : HubTrack{});
+	const bool continueFallback = musicSetting(L"fallbackStartup", L"continue") != L"beginning";
+	const bool shuffleFallback = musicSetting(L"fallbackOrder", L"ordered") == L"shuffle";
+	if (activeSource != "external")
+		g_hub.prepareFallbackForLaunch(shuffleFallback, continueFallback && !current.providerId.empty() ? &current : nullptr);
+	if (continueFallback && !current.providerId.empty()) {
 		g_hub.restoreCurrent(current);
 		if (g_player) g_player->setMetadata(current.title + "\t" + current.artist + "\t" + current.album + "\t" +
 			(current.artworkUrl.empty() ? playerFallbackArtwork() : current.artworkUrl));
@@ -2163,6 +2181,7 @@ private:
 		settingBool("youtubeMusicOnly", false); settingBool("youtubeRejectAgeRestricted", true);
 		settingString("minimumRole", L"everyone"); settingString("nonRequestLabel", L"Stream DJ");
 		settingString("youtubeSafeSearch", L"strict");
+		settingString("fallbackStartup", L"continue"); settingString("fallbackOrder", L"ordered");
 		settingString("nowPlayingSymbol", L"▶️"); settingString("textOutputFormat", L"{{title}} - {{artist}} - Requested by {{user}}");
 		settingInt("queueLimit", L"maxQueueTotal", 50); settingInt("userLimit", L"maxPerUser", 2);
 		settingInt("maxTrackMinutes", L"maxTrackLengthMinutes", 10);
@@ -2778,7 +2797,19 @@ static LRESULT CALLBACK windowProc(HWND window, UINT message, WPARAM wParam, LPA
 		if (g_page == 1 && PtInRect(&g_queuePreviousPage, point)) { g_queuePage = std::max(0, g_queuePage - 1); InvalidateRect(window, nullptr, FALSE); return 0; }
 		if (g_page == 1 && PtInRect(&g_queueNextPage, point)) { ++g_queuePage; InvalidateRect(window, nullptr, FALSE); return 0; }
 		if (g_page == 1 && PtInRect(&g_queueShuffle, point)) {
-			if(externalActive()&&g_spotify.state().authorized)g_spotify.toggleShuffle();else {g_hub.shuffleFallback();saveHubState();} g_queuePage = 0; syncHubQueueView();
+			if (!externalActive()) {
+				if (g_hub.fallbackShuffled()) g_hub.restoreFallbackOrder();
+				else g_hub.shuffleFallback();
+				saveHubState(); g_queuePage = 0; syncHubQueueView();
+			}
+			InvalidateRect(window, nullptr, FALSE); return 0;
+		}
+		if (g_page == 1 && PtInRect(&g_queuePlayFromBeginning, point)) {
+			if (!externalActive()) {
+				HubTrack first;
+				if (g_hub.restartFallback(first)) startHubTrack(first);
+				saveHubState(); g_queuePage = 0; syncHubQueueView();
+			}
 			InvalidateRect(window, nullptr, FALSE); return 0;
 		}
 		if (g_page == 3) {
@@ -2962,6 +2993,10 @@ static LRESULT CALLBACK windowProc(HWND window, UINT message, WPARAM wParam, LPA
 				RectF(infoX + 14, queueY + 91, infoWidth - 28, 24), tertiary);
 		}
 	} else if (g_page == 1) {
+		g_queuePreviousPage = {};
+		g_queueNextPage = {};
+		g_queueShuffle = {};
+		g_queuePlayFromBeginning = {};
 		const float panelY = 108, panelHeight = float(transportTop - 130);
 		roundedPanel(graphics, RectF(contentX, panelY, contentWidth, panelHeight), 16, surface);
 		label(graphics, L"Playback order", heading, RectF(contentX + 28, 128, contentWidth - 56, 34), primary);
@@ -2984,19 +3019,27 @@ static LRESULT CALLBACK windowProc(HWND window, UINT message, WPARAM wParam, LPA
 		}
 		if (g_queue.empty()) label(graphics, L"No upcoming tracks", body,
 			RectF(contentX + 28, 216, contentWidth - 56, 30), secondary);
-		else {
+		if (!g_queue.empty()) {
 			const float pageY = float(transportTop - 58);
 			g_queuePreviousPage = RECT{int(contentX + 28), int(pageY), int(contentX + 138), int(pageY + 34)};
 			g_queueNextPage = RECT{int(contentX + contentWidth - 138), int(pageY), int(contentX + contentWidth - 28), int(pageY + 34)};
-			g_queueShuffle = RECT{int(contentX + contentWidth / 2 - 72), int(pageY), int(contentX + contentWidth / 2 + 72), int(pageY + 34)};
+			const float centreX = contentX + contentWidth / 2;
+			g_queueShuffle = externalActive() ? RECT{} : RECT{int(centreX - 166), int(pageY), int(centreX - 8), int(pageY + 34)};
+			g_queuePlayFromBeginning = externalActive() ? RECT{} : RECT{int(centreX + 8), int(pageY), int(centreX + 166), int(pageY + 34)};
 			roundedPanel(graphics, RectF(float(g_queuePreviousPage.left), pageY, 110, 34), 7, raised);
 			roundedPanel(graphics, RectF(float(g_queueNextPage.left), pageY, 110, 34), 7, raised);
-			roundedPanel(graphics, RectF(float(g_queueShuffle.left), pageY, 144, 34), 7, accentSoft);
 			label(graphics, L"Previous page", smallFont, RectF(float(g_queuePreviousPage.left), pageY, 110, 34), g_queuePage > 0 ? secondary : tertiary, StringAlignmentCenter);
 			label(graphics, L"Next page", smallFont, RectF(float(g_queueNextPage.left), pageY, 110, 34), g_queuePage + 1 < pageCount ? secondary : tertiary, StringAlignmentCenter);
-			label(graphics, L"Shuffle playlist", smallFont, RectF(float(g_queueShuffle.left), pageY, 144, 34), accent, StringAlignmentCenter);
+			if (!externalActive()) {
+				roundedPanel(graphics, RectF(float(g_queueShuffle.left), pageY, 158, 34), 7, accentSoft);
+				roundedPanel(graphics, RectF(float(g_queuePlayFromBeginning.left), pageY, 158, 34), 7, raised);
+				label(graphics, g_hub.fallbackShuffled() ? L"Restore playlist order" : L"Shuffle playlist", smallFont,
+					RectF(float(g_queueShuffle.left), pageY, 158, 34), accent, StringAlignmentCenter);
+				label(graphics, L"Play from beginning", smallFont,
+					RectF(float(g_queuePlayFromBeginning.left), pageY, 158, 34), secondary, StringAlignmentCenter);
+			}
 			label(graphics, L"Page " + std::to_wstring(g_queuePage + 1) + L" / " + std::to_wstring(pageCount),
-				smallFont, RectF(float(g_queueShuffle.left - 100), pageY - 30, 344, 24), tertiary, StringAlignmentCenter);
+				smallFont, RectF(centreX - 172, pageY - 30, 344, 24), tertiary, StringAlignmentCenter);
 		}
 	} else if (g_page == 2) {
 		roundedPanel(graphics, RectF(contentX, 108, contentWidth, float(transportTop - 130)), 16, surface);
@@ -3481,7 +3524,11 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int)
 							g_hostEvents.push_back("HOST\tREQUEST_REMOVE_FAILED\t" + id + "\tThat request is not waiting in the queue.\n");
 						}
 					} else if (line == "HUB_SHUFFLE") {
-						if(externalActive()&&g_spotify.state().authorized)g_spotify.toggleShuffle();else {g_hub.shuffleFallback();saveHubState();} g_queuePage = 0; syncHubQueueView(); InvalidateRect(window, nullptr, FALSE);
+						if (!externalActive()) { g_hub.shuffleFallback(); saveHubState(); g_queuePage = 0; syncHubQueueView(); InvalidateRect(window, nullptr, FALSE); }
+					} else if (line == "HUB_RESTORE_ORDER") {
+						if (!externalActive()) { g_hub.restoreFallbackOrder(); saveHubState(); g_queuePage = 0; syncHubQueueView(); InvalidateRect(window, nullptr, FALSE); }
+					} else if (line == "HUB_PLAY_FROM_BEGINNING") {
+						if (!externalActive()) { HubTrack first; if (g_hub.restartFallback(first)) startHubTrack(first); saveHubState(); g_queuePage = 0; syncHubQueueView(); InvalidateRect(window, nullptr, FALSE); }
 					} else if (line.rfind("META\t", 0) == 0) {
 						player.setMetadata(line.substr(5));
 						InvalidateRect(window, nullptr, FALSE);

@@ -5,9 +5,11 @@
 #include <wrl/client.h>
 
 #include "local_library.hpp"
+#include "local_order.hpp"
 #include "miniaudio.h"
 
 #include <algorithm>
+#include <cctype>
 #include <filesystem>
 #include <fstream>
 #include <set>
@@ -55,6 +57,20 @@ std::string textFrame(const std::vector<unsigned char> &value)
 	return {};
 }
 
+int numberedFrame(const std::vector<unsigned char> &value)
+{
+	const std::string text = textFrame(value);
+	size_t offset = 0;
+	while (offset < text.size() && std::isspace(static_cast<unsigned char>(text[offset]))) ++offset;
+	int number = 0;
+	bool found = false;
+	while (offset < text.size() && std::isdigit(static_cast<unsigned char>(text[offset]))) {
+		found = true;
+		number = number * 10 + (text[offset++] - '0');
+	}
+	return found ? number : 0;
+}
+
 void readId3(const fs::path &path, HubTrack &track)
 {
 	std::ifstream input(path, std::ios::binary); unsigned char header[10]{};
@@ -71,6 +87,8 @@ void readId3(const fs::path &path, HubTrack &track)
 		if (id == "TIT2") track.title = textFrame(value);
 		else if (id == "TPE1") track.artist = textFrame(value);
 		else if (id == "TALB") track.album = textFrame(value);
+		else if (id == "TRCK") track.trackNumber = numberedFrame(value);
+		else if (id == "TPOS") track.discNumber = numberedFrame(value);
 		else if (id == "APIC" && track.artworkUrl.empty()) {
 			size_t position = 1; while (position < value.size() && value[position]) ++position; ++position;
 			if (position < value.size()) ++position;
@@ -116,6 +134,26 @@ HubTrack makeTrack(const fs::path &path)
 	}
 	return track;
 }
+
+bool localTrackLess(const HubTrack &left, const HubTrack &right, const fs::path &root)
+{
+	const fs::path leftPath = fs::u8path(left.providerId);
+	const fs::path rightPath = fs::u8path(right.providerId);
+	const fs::path leftRelative = root.empty() ? leftPath : leftPath.lexically_relative(root);
+	const fs::path rightRelative = root.empty() ? rightPath : rightPath.lexically_relative(root);
+	const fs::path leftAlbum = left.album.empty() ? leftRelative.parent_path() : fs::u8path(left.album);
+	const fs::path rightAlbum = right.album.empty() ? rightRelative.parent_path() : fs::u8path(right.album);
+	if (naturalLocalPathLess(leftAlbum, rightAlbum)) return true;
+	if (naturalLocalPathLess(rightAlbum, leftAlbum)) return false;
+	const int leftDisc = left.discNumber > 0 ? left.discNumber : 1;
+	const int rightDisc = right.discNumber > 0 ? right.discNumber : 1;
+	if (leftDisc != rightDisc) return leftDisc < rightDisc;
+	const bool leftHasTrack = left.trackNumber > 0;
+	const bool rightHasTrack = right.trackNumber > 0;
+	if (leftHasTrack != rightHasTrack) return leftHasTrack;
+	if (leftHasTrack && left.trackNumber != right.trackNumber) return left.trackNumber < right.trackNumber;
+	return naturalLocalPathLess(leftRelative, rightRelative);
+}
 }
 
 std::vector<std::wstring> chooseLocalAudioFiles(void *owner)
@@ -141,13 +179,29 @@ std::wstring chooseLocalAudioFolder(void *owner)
 
 std::vector<HubTrack> scanLocalAudioFiles(const std::vector<std::wstring> &files)
 {
-	std::vector<HubTrack> tracks; for (const std::wstring &file : files) if (supported(file) && fs::exists(file)) tracks.push_back(makeTrack(file)); return tracks;
+	std::vector<HubTrack> tracks;
+	for (const std::wstring &file : files)
+		if (supported(file) && fs::exists(file)) tracks.push_back(makeTrack(file));
+	std::sort(tracks.begin(), tracks.end(), [](const HubTrack &left, const HubTrack &right) {
+		return localTrackLess(left, right, {});
+	});
+	return tracks;
 }
 
 std::vector<HubTrack> scanLocalAudioFolder(const std::wstring &folder)
 {
-	std::vector<HubTrack> tracks; std::error_code error;
+	std::vector<fs::path> files; std::error_code error;
 	for (fs::recursive_directory_iterator item(folder, fs::directory_options::skip_permission_denied, error), end; item != end; item.increment(error))
-		if (!error && item->is_regular_file() && supported(item->path())) tracks.push_back(makeTrack(item->path()));
-	std::sort(tracks.begin(), tracks.end(), [](const HubTrack &a, const HubTrack &b) { return a.title < b.title; }); return tracks;
+		if (!error && item->is_regular_file() && supported(item->path())) files.push_back(item->path());
+	const fs::path root(folder);
+	std::sort(files.begin(), files.end(), [&](const fs::path &left, const fs::path &right) {
+		return naturalLocalPathLess(left.lexically_relative(root), right.lexically_relative(root));
+	});
+	std::vector<HubTrack> tracks;
+	tracks.reserve(files.size());
+	for (const fs::path &file : files) tracks.push_back(makeTrack(file));
+	std::sort(tracks.begin(), tracks.end(), [&](const HubTrack &left, const HubTrack &right) {
+		return localTrackLess(left, right, root);
+	});
+	return tracks;
 }

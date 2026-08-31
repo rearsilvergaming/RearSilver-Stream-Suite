@@ -1582,6 +1582,13 @@ static void setFontFamilies(CefRefPtr<CefDictionaryValue> dictionary, const char
 static std::wstring musicSetting(const wchar_t *name,const wchar_t *fallback){HKEY key{};if(RegOpenKeyExW(HKEY_CURRENT_USER,kMusicSettingsRegistry,0,KEY_READ,&key)!=ERROR_SUCCESS)return fallback;wchar_t value[1024]{};DWORD type=0,bytes=sizeof(value);const LSTATUS result=RegQueryValueExW(key,name,nullptr,&type,reinterpret_cast<BYTE*>(value),&bytes);RegCloseKey(key);return result==ERROR_SUCCESS&&type==REG_SZ?value:fallback;}
 static void setMusicSetting(const wchar_t *name,const std::wstring &value){HKEY key{};DWORD d=0;if(RegCreateKeyExW(HKEY_CURRENT_USER,kMusicSettingsRegistry,0,nullptr,0,KEY_WRITE,nullptr,&key,&d)!=ERROR_SUCCESS)return;RegSetValueExW(key,name,0,REG_SZ,reinterpret_cast<const BYTE*>(value.c_str()),DWORD((value.size()+1)*sizeof(wchar_t)));RegCloseKey(key);}
 static bool musicBool(const wchar_t *name,bool fallback){const auto value=musicSetting(name,fallback?L"true":L"false");return value==L"true"||value==L"1";}
+static void disableSongRequestsForLocalSource()
+{
+	if (!musicBool(L"requestsEnabled", true)) return;
+	setMusicSetting(L"requestsEnabled", L"false");
+	std::lock_guard<std::mutex> lock(g_hostEventMutex);
+	g_hostEvents.push_back("HOST\tSETTING\trequestsEnabled\tfalse\n");
+}
 static void appendChatCommandConfig(CefRefPtr<CefDictionaryValue> config)
 {
 	CefRefPtr<CefListValue> roles = CefListValue::Create();
@@ -2461,7 +2468,9 @@ static void beginChatRequest(HWND window, const TwitchChatMessage &m, const std:
 {
 	const std::string requestId;int level=0;if(m.subscriber)level|=1;if(m.vip)level|=2;if(m.moderator)level|=4;if(m.broadcaster)level|=8;
 	const bool spotifyLink=query.rfind("spotify:track:",0)==0||query.find("open.spotify.com/track/")!=std::string::npos;
-	const bool spotifyRequest=spotifyLink||(externalActive()&&g_spotify.state().authorized);
+	if(spotifyLink&&!externalActive()){sendTwitchMessage("Spotify requests are only available when Spotify is selected in the Hub.");return;}
+	if(externalActive()&&!g_spotify.state().authorized){sendTwitchMessage("Spotify requests require a connected Spotify Premium account in Suite Settings.");return;}
+	const bool spotifyRequest=externalActive()&&g_spotify.state().authorized;
 	if(spotifyRequest){std::thread([window,requestId,m,query,level]{auto*r=new HubSearchResult;SpotifyQueueTrack s;if(g_spotify.searchTrack(query,s)){r->track.id=requestId;r->track.provider="spotify";r->track.providerId=s.uri;r->track.title=s.title;r->track.artist=s.artist;r->track.album=s.album;r->track.artworkUrl=s.artworkUrl;r->track.durationSeconds=int(s.durationMs/1000);r->track.request=true;r->track.requestedBy=m.displayName;r->track.requesterId=m.userId;r->track.requesterLevel=level;}else{r->track.id=requestId;r->error="Spotify could not find that track. Try a more specific title and artist or paste a Spotify track link.";}if(!PostMessageW(window,WM_HUB_REQUEST_RESULT,0,reinterpret_cast<LPARAM>(r)))delete r;}).detach();return;}
 	const HubYouTubeSafetyOptions safety=youtubeSafetyOptions();
 	std::thread([window,requestId,m,query,level,safety]{auto*r=new HubSearchResult(resolveHubSearch(query,m.displayName,safety));r->track.id=requestId;r->track.requesterId=m.userId;r->track.requesterLevel=level;if(!PostMessageW(window,WM_HUB_REQUEST_RESULT,0,reinterpret_cast<LPARAM>(r)))delete r;}).detach();
@@ -2471,7 +2480,7 @@ static void handleTwitchChat(HWND window, const TwitchChatMessage &m)
 {
 	std::string text=m.text;while(!text.empty()&&std::isspace((unsigned char)text.front()))text.erase(text.begin());while(!text.empty()&&std::isspace((unsigned char)text.back()))text.pop_back();
 	std::string lower=text;std::transform(lower.begin(),lower.end(),lower.begin(),[](unsigned char c){return char(std::tolower(c));});
-	if(lower.rfind("!sr",0)==0){if(!chatCommandAllowed("sr",m)){sendTwitchMessage(m.displayName+": you don't have permission to request songs.");return;}std::string q=text.size()>3?text.substr(3):"";while(!q.empty()&&std::isspace((unsigned char)q.front()))q.erase(q.begin());if(q.empty()){sendTwitchMessage(m.displayName+": usage is !sr <song name or supported music link>");return;}beginChatRequest(window,m,q);return;}
+	if(lower.rfind("!sr",0)==0){if(!musicBool(L"requestsEnabled",true)){sendTwitchMessage("Song requests are turned off for this stream.");return;}if(!chatCommandAllowed("sr",m)){sendTwitchMessage(m.displayName+": you don't have permission to request songs.");return;}std::string q=text.size()>3?text.substr(3):"";while(!q.empty()&&std::isspace((unsigned char)q.front()))q.erase(q.begin());if(q.empty()){sendTwitchMessage(m.displayName+": usage is !sr <song name or supported music link>");return;}beginChatRequest(window,m,q);return;}
 	struct Command{const char*text;const char*key;const char*action;const char*reply;};
 	for(const Command &c:std::initializer_list<Command>{{"!play","play","PLAY","Playback resumed"},{"!pause","pause","PAUSE","Playback paused"},{"!skip","skip","SKIP","Track skipped"},{"!restart","restart","RESTART","Track restarted"},{"!previous","previous","PREVIOUS","Playing the previous track"},{"!prev","previous","PREVIOUS","Playing the previous track"}}){if(lower==c.text){if(!chatCommandAllowed(c.key,m)){sendTwitchMessage(m.displayName+": you don't have permission to control playback.");return;}runChatTransport(c.action);sendTwitchMessage(c.reply);return;}}
 	if(lower=="!remove"||lower.rfind("!remove ",0)==0){if(!chatCommandAllowed("remove",m)){sendTwitchMessage(m.displayName+": you don't have permission to remove requests.");return;}std::string id=text.size()>7?text.substr(7):"";while(!id.empty()&&(id.front()==' '||id.front()=='#'))id.erase(id.begin());if(!id.empty()&&(id.front()=='r'||id.front()=='R'))id.front()='R';else if(!id.empty())id='R'+id;if(id.empty()){sendTwitchMessage("Usage: !remove #<request ID>");return;}HubTrack removed;for(const auto&t:g_hub.requests())if(t.id==id){removed=t;break;}if(removed.provider=="spotify"){g_hub.cancelRequest(id);saveHubState();syncHubQueueView();sendTwitchMessage("Removed request #"+id+": "+removed.title+" - "+removed.artist);return;}if(!removed.id.empty()&&g_hub.removeRequest(id)){saveHubState();syncHubQueueView();sendTwitchMessage("Removed request #"+id+": "+removed.title+" - "+removed.artist);}else sendTwitchMessage("Could not remove request #"+id+": That request is not waiting in the queue.");}
@@ -2547,6 +2556,7 @@ static LRESULT CALLBACK windowProc(HWND window, UINT message, WPARAM wParam, LPA
 			else {
 				if (g_player) g_player->command("STOP"); if (g_youtubePlayer) { g_youtubePlayer->command("STOP"); g_youtubePlayer->hide(); }
 				g_hub.activateSource(source);
+				if (source == "local") disableSongRequestsForLocalSource();
 				if (source == "external") {
 					g_hub.clearCurrent();
 					g_externalState = {};
@@ -3368,6 +3378,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int)
 	for (HWND control : {g_importPlaylistButton, g_addFilesButton, g_addFolderButton, g_useLocalButton, g_useYouTubeButton, g_clearLocalButton})
 		SendMessageW(control, WM_SETFONT, reinterpret_cast<WPARAM>(uiFont), TRUE);
 	loadHubState();
+	if (g_hub.activeSource() == "local") disableSongRequestsForLocalSource();
 	g_hub.setNonRequestLabel(wideToUtf8(musicSetting(L"nonRequestLabel", L"Stream DJ")));
 	g_authSender = wideToUtf8(musicSetting(L"authSender", L"streamer"));
 	g_systemMedia.start("spotify.exe");
@@ -3487,7 +3498,11 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int)
 						const std::string requestId = fields[0], requesterId = fields[1], requester = fields[2], query = fields[4];
 						const int requesterLevel = std::atoi(fields[3].c_str());
 						const bool spotifyLink=query.rfind("spotify:track:",0)==0||query.find("open.spotify.com/track/")!=std::string::npos;
-						const bool spotifyRequest=spotifyLink||(externalActive()&&g_spotify.state().authorized);
+						auto rejectRequest=[&](const std::string &reason){std::lock_guard<std::mutex>lock(g_hostEventMutex);g_hostEvents.push_back("HOST\tREQUEST_REJECTED\t"+requestId+'\t'+reason+"\n");};
+						if(!musicBool(L"requestsEnabled",true)){rejectRequest("Song requests are turned off for this stream.");continue;}
+						if(spotifyLink&&!externalActive()){rejectRequest("Spotify requests are only available when Spotify is selected in the Hub.");continue;}
+						if(externalActive()&&!g_spotify.state().authorized){rejectRequest("Spotify requests require a connected Spotify Premium account in Suite Settings.");continue;}
+						const bool spotifyRequest=externalActive()&&g_spotify.state().authorized;
 						if(spotifyRequest){
 							std::thread([window,requestId,requesterId,requester,requesterLevel,query]{auto *result=new HubSearchResult;SpotifyQueueTrack spotifyTrack;if(g_spotify.searchTrack(query,spotifyTrack)){result->track.id=requestId;result->track.provider="spotify";result->track.providerId=spotifyTrack.uri;result->track.title=spotifyTrack.title;result->track.artist=spotifyTrack.artist;result->track.album=spotifyTrack.album;result->track.artworkUrl=spotifyTrack.artworkUrl;result->track.durationSeconds=int(spotifyTrack.durationMs/1000);result->track.request=true;result->track.requestedBy=requester;result->track.requesterId=requesterId;result->track.requesterLevel=requesterLevel;}else{result->track.id=requestId;result->error="Spotify could not find that track. Try a more specific title and artist or paste a Spotify track link.";}if(!PostMessageW(window,WM_HUB_REQUEST_RESULT,0,reinterpret_cast<LPARAM>(result)))delete result;}).detach();continue;
 						}

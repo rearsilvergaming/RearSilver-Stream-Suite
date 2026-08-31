@@ -150,7 +150,7 @@ private:
 	// Remember last pages
 	int m_lastSystemPage = 0;
 	int m_lastEnhancementsPage = 0;
-	int m_lastMusicPage = 9; // default to first music page
+	int m_lastMusicPage = 0; // replaced with the Now Playing index when panels are registered
 
 	// 🔒 Safety Lock
 	bool m_safetyLockEnabled = false;

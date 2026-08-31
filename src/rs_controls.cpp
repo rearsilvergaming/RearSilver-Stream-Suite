@@ -47,17 +47,20 @@ void RsMainDock::beginStopHold(QPushButton *btn, std::function<void()> action)
 
 	m_pendingStopButton = btn;
 
-// Create overlay once
+	// Create the progress overlay once, then move it to whichever Stop button
+	// is currently being held. Leaving it parented to the first-used button
+	// makes progress invisible on the other protected outputs.
 	if (!m_holdOverlay) {
 		m_holdOverlay = new QWidget(btn);
 		m_holdOverlay->setObjectName("HoldOverlay");
 		m_holdOverlay->setAttribute(Qt::WA_TransparentForMouseEvents);
-		m_holdOverlay->setGeometry(0, 0, 0, btn->height());
-		m_holdOverlay->show();
 	}
+	if (m_holdOverlay->parentWidget() != btn)
+		m_holdOverlay->setParent(btn);
 
 	// Reset overlay
 	m_holdOverlay->setGeometry(0, 0, 0, btn->height());
+	m_holdOverlay->show();
 	m_holdOverlay->raise();
 
 	// Animate overlay width
@@ -70,7 +73,7 @@ void RsMainDock::beginStopHold(QPushButton *btn, std::function<void()> action)
 	m_holdAnim->setEndValue(QRect(0, 0, btn->width(), btn->height()));
 	m_holdAnim->start();
 
-
+	btn->setProperty("holding", true);
 	btn->style()->unpolish(btn);
 	btn->style()->polish(btn);
 	btn->update();
@@ -115,7 +118,7 @@ void RsMainDock::cancelStopHold()
 		m_holdAnim->stop();
 
 	if (m_holdOverlay)
-		m_holdOverlay->setGeometry(0, 0, 0, m_holdOverlay->height());
+		m_holdOverlay->hide();
 
 if (m_pendingStopButton) {
 		m_pendingStopButton->setProperty("holding", false);

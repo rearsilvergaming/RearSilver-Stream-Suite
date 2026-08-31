@@ -446,7 +446,104 @@ QPlainTextEdit {
 /* ===============================
    PRO: Calm Studio Theme
    =============================== */
-	else if (m_currentTheme == "brand" || m_currentTheme == "pro_night") {
+	else if (m_currentTheme == "brand") {
+		css += R"(
+
+QWidget {
+    background-color: #0b0f14;
+    color: #e6e8eb;
+}
+
+/* Cards */
+#rs-card, #rs-content-card {
+    background-color: #111821;
+    border: 1px solid #303b4a;
+    border-radius: 12px;
+    box-shadow: 0 6px 22px rgba(0,0,0,0.45);
+}
+
+/* Secondary navigation mirrors the Control Hub's raised surfaces and cyan active state. */
+#SidebarButton {
+    background-color: #17202c;
+    border: 1px solid #303b4a;
+    padding: 8px 10px;
+    border-radius: 9px;
+    color: #9db0c7;
+}
+#SidebarButton:hover {
+    background-color: #1e2a39;
+    border-color: #40516a;
+    color: #e6e8eb;
+}
+#SidebarButton[active="true"] {
+    background-color: #075166;
+    border-color: #00d4ff;
+    color: #ffffff;
+}
+
+/* Section labels */
+QLabel#rs-section-label {
+    color: #9db0c7;
+    opacity: 0.75;
+}
+
+/* Inputs */
+QLineEdit, QComboBox {
+    background-color: #17202c;
+    border: 1px solid #303b4a;
+    color: #e6e8eb;
+}
+QLineEdit:hover, QComboBox:hover {
+    border-color: #00d4ff;
+}
+
+/* Buttons */
+QPushButton#rs-primary-button {
+    background-color: #075166;
+    color: #ffffff;
+    border: 1px solid #00d4ff;
+    border-radius: 10px;
+}
+QPushButton#rs-primary-button:hover {
+    background-color: #00d4ff;
+}
+
+QPushButton#rs-secondary-button {
+    background-color: rgba(255,255,255,0.04);
+    color: #b8bdc9;
+    border: 1px solid rgba(255,255,255,0.06);
+}
+QPushButton#rs-secondary-button:hover {
+    background-color: rgba(255,255,255,0.08);
+}
+
+/* Lists */
+QListWidget {
+    background-color: #111821;
+    border: none;
+}
+QListWidget::item:selected {
+    background-color: #075166;
+}
+
+/* Logs */
+QPlainTextEdit {
+    background-color: #0b0f14;
+    border: none;
+    color: #e6e8eb;
+}
+
+/* Scrollbars */
+QScrollBar::handle {
+    background: rgba(255,255,255,0.10);
+}
+QScrollBar::handle:hover {
+    background: rgba(255,255,255,0.22);
+}
+
+)";
+	}
+	else if (m_currentTheme == "pro_night") {
 		css += R"(
 
 QWidget {
@@ -454,7 +551,6 @@ QWidget {
     color: #d6d9e0;
 }
 
-/* Cards */
 #rs-card, #rs-content-card {
     background-color: #151a22;
     border: none;
@@ -462,13 +558,28 @@ QWidget {
     box-shadow: 0 6px 22px rgba(0,0,0,0.45);
 }
 
-/* Section labels */
+#SidebarButton {
+    background-color: transparent;
+    border: 1px solid transparent;
+    padding: 8px 10px;
+    border-radius: 10px;
+    color: #9aa1ad;
+}
+#SidebarButton:hover {
+    background-color: rgba(255,255,255,0.06);
+    color: #d6d9e0;
+}
+#SidebarButton[active="true"] {
+    background-color: #0a8cff;
+    border-color: #00d4ff;
+    color: #ffffff;
+}
+
 QLabel#rs-section-label {
     color: #9aa1ad;
     opacity: 0.75;
 }
 
-/* Inputs */
 QLineEdit, QComboBox {
     background-color: #1a1f29;
     border: 1px solid rgba(255,255,255,0.06);
@@ -478,7 +589,6 @@ QLineEdit:hover, QComboBox:hover {
     border-color: rgba(10,140,255,0.45);
 }
 
-/* Buttons */
 QPushButton#rs-primary-button {
     background-color: #0a8cff;
     color: #ffffff;
@@ -497,7 +607,6 @@ QPushButton#rs-secondary-button:hover {
     background-color: rgba(255,255,255,0.08);
 }
 
-/* Lists */
 QListWidget {
     background-color: #121620;
     border: none;
@@ -506,14 +615,12 @@ QListWidget::item:selected {
     background-color: rgba(10,140,255,0.22);
 }
 
-/* Logs */
 QPlainTextEdit {
     background-color: #10141d;
     border: none;
     color: #cfd3dc;
 }
 
-/* Scrollbars */
 QScrollBar::handle {
     background: rgba(255,255,255,0.10);
 }

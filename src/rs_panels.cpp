@@ -363,7 +363,7 @@ void RsMainDock::createPanels()
 		// Theme dropdown
 		auto *themeLbl = new QLabel("Theme:");
 		m_themeCombo = new QComboBox();
-		m_themeCombo->addItem("RearSilver (Default)", "brand");
+		m_themeCombo->addItem("Stream Suite (Default)", "brand");
 		m_themeCombo->addItem("OBS Default", "default");
 		m_themeCombo->addItem("Pro (Twitch Dark)", "twitch_dark");
 		m_themeCombo->addItem("Pro (Calm)", "pro_calm");
@@ -379,18 +379,21 @@ void RsMainDock::createPanels()
 		auto *safetyLabel = new QLabel("Safety Lock");
 		safetyLabel->setObjectName("rs-section-label");
 		layout->addWidget(safetyLabel);
-		auto *safetyToggle = new QCheckBox("Prevent accidental stop actions");
+		auto *safetyToggle = new QCheckBox("Require a 1.5-second hold to stop live outputs");
 		safetyToggle->setChecked(m_safetyLockEnabled);
-		safetyToggle->setToolTip("When enabled, stopping streaming or recording requires confirmation.");
+		safetyToggle->setToolTip(
+			"Protects Streaming, Recording, Replay Buffer and Virtual Camera stop actions.");
 		layout->addWidget(safetyToggle);
 
 		auto *safetyHint =
-			new QLabel("Adds an extra layer of protection against accidentally ending your stream.");
+			new QLabel("When enabled, press and hold a Stop button until its progress indicator completes. "
+				   "Releasing early cancels the action. Start controls and Studio Mode are unaffected.");
 		safetyHint->setWordWrap(true);
 		safetyHint->setStyleSheet("opacity: 0.7; font-size: 11px;");
 		layout->addWidget(safetyHint);
 
 		connect(safetyToggle, &QCheckBox::toggled, this, [this](bool enabled) {
+			cancelStopHold();
 			m_safetyLockEnabled = enabled;
 			saveSettings();
 			updateControlStates();
@@ -434,6 +437,7 @@ void RsMainDock::createPanels()
 	m_stack->addWidget(m_pageMusicSetup);      // 11
 	m_stack->addWidget(m_pageMusicOverlay);    // 12
 	m_lastEnhancementsPage = m_stack->indexOf(m_pageStreamToolsQuickActions);
+	m_lastMusicPage = m_stack->indexOf(m_pageMusicNowPlaying);
 
 	applyTheme();
 }

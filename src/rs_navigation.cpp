@@ -151,25 +151,35 @@ void RsMainDock::onTabChanged(int index)
 		return;
 
 	m_menuStack->setCurrentIndex(index);
+	auto restorePage = [this](int pageIndex) {
+		m_stack->setCurrentIndex(pageIndex);
+		QWidget *page = m_stack->currentWidget();
+		if (page == m_pageControls) setActiveButton(m_btnControls);
+		else if (page == m_pageScenesSources) setActiveButton(m_btnScenesSources);
+		else if (page == m_pageStats) setActiveButton(m_btnStats);
+		else if (page == m_pageStreamToolsQuickActions) setActiveButton(m_btnStreamToolsQuickActions);
+		else if (page == m_pageUiSettings) setActiveButton(m_btnUiSettings);
+		else if (page == m_pageMusicNowPlaying) setActiveButton(m_btnMusicNowPlaying);
+		else if (page == m_pageMusicQueue) setActiveButton(m_btnMusicQueue);
+		else if (page == m_pageMusicRequests) setActiveButton(m_btnMusicRequests);
+		else if (page == m_pageMusicSettings) setActiveButton(m_btnMusicSettings);
+		else if (page == m_pageMusicSetup) setActiveButton(m_btnMusicSetup);
+		else if (page == m_pageMusicOverlay) setActiveButton(m_btnMusicOverlay);
+		else setActiveButton(nullptr);
+	};
 
 	if (index == 0) {
 		// SYSTEM tab
-		m_stack->setCurrentIndex(m_lastSystemPage);
+		restorePage(m_lastSystemPage);
 		return;
 	}
 
 	if (index == 1) {
 		// ENHANCEMENTS tab
-		m_stack->setCurrentIndex(m_lastEnhancementsPage);
+		restorePage(m_lastEnhancementsPage);
 		return;
 	}
 
 	// MUSIC tab (index 2)
-	// If you have m_lastMusicPage, use it. Otherwise go to the first music page.
-#ifdef __cpp_unused
-	m_stack->setCurrentIndex(m_lastMusicPage);
-#else
-	if (m_pageMusicNowPlaying)
-		m_stack->setCurrentWidget(m_pageMusicNowPlaying);
-#endif
+	restorePage(m_lastMusicPage);
 }

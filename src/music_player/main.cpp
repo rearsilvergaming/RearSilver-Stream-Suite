@@ -1,6 +1,7 @@
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
 #include <windows.h>
+#include "rs_beta_config.hpp"
 #include <dwmapi.h>
 #include <psapi.h>
 #include <tlhelp32.h>
@@ -291,6 +292,108 @@ static std::wstring executableAssetPath(const wchar_t *name)
 	std::wstring path(executable); const size_t separator = path.find_last_of(L"\\/");
 	if (separator != std::wstring::npos) path.resize(separator + 1); else path.clear();
 	path += name; return path;
+}
+
+static std::wstring suiteDataFolder(bool roaming)
+{
+	wchar_t value[MAX_PATH]{};
+	if (!GetEnvironmentVariableW(roaming ? L"APPDATA" : L"LOCALAPPDATA", value, MAX_PATH)) return {};
+	std::wstring folder = std::wstring(value) + L"\\RearSilver Stream Suite";
+	CreateDirectoryW(folder.c_str(), nullptr);
+	return folder;
+}
+
+static std::string localReportTime()
+{
+	SYSTEMTIME time{}; GetLocalTime(&time);
+	wchar_t zone[128]{}; TIME_ZONE_INFORMATION zoneInfo{}; GetTimeZoneInformation(&zoneInfo);
+	wcsncpy_s(zone, zoneInfo.StandardName, _TRUNCATE);
+	std::ostringstream out;
+	out << std::setfill('0') << std::setw(4) << time.wYear << '-' << std::setw(2) << time.wMonth << '-'
+		<< std::setw(2) << time.wDay << ' ' << std::setw(2) << time.wHour << ':' << std::setw(2) << time.wMinute
+		<< ':' << std::setw(2) << time.wSecond << " local";
+	const std::string zoneText = wideToUtf8(zone);
+	if (!zoneText.empty()) out << " (" << zoneText << ')';
+	return out.str();
+}
+
+static std::string windowsDescription()
+{
+	OSVERSIONINFOW version{}; version.dwOSVersionInfoSize = sizeof(version);
+	using RtlGetVersionFn = LONG(WINAPI *)(OSVERSIONINFOW *);
+	auto function = reinterpret_cast<RtlGetVersionFn>(GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "RtlGetVersion"));
+	if (!function || function(&version) != 0) return "Windows (version unavailable) · x64";
+	return "Windows " + std::to_string(version.dwMajorVersion) + '.' + std::to_string(version.dwMinorVersion) +
+		" build " + std::to_string(version.dwBuildNumber) + " · x64";
+}
+
+static void replaceAll(std::string &text, const std::string &from, const std::string &to)
+{
+	if (from.empty()) return;
+	for (size_t position = 0; (position = text.find(from, position)) != std::string::npos; position += to.size())
+		text.replace(position, from.size(), to);
+}
+
+static std::string redactDiagnosticText(std::string text)
+{
+	wchar_t userName[256]{}; DWORD userNameLength = DWORD(_countof(userName));
+	if (GetUserNameW(userName, &userNameLength)) replaceAll(text, wideToUtf8(userName), "<windows-user>");
+	wchar_t profile[MAX_PATH]{};
+	if (GetEnvironmentVariableW(L"USERPROFILE", profile, MAX_PATH)) replaceAll(text, wideToUtf8(profile), "<user-profile>");
+	std::istringstream input(text); std::ostringstream output; std::string line;
+	while (std::getline(input, line)) {
+		std::string lower = line;
+		std::transform(lower.begin(), lower.end(), lower.begin(), [](unsigned char value) { return char(std::tolower(value)); });
+		const bool credentialValue = lower.find('=') != std::string::npos || lower.find(':') != std::string::npos;
+		const bool sensitive = credentialValue && (lower.find("access_token") != std::string::npos ||
+			lower.find("refresh_token") != std::string::npos || lower.find("client_secret") != std::string::npos ||
+			lower.find("client id") != std::string::npos || lower.find("client_id") != std::string::npos ||
+			lower.find("oauth code") != std::string::npos || lower.find("device code") != std::string::npos ||
+			lower.find("stream key") != std::string::npos || lower.find("authorization:") != std::string::npos);
+		output << (sensitive ? "[REDACTED SENSITIVE LINE]" : line) << '\n';
+	}
+	return output.str();
+}
+
+static std::string relevantLogExcerpt(const std::wstring &path, const char *label)
+{
+	std::ifstream input(path, std::ios::binary);
+	if (!input) return std::string(label) + ": unavailable\n";
+	input.seekg(0, std::ios::end); const std::streamoff size = input.tellg();
+	const std::streamoff start = std::max<std::streamoff>(0, size - 65536); input.seekg(start);
+	std::string line; std::deque<std::string> selected;
+	while (std::getline(input, line)) {
+		std::string lower = line;
+		std::transform(lower.begin(), lower.end(), lower.begin(), [](unsigned char value) { return char(std::tolower(value)); });
+		if (lower.find("event=process-start") != std::string::npos) continue;
+		if (lower.find("warn") == std::string::npos && lower.find("error") == std::string::npos &&
+			lower.find("fail") == std::string::npos && lower.find("exception") == std::string::npos &&
+			lower.find("reject") == std::string::npos && lower.find("unavailable") == std::string::npos &&
+			lower.find("disconnect") == std::string::npos) continue;
+		selected.push_back(line); if (selected.size() > 12) selected.pop_front();
+	}
+	std::ostringstream output; output << label << ":\n";
+	if (selected.empty()) output << "  No recent warning or error lines found.\n";
+	else for (const std::string &entry : selected) output << "  " << entry << '\n';
+	return redactDiagnosticText(output.str());
+}
+
+static bool exportTextReport(HWND owner, const std::wstring &suggestedName, const std::string &report)
+{
+	ComPtr<IFileSaveDialog> dialog;
+	if (FAILED(CoCreateInstance(CLSID_FileSaveDialog, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&dialog)))) return false;
+	dialog->SetTitle(L"Export RearSilver Stream Suite beta feedback");
+	dialog->SetFileName(suggestedName.c_str());
+	const COMDLG_FILTERSPEC filters[] = {{L"Text files", L"*.txt"}, {L"All files", L"*.*"}};
+	dialog->SetFileTypes(2, filters); dialog->SetDefaultExtension(L"txt");
+	if (FAILED(dialog->Show(owner))) return false;
+	ComPtr<IShellItem> item; PWSTR rawPath = nullptr;
+	if (FAILED(dialog->GetResult(&item)) || FAILED(item->GetDisplayName(SIGDN_FILESYSPATH, &rawPath))) return false;
+	std::ofstream output(rawPath, std::ios::binary | std::ios::trunc); CoTaskMemFree(rawPath);
+	if (!output) return false;
+	const unsigned char bom[] = {0xef, 0xbb, 0xbf}; output.write(reinterpret_cast<const char *>(bom), sizeof(bom));
+	output.write(report.data(), std::streamsize(report.size()));
+	return output.good();
 }
 
 class WebViewYouTubePlayer {
@@ -1053,6 +1156,7 @@ static bool g_closeRequested = false;
 static int g_page = 7;
 static std::string g_streamerAuthState = "disconnected", g_streamerLogin;
 static std::string g_botAuthState = "disconnected", g_botLogin, g_authSender = "streamer";
+static std::string g_obsStudioVersion, g_pluginVersion;
 static bool g_captureExists = false, g_playerAutoStart = false, g_hostPipeConnected = false,
 	g_replayBufferActive = false, g_replaySceneExists = false, g_replayPlaced = false,
 	g_replayVisible = false, g_replayPlaying = false, g_replayConflict = false, g_replaySetupComplete = false;
@@ -1394,6 +1498,9 @@ static RECT g_transportButtons[5]{};
 static int g_transportPressed = -1;
 static ULONGLONG g_transportPressedUntil = 0;
 static RECT g_sidebarToggle{};
+static RECT g_betaNoticeRect{};
+static bool g_betaTooltipVisible = false;
+static bool g_trackingMouseLeave = false;
 static RECT g_overlayOptions[10]{};
 static RECT g_overlayReset{};
 static RECT g_overlayTabs[2]{};
@@ -1875,6 +1982,7 @@ public:
 								if (message == "commands-ready") { if (m_page == 6) { m_ready = true; sendCommandsConfig(); } return S_OK; }
 								if (message == "tools-ready") { if (m_page == 7) { m_ready = true; sendToolsConfig(); } return S_OK; }
 								if (message == "suite-settings-ready") { if (m_page == 8) { m_ready = true; sendSuiteSettingsConfig(); } return S_OK; }
+								if (message == "feedback-diagnostics-ready") { if (m_page == 9) { m_ready = true; sendFeedbackDiagnosticsConfig(); } return S_OK; }
 								CefRefPtr<CefValue> parsed = CefParseJSON(message, JSON_PARSER_RFC); if (!parsed || parsed->GetType() != VTYPE_DICTIONARY) return S_OK;
 								CefRefPtr<CefDictionaryValue> object = parsed->GetDictionary();
 								if (object->GetString("page").ToString() == "library") {
@@ -1902,6 +2010,23 @@ public:
 										g_page=6;showPage(g_page);InvalidateRect(m_parent,nullptr,FALSE);return S_OK;
 									}
 									sendSuiteSettingsConfig();return S_OK;
+								}
+								if(object->GetString("page").ToString()=="feedback"){
+									const std::string action=object->GetString("action").ToString();
+									CefRefPtr<CefDictionaryValue> feedback=object->GetDictionary("value");
+									if(action=="refresh"||action=="copy"||action=="export")m_feedbackReport=buildFeedbackReport(feedback);
+									if(action=="refresh")m_feedbackStatus="Diagnostics refreshed. Preview the report before sharing it.";
+									else if(action=="copy")m_feedbackStatus=copyTextToClipboard(m_parent,utf8ToWide(m_feedbackReport))?"Report copied to the clipboard.":"The report could not be copied to the clipboard.";
+									else if(action=="export"){
+										SYSTEMTIME time{};GetLocalTime(&time);wchar_t name[192]{};
+										swprintf_s(name,L"RearSilver-Stream-Suite-Beta-Feedback-%hs-%04u%02u%02u-%02u%02u%02u.txt",RsBeta::kVersion,time.wYear,time.wMonth,time.wDay,time.wHour,time.wMinute,time.wSecond);
+										m_feedbackStatus=exportTextReport(m_parent,name,m_feedbackReport)?"Report exported successfully.":"Export was cancelled or the report could not be written.";
+									}else if(action=="openLogs"){
+										const std::wstring folder=suiteDataFolder(false);HINSTANCE result=nullptr;if(!folder.empty())result=ShellExecuteW(m_parent,L"open",folder.c_str(),nullptr,nullptr,SW_SHOWNORMAL);
+										m_feedbackStatus=reinterpret_cast<INT_PTR>(result)>32?"Logs folder opened.":"The logs folder could not be opened.";
+									}
+									sendFeedbackDiagnosticsConfig();
+									return S_OK;
 								}
 								if(object->GetString("page").ToString()=="accounts"){
 									const std::string action=object->GetString("action").ToString(),account=object->GetString("account").ToString();
@@ -1995,7 +2120,7 @@ public:
 			}).Get());
 	}
 	void showPage(int page) {
-		const bool visible = page >= 2 && page <= 8 && page != 4 && page != 5;
+		const bool visible = page >= 2 && page <= 9 && page != 4 && page != 5;
 		if (visible && page != m_page && m_webView) {
 			m_page = page;
 			m_ready = false;
@@ -2013,13 +2138,14 @@ public:
 		if (visible) refresh();
 	}
 	void refresh() {
-		if (!m_webView || m_page < 2 || m_page > 8 || m_page == 4 || m_page == 5) return;
+		if (!m_webView || m_page < 2 || m_page > 9 || m_page == 4 || m_page == 5) return;
 		if (!m_ready) { probePageReady(); return; }
 		if (m_page == 2) sendLibraryConfig();
 		else if (m_page == 3) sendConfig();
 		else if (m_page == 6) sendCommandsConfig();
 		else if (m_page == 7) sendToolsConfig();
 		else if (m_page == 8) sendSuiteSettingsConfig();
+		else if (m_page == 9) sendFeedbackDiagnosticsConfig();
 	}
 	void resize() {
 		if (!m_controller || !m_parent) return;
@@ -2038,16 +2164,16 @@ private:
 	RECT m_bounds{};
 	static bool validColour(const std::wstring &value) { return value.size() == 7 && value[0] == L'#' && std::all_of(value.begin() + 1, value.end(), [](wchar_t c) { return iswxdigit(c) != 0; }); }
 	void showCurrentPage() {
-		if (!m_webView || m_page < 2 || m_page > 8 || m_page == 4 || m_page == 5) return;
+		if (!m_webView || m_page < 2 || m_page > 9 || m_page == 4 || m_page == 5) return;
 		const wchar_t *name = m_page == 2 ? L"library.html" : m_page == 3 ? L"overlay-designer.html" :
 			m_page == 6 ? L"commands.html" :
-			m_page == 8 ? L"suite-settings.html" : L"stream-tools.html";
+			m_page == 8 ? L"suite-settings.html" : m_page == 9 ? L"feedback-diagnostics.html" : L"stream-tools.html";
 		const wchar_t *functionName = m_page == 2 ? L"rsApplyLibrary" : m_page == 3 ? L"rsApplyConfig" :
 			m_page == 6 ? L"rsApplyCommands" :
-			m_page == 8 ? L"rsApplySuiteSettings" : L"rsApplyTools";
+			m_page == 8 ? L"rsApplySuiteSettings" : m_page == 9 ? L"rsApplyFeedbackDiagnostics" : L"rsApplyTools";
 		const wchar_t *readyMessage = m_page == 2 ? L"library-ready" : m_page == 3 ? L"ready" :
 			m_page == 6 ? L"commands-ready" :
-			m_page == 8 ? L"suite-settings-ready" : L"tools-ready";
+			m_page == 8 ? L"suite-settings-ready" : m_page == 9 ? L"feedback-diagnostics-ready" : L"tools-ready";
 		const std::wstring script = L"window.rsShowPage&&window.rsShowPage('https://rearsilver.local/" + std::wstring(name) +
 			L"','" + functionName + L"','" + readyMessage + L"')";
 		m_webView->ExecuteScript(script.c_str(), nullptr);
@@ -2056,10 +2182,10 @@ private:
 		if (m_page == 4 || m_page == 5) return;
 		const wchar_t *functionName = m_page == 2 ? L"rsApplyLibrary" : m_page == 3 ? L"rsApplyConfig" :
 			m_page == 6 ? L"rsApplyCommands" :
-			m_page == 8 ? L"rsApplySuiteSettings" : L"rsApplyTools";
+			m_page == 8 ? L"rsApplySuiteSettings" : m_page == 9 ? L"rsApplyFeedbackDiagnostics" : L"rsApplyTools";
 		const wchar_t *readyMessage = m_page == 2 ? L"library-ready" : m_page == 3 ? L"ready" :
 			m_page == 6 ? L"commands-ready" :
-			m_page == 8 ? L"suite-settings-ready" : L"tools-ready";
+			m_page == 8 ? L"suite-settings-ready" : m_page == 9 ? L"feedback-diagnostics-ready" : L"tools-ready";
 		const std::wstring script = L"if(window.rsActiveHas&&window.rsActiveHas('" + std::wstring(functionName) +
 			L"')) window.chrome.webview.postMessage('" + readyMessage + L"');";
 		m_webView->ExecuteScript(script.c_str(), nullptr);
@@ -2222,8 +2348,110 @@ private:
 		m_webView->ExecuteScript((L"window.rsApplySuiteSettings(" +
 			utf8ToWide(CefWriteJSON(root, JSON_WRITER_DEFAULT).ToString()) + L")").c_str(), nullptr);
 	}
+	std::string buildFeedbackReport(CefRefPtr<CefDictionaryValue> feedback)
+	{
+		auto field = [&](const char *key) -> std::string {
+			return feedback && feedback->HasKey(key) ? feedback->GetString(key).ToString() : std::string{};
+		};
+		const RsBeta::State beta = RsBeta::currentState();
+		const SpotifyClientState spotify = g_spotify.state();
+		const TwitchAccountState streamer = g_streamerTwitch.state(), bot = g_botTwitch.state();
+		std::ostringstream report;
+		report << "RearSilver Stream Suite — Private Beta Feedback Report\n"
+			<< "======================================================\n\n"
+			<< "1. Beta/build information\n"
+			<< "-------------------------\n"
+			<< "Product: " << RsBeta::kProductName << "\nChannel: " << RsBeta::kChannel
+			<< "\nVersion: " << RsBeta::kVersion << "\nBuild ID: " << RsBeta::kBuildId
+			<< "\nBuild date: " << RsBeta::kBuildDate << "\nExpiry date: " << RsBeta::kExpiryDisplay
+			<< "\nExpiry state: " << (beta.expired ? "Expired" : beta.warning ? "Warning period" : "Active")
+			<< "\nDays remaining: " << beta.daysRemaining << "\nReport created: " << localReportTime() << "\n\n"
+			<< "2. Tester feedback\n"
+			<< "------------------\n"
+			<< "Category: " << field("category") << "\nSummary: " << field("summary")
+			<< "\nTrying to do: " << field("trying") << "\nFirst place looked: " << field("firstLook")
+			<< "\nFound without help: " << field("foundWithoutHelp") << "\nExpected: " << field("expected")
+			<< "\nActually happened: " << field("actual") << "\nReproducible: " << field("reproducible")
+			<< "\nReproduction steps:\n" << field("steps") << "\nExpected wording/navigation: " << field("wording")
+			<< "\nSetup abandoned/help required: " << field("abandoned") << "\nAdditional feedback:\n" << field("additional") << "\n\n"
+			<< "3. System and OBS information\n"
+			<< "-----------------------------\n"
+			<< "System: " << windowsDescription() << "\nOBS connection: " << (g_hostPipeConnected ? "Connected" : "Not connected")
+			<< "\nOBS Studio version: " << (g_obsStudioVersion.empty() ? "Unavailable (OBS has not supplied it)" : g_obsStudioVersion)
+			<< "\nPlugin version: " << (g_pluginVersion.empty() ? "Unavailable (plugin has not supplied it)" : g_pluginVersion)
+			<< "\nControl Hub version: " << RsBeta::kVersion
+			<< "\nPlugin/Hub version comparison: " << (g_pluginVersion.empty() ? "Unavailable" : g_pluginVersion == RsBeta::kVersion ? "Match" : "MISMATCH") << "\n\n"
+			<< "4. Connection and feature states\n"
+			<< "--------------------------------\n"
+			<< "Control Hub process: Running\nControl Hub/OBS IPC: " << (g_hostPipeConnected ? "Connected" : "Disconnected")
+			<< "\nActive music provider: " << (g_hub.activeSource().empty() ? "None" : g_hub.activeSource())
+			<< "\nYouTube fallback availability: " << (!g_hub.youtubeFallback().empty() ? "Available" : "No playlist loaded")
+			<< "\nLocal library availability: " << (!g_hub.localLibrary().empty() ? "Available" : "No local library loaded")
+			<< "\nSpotify configured: " << (!spotify.clientId.empty() ? "Yes" : "No")
+			<< "\nSpotify authorised: " << (spotify.authorized ? "Yes" : "No")
+			<< "\nSpotify connected: " << (spotify.connected ? "Yes" : "No")
+			<< "\nSpotify playback available: " << (spotify.playbackAvailable ? "Yes" : "No")
+			<< "\nTwitch streamer configured: " << (streamer.authorized ? "Yes" : "No")
+			<< "\nTwitch streamer connected: " << (streamer.connected ? "Yes" : "No")
+			<< "\nTwitch bot configured: " << (bot.authorized ? "Yes" : "No")
+			<< "\nTwitch bot connected: " << (bot.connected ? "Yes" : "No")
+			<< "\nSong requests: " << (musicBool(L"requestsEnabled", true) ? "Enabled" : "Off")
+			<< "\nWaiting requests: " << g_hub.requests().size()
+			<< "\nOverlay placement mode: " << g_overlayPlacementMode
+			<< "\nMusic Capture exists: " << (g_captureExists ? "Yes" : "No")
+			<< "\nQuick Text source: " << (g_quickTextSourceExists ? "Exists" : "Not detected")
+			<< "\nQuick Text conflict: " << (g_quickTextConflict ? "Yes" : "No")
+			<< "\nTimer source: " << (g_timerSourceExists ? "Exists" : "Not detected")
+			<< "\nTimer conflict: " << (g_timerConflict ? "Yes" : "No")
+			<< "\nInstant Replay setup: " << (g_replaySetupComplete ? "Complete" : "Incomplete")
+			<< "\nInstant Replay conflict: " << (g_replayConflict ? "Yes" : "No")
+			<< "\nMusic Overlay setup: " << (g_musicOverlaySetupComplete ? "Complete" : "Incomplete")
+			<< "\nMusic Overlay conflict: " << (g_musicOverlayConflict ? "Yes" : "No") << "\n\n"
+			<< "5. Recent warnings/errors\n"
+			<< "--------------------------\n"
+			<< relevantLogExcerpt(traceLogPath(), "Control Hub trace")
+			<< relevantLogExcerpt(lifecycleLogPath(), "Control Hub lifecycle")
+			<< relevantLogExcerpt(suiteDataFolder(true) + L"\\spotify-diagnostics.log", "Spotify")
+			<< relevantLogExcerpt(suiteDataFolder(true) + L"\\twitch-diagnostics.log", "Twitch") << "\n"
+			<< "6. Included log excerpts\n"
+			<< "-------------------------\n"
+			<< "Only the most recent warning/error-related lines (maximum 12 per log, read from at most the last 64 KiB) are included. Routine process-start entries are omitted.\n"
+			<< "Full log files remain local and are not uploaded automatically.\n"
+			<< "Control Hub/CEF logs: <local-app-data>\\RearSilver Stream Suite\n"
+			<< "Spotify/Twitch logs: <roaming-app-data>\\RearSilver Stream Suite\n\n"
+			<< "7. Redaction notice\n"
+			<< "-------------------\n"
+			<< "Authentication tokens, OAuth/device codes, client secrets and IDs, stream keys, raw credentials, Windows usernames and profile paths are excluded or redacted. Chat contents and local music filenames/metadata are not collected. Review the preview before sharing.\n";
+		return redactDiagnosticText(report.str());
+	}
+
+	void sendFeedbackDiagnosticsConfig()
+	{
+		if (!m_ready || !m_webView || m_page != 9)
+			return;
+		CefRefPtr<CefDictionaryValue> d = CefDictionaryValue::Create();
+		d->SetString("channel", RsBeta::kChannel);
+		d->SetString("version", RsBeta::kVersion);
+		d->SetString("buildId", RsBeta::kBuildId);
+		d->SetString("buildDate", RsBeta::kBuildDate);
+		d->SetString("expiry", RsBeta::kExpiryDisplay);
+		d->SetBool("obsConnected", g_hostPipeConnected);
+		d->SetString("obsVersion", g_obsStudioVersion);
+		d->SetString("pluginVersion", g_pluginVersion);
+		d->SetString("versionComparison", g_pluginVersion.empty() ? "Unavailable" : g_pluginVersion == RsBeta::kVersion ? "Match" : "Mismatch");
+		d->SetString("provider", g_hub.activeSource());
+		d->SetBool("requestsEnabled", musicBool(L"requestsEnabled", true));
+		d->SetString("status", m_feedbackStatus.empty() ? "Diagnostics ready." : m_feedbackStatus);
+		d->SetString("report", m_feedbackReport);
+		CefRefPtr<CefValue> root = CefValue::Create();
+		root->SetDictionary(d);
+		m_webView->ExecuteScript((L"window.rsApplyFeedbackDiagnostics(" +
+			utf8ToWide(CefWriteJSON(root, JSON_WRITER_DEFAULT).ToString()) + L")").c_str(), nullptr);
+	}
 
 	HWND m_parent=nullptr; ComPtr<ICoreWebView2Controller> m_controller; ComPtr<ICoreWebView2> m_webView; bool m_ready=false; int m_page=-1;
+	std::string m_feedbackReport;
+	std::string m_feedbackStatus;
 };
 
 static std::unique_ptr<OverlayDesignerSurface> g_overlayDesigner;
@@ -2695,6 +2923,26 @@ static LRESULT CALLBACK windowProc(HWND window, UINT message, WPARAM wParam, LPA
 		}
 		InvalidateRect(window, nullptr, FALSE); return 0;
 	}
+	if (message == WM_MOUSEMOVE) {
+		if (!g_trackingMouseLeave) {
+			TRACKMOUSEEVENT tracking{sizeof(tracking), TME_LEAVE, window, 0};
+			TrackMouseEvent(&tracking);
+			g_trackingMouseLeave = true;
+		}
+		POINT point{static_cast<short>(LOWORD(lParam)), static_cast<short>(HIWORD(lParam))};
+		const bool overBetaNotice = PtInRect(&g_betaNoticeRect, point) != FALSE;
+		if (overBetaNotice != g_betaTooltipVisible) {
+			g_betaTooltipVisible = overBetaNotice;
+			InvalidateRect(window, nullptr, FALSE);
+		}
+	}
+	if (message == WM_MOUSELEAVE) {
+		g_trackingMouseLeave = false;
+		if (g_betaTooltipVisible) {
+			g_betaTooltipVisible = false;
+			InvalidateRect(window, nullptr, FALSE);
+		}
+	}
 	if (!g_transportSeeking && g_transportPressed < 0 &&
 	    (message == WM_MOUSEMOVE || message == WM_LBUTTONDOWN) &&
 	    g_page == 0 && g_youtubePlayer &&
@@ -2849,9 +3097,9 @@ static LRESULT CALLBACK windowProc(HWND window, UINT message, WPARAM wParam, LPA
 			}
 		}
 		const int navStart = 104;
-		if (point.x < sidebar && point.y >= navStart && point.y < navStart + 364) {
-			static const int navOrder[] = {7, 0, 1, 2, 3, 8, 6};
-			g_page = navOrder[std::clamp((static_cast<int>(point.y) - navStart) / 52, 0, 6)];
+		if (point.x < sidebar && point.y >= navStart && point.y < navStart + 416) {
+			static const int navOrder[] = {7, 0, 1, 2, 3, 8, 6, 9};
+			g_page = navOrder[std::clamp((static_cast<int>(point.y) - navStart) / 52, 0, 7)];
 			positionLibraryControls(window);
 			positionOverlayControls(window);
 			if (g_youtubePlayer && g_youtubePlayer->active())
@@ -2935,11 +3183,11 @@ static LRESULT CALLBACK windowProc(HWND window, UINT message, WPARAM wParam, LPA
 	g_sidebarToggle = expanded ? RECT{194, 31, 220, 57} : RECT{78, 31, 104, 57};
 	label(graphics, expanded ? L"\u2039" : L"\u203A", heading,
 		RectF(float(g_sidebarToggle.left), float(g_sidebarToggle.top), 26, 26), secondary, StringAlignmentCenter);
-	const wchar_t *pages[] = {L"Now Playing", L"Queue & Requests", L"Library", L"Music Overlay", L"Settings", L"Accounts", L"Commands", L"Stream Tools", L"Suite Settings"};
-	const wchar_t *icons[] = {L"\u25B6", L"\u2261", L"\u266B", L"\u25C7", L"\u2699", L"@", L"!", L"+", L"\u2637"};
-	static const int navOrder[] = {7, 0, 1, 2, 3, 8, 6};
+	const wchar_t *pages[] = {L"Now Playing", L"Queue & Requests", L"Library", L"Music Overlay", L"Settings", L"Accounts", L"Commands", L"Stream Tools", L"Suite Settings", L"Feedback & Diagnostics"};
+	const wchar_t *icons[] = {L"\u25B6", L"\u2261", L"\u266B", L"\u25C7", L"\u2699", L"@", L"!", L"+", L"\u2637", L"\u24D8"};
+	static const int navOrder[] = {7, 0, 1, 2, 3, 8, 6, 9};
 	const float navStart = 104.0f;
-	for (int i = 0; i < 7; ++i) {
+	for (int i = 0; i < 8; ++i) {
 		const float y = navStart + i * 52.0f;
 		const int page = navOrder[i];
 		if (page == g_page) {
@@ -2949,17 +3197,39 @@ static LRESULT CALLBACK windowProc(HWND window, UINT message, WPARAM wParam, LPA
 		label(graphics, icons[page], bodyBold, RectF(23, y, 34, 42), page == g_page ? accent : secondary, StringAlignmentCenter);
 		if (expanded) label(graphics, pages[page], body, RectF(63, y, 143, 42), page == g_page ? primary : secondary);
 	}
+	const RsBeta::State betaState = RsBeta::currentState();
+	const Color betaColour = betaState.expired ? Color(255, 255, 74, 87) : gold;
+	const std::wstring betaExpiryText = std::wstring(L"Expires ") + utf8ToWide(RsBeta::kExpiryDisplay);
 	if (expanded) {
-		roundedPanel(graphics, RectF(20, float(height - 58), 44, 24), 7, accentSoft);
-		label(graphics, L"PRO", smallFont, RectF(20, float(height - 58), 44, 24), gold, StringAlignmentCenter);
-		label(graphics, L"Control Hub", smallFont, RectF(72, float(height - 58), 128, 24), tertiary);
+		g_betaNoticeRect = RECT{20, height - 68, sidebar - 20, height - 18};
+		roundedPanel(graphics, RectF(20, float(height - 68), float(sidebar - 40), 24), 7, accentSoft);
+		label(graphics, betaState.expired ? L"EXPIRED" : L"PRIVATE BETA", smallFont,
+			RectF(20, float(height - 68), float(sidebar - 40), 24), betaColour, StringAlignmentCenter);
+		label(graphics, betaExpiryText, smallFont, RectF(20, float(height - 40), float(sidebar - 40), 20), tertiary,
+			StringAlignmentCenter);
+	} else {
+		g_betaNoticeRect = RECT{18, height - 50, sidebar - 18, height - 20};
+		label(graphics, betaState.expired ? L"EXP" : L"BETA", smallFont,
+			RectF(18, float(height - 50), float(sidebar - 36), 24), betaColour, StringAlignmentCenter);
+	}
+	if (g_betaTooltipVisible && expanded) {
+		const float cardY = float(height - 198);
+		roundedPanel(graphics, RectF(18, cardY, float(sidebar - 36), 118), 10, raised);
+		label(graphics, L"PRIVATE BETA", bodyBold, RectF(30, cardY + 10, float(sidebar - 60), 22), accent);
+		label(graphics, utf8ToWide(std::string("Version ") + RsBeta::kVersion), smallFont,
+			RectF(30, cardY + 35, float(sidebar - 60), 18), primary);
+		label(graphics, utf8ToWide(std::string("Build ") + RsBeta::kBuildId), smallFont,
+			RectF(30, cardY + 55, float(sidebar - 60), 18), secondary);
+		label(graphics, utf8ToWide(std::string("Built ") + RsBeta::kBuildDate), smallFont,
+			RectF(30, cardY + 75, float(sidebar - 60), 18), secondary);
+		label(graphics, betaExpiryText, smallFont, RectF(30, cardY + 95, float(sidebar - 60), 18), secondary);
 	}
 
 	const float contentX = float(sidebar + 28), contentWidth = float(width - sidebar - 56);
 	const wchar_t *subtitles[] = {L"Your stream soundtrack at a glance", L"Manage what plays next",
 		L"Organise local music and provider playlists", L"Create a design that fits your stream",
 		L"Playback, appearance and accessibility", L"Connect Twitch identities and choose the chat sender", L"Chat controls at a glance", L"Quality-of-life tools for live production",
-		L"Guided setup and every Suite preference"};
+		L"Guided setup and every Suite preference", L"Export private-beta feedback and privacy-redacted diagnostics"};
 	label(graphics, pages[g_page], display, RectF(contentX, 22, contentWidth, 44), primary);
 	label(graphics, subtitles[g_page], body, RectF(contentX, 64, contentWidth, 28), secondary);
 
@@ -3290,7 +3560,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int)
 	cefSettings.log_severity = LOGSEVERITY_WARNING;
 	CefString(&cefSettings.locale) = "en-GB";
 	if (!executableDirectory.empty()) {
-		CefString(&cefSettings.browser_subprocess_path) = executableDirectory + L"\\RearSilver-Music-Player.exe";
+		CefString(&cefSettings.browser_subprocess_path) = executableDirectory + L"\\RearSilver-Stream-Suite-Control-Hub.exe";
 		CefString(&cefSettings.resources_dir_path) = executableDirectory;
 		CefString(&cefSettings.locales_dir_path) = executableDirectory + L"\\locales";
 	}
@@ -3320,7 +3590,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int)
 	if (!player.initialise()) return 2;
 	HICON appIcon = static_cast<HICON>(LoadImageW(instance, MAKEINTRESOURCEW(101), IMAGE_ICON, 0, 0, LR_DEFAULTSIZE));
 	WNDCLASSW wc{}; wc.style = CS_DBLCLKS; wc.lpfnWndProc = windowProc; wc.hInstance = instance; wc.hCursor = LoadCursor(nullptr, IDC_ARROW); wc.hIcon = appIcon; wc.lpszClassName = L"RearSilverMusicPlayerWindow"; RegisterClassW(&wc);
-	HWND window = CreateWindowExW(0, wc.lpszClassName, L"RearSilver Stream Suite | Control Hub", WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN,
+	HWND window = CreateWindowExW(0, wc.lpszClassName, L"RearSilver Stream Suite | Control Hub — Private Beta", WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN,
 		CW_USEDEFAULT, CW_USEDEFAULT, 1120, 720, nullptr, nullptr, instance, nullptr);
 	SendMessageW(window, WM_SETICON, ICON_BIG, reinterpret_cast<LPARAM>(appIcon));
 	SendMessageW(window, WM_SETICON, ICON_SMALL, reinterpret_cast<LPARAM>(appIcon));
@@ -3466,7 +3736,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int)
 		};
 		syncChat();
 		g_twitchReader.tick();g_twitchSender.tick();const bool readerReady=g_twitchReader.connected();if(readerReady&&!lastReaderReady)chatAnnouncementPending=true;lastReaderReady=readerReady;if(chatAnnouncementPending&&sendTwitchMessage("RearSilver Stream Suite Hub Connected ⚡"))chatAnnouncementPending=false;
-		if (!connected) { connected = ConnectNamedPipe(pipe, nullptr) || GetLastError() == ERROR_PIPE_CONNECTED; g_hostPipeConnected=connected; if (connected) { PostMessageW(window,WM_OBS_CONNECTION_CHANGED,TRUE,0); send(pipe, player.status()); queueOverlayPlacementMode(); queueReplayConfiguration(); lastStreamerRevision=lastBotRevision=0; } }
+		if (!connected) { connected = ConnectNamedPipe(pipe, nullptr) || GetLastError() == ERROR_PIPE_CONNECTED; g_hostPipeConnected=connected; if (connected) { g_obsStudioVersion.clear(); g_pluginVersion.clear(); PostMessageW(window,WM_OBS_CONNECTION_CHANGED,TRUE,0); send(pipe, player.status()); queueOverlayPlacementMode(); queueReplayConfiguration(); lastStreamerRevision=lastBotRevision=0; } }
 		publishTwitch("streamer",g_streamerTwitch,g_twitchReader,true,lastStreamerRevision,lastPublishedReaderRevision);publishTwitch("bot",g_botTwitch,g_twitchSender,g_authSender=="bot",lastBotRevision,lastPublishedSenderRevision);
 		if (connected) {
 			{ std::lock_guard<std::mutex> lock(g_hostEventMutex); for(const auto &event:g_hostEvents)send(pipe,event); g_hostEvents.clear(); }
@@ -3476,7 +3746,9 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int)
 				while ((newline = input.find('\n')) != std::string::npos) {
 					std::string line = input.substr(0, newline); input.erase(0, newline + 1); if (!line.empty() && line.back() == '\r') line.pop_back();
 					if (line == "SHUTDOWN") { running = false; break; }
-					if (line.rfind("SETUP_STATE\t", 0) == 0) {
+					if (line.rfind("HOST_INFO\t", 0) == 0) {
+						const size_t tab=line.find('\t',10);if(tab!=std::string::npos){g_obsStudioVersion=line.substr(10,tab-10);g_pluginVersion=line.substr(tab+1);if(g_overlayDesigner)g_overlayDesigner->refresh();}
+					} else if (line.rfind("SETUP_STATE\t", 0) == 0) {
 						const size_t tab=line.find('\t',12);if(tab!=std::string::npos){g_captureExists=line.substr(12,tab-12)=="true";g_playerAutoStart=line.substr(tab+1)=="true";if(g_overlayDesigner)g_overlayDesigner->refresh();}
 					} else if (line.rfind("REPLAY_STATE\t", 0) == 0) {
 						CefRefPtr<CefValue>state=CefParseJSON(line.substr(13),JSON_PARSER_RFC);if(state&&state->GetType()==VTYPE_DICTIONARY){auto dictionary=state->GetDictionary();g_replayBufferActive=dictionary->GetBool("bufferActive");g_replaySceneExists=dictionary->GetBool("sceneExists");g_replayPlaced=dictionary->GetBool("placedInCurrentScene");g_replayVisible=dictionary->GetBool("visible");g_replayPlaying=dictionary->GetBool("playing");g_replayConflict=dictionary->GetBool("conflict");g_replaySetupComplete=dictionary->GetBool("setupComplete");g_replayMessage=dictionary->GetString("message").ToString();if(dictionary->HasKey("geometry")){auto geometry=dictionary->GetDictionary("geometry");if(geometry){g_replayPreviewGeometry.width=geometry->GetInt("width");g_replayPreviewGeometry.height=geometry->GetInt("height");g_replayPreviewGeometry.scalePercent=geometry->GetInt("scalePercent");g_replayPreviewGeometry.titlePixelSize=geometry->GetInt("titlePixelSize");g_replayPreviewGeometry.border=geometry->GetInt("border");g_replayPreviewGeometry.outerRadius=geometry->GetInt("outerRadius");g_replayPreviewGeometry.innerRadius=geometry->GetInt("innerRadius");g_replayPreviewGeometry.apertureX=geometry->GetInt("apertureX");g_replayPreviewGeometry.apertureY=geometry->GetInt("apertureY");g_replayPreviewGeometry.apertureWidth=geometry->GetInt("apertureWidth");g_replayPreviewGeometry.apertureHeight=geometry->GetInt("apertureHeight");g_replayPreviewGeometry.titleX=geometry->GetInt("titleX");g_replayPreviewGeometry.titleY=geometry->GetInt("titleY");g_replayPreviewGeometry.titleWidth=geometry->GetInt("titleWidth");g_replayPreviewGeometry.titleHeight=geometry->GetInt("titleHeight");g_replayPreviewGeometry.available=g_replayPreviewGeometry.width>0&&g_replayPreviewGeometry.height>0;}}if(g_overlayDesigner)g_overlayDesigner->refresh();}
@@ -3580,7 +3852,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int)
 						}
 					}
 				}
-			} else {const DWORD error=GetLastError();if(error==ERROR_BROKEN_PIPE||error==ERROR_PIPE_NOT_CONNECTED){DisconnectNamedPipe(pipe);connected=false;g_hostPipeConnected=false;input.clear();PostMessageW(window,WM_OBS_CONNECTION_CHANGED,FALSE,0);}}
+			} else {const DWORD error=GetLastError();if(error==ERROR_BROKEN_PIPE||error==ERROR_PIPE_NOT_CONNECTED){DisconnectNamedPipe(pipe);connected=false;g_hostPipeConnected=false;g_obsStudioVersion.clear();g_pluginVersion.clear();input.clear();PostMessageW(window,WM_OBS_CONNECTION_CHANGED,FALSE,0);}}
 			if (connected && GetTickCount64() - lastHubStatus >= 500) {
 				const std::string hubStatus = externalActive() ? wideToUtf8(currentState()) : (g_youtubePlayer->active() ?
 					(g_youtubePlayer->playing() ? "playing" : "paused") : wideToUtf8(player.state()));

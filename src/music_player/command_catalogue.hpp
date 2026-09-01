@@ -34,8 +34,8 @@ struct RsChatCommandNote {
 
 inline constexpr std::array<RsChatCommandDefinition, 7> kRsChatCommands{{
 	{"sr", "Song requests", "Song request", "!sr <title + artist | supported music link>", "Search for a track or request a supported song or music-video link from YouTube, YouTube Music or Spotify.", RsRoleEveryone},
-	{"play", "Playback controls", "Play", "!play", "Resume the active music player.", RsRoleModerator},
-	{"pause", "Playback controls", "Pause", "!pause", "Pause the active music player.", RsRoleModerator},
+	{"play", "Playback controls", "Play", "!play", "Resume the active music source.", RsRoleModerator},
+	{"pause", "Playback controls", "Pause", "!pause", "Pause the active music source.", RsRoleModerator},
 	{"skip", "Playback controls", "Skip", "!skip", "Skip the current track and continue with the next available track.", RsRoleModerator},
 	{"restart", "Playback controls", "Restart", "!restart", "Restart the current track from the beginning.", RsRoleModerator},
 	{"previous", "Playback controls", "Previous", "!previous / !prev", "Return to the previously played track.", RsRoleModerator},

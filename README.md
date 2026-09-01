@@ -17,7 +17,7 @@ The project is under active development. Core OBS controls and most enhancement 
 - Countdown and count-up browser overlay
 - External-program auto-start manager for Windows
 - Instant Replay creation, playback, hotkey, and frame background
-- Early music-player, queue, playlist, and Twitch integration UI
+- Control Hub music, queue, playlist, and Twitch integration UI
 
 ## Project status
 

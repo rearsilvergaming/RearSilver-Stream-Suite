@@ -14,9 +14,9 @@ BEGIN
  BEGIN
   BLOCK "080904b0"
   BEGIN
-   VALUE "FileDescription", "RearSilver Stream Suite Control Hub\0"
-   VALUE "InternalName", "RearSilver-Music-Player\0"
-   VALUE "OriginalFilename", "RearSilver-Music-Player.exe\0"
+   VALUE "FileDescription", "RearSilver Stream Suite | Control Hub\0"
+   VALUE "InternalName", "RearSilver-Stream-Suite-Control-Hub\0"
+   VALUE "OriginalFilename", "RearSilver-Stream-Suite-Control-Hub.exe\0"
    VALUE "ProductName", "RearSilver Stream Suite\0"
    VALUE "ProductVersion", "0.1.0\0"
   END

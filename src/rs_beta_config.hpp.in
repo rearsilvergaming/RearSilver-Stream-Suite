@@ -1,0 +1,61 @@
+#pragma once
+
+#include <ctime>
+
+namespace RsBeta {
+
+inline constexpr const char kProductName[] = "RearSilver Stream Suite";
+inline constexpr const char kHubName[] = "RearSilver Stream Suite | Control Hub";
+inline constexpr const char kChannel[] = "@RS_BETA_CHANNEL@";
+inline constexpr const char kVersion[] = "@RS_BETA_VERSION@";
+inline constexpr const char kBuildId[] = "@RS_BETA_BUILD_ID@";
+inline constexpr const char kBuildDate[] = "@RS_BETA_BUILD_DATE@";
+inline constexpr const char kExpiryDate[] = "@RS_BETA_EXPIRY_DATE@";
+inline constexpr const char kExpiryDisplay[] = "@RS_BETA_EXPIRY_DISPLAY@";
+
+struct State {
+	int daysRemaining = 0;
+	bool warning = false;
+	bool expired = false;
+};
+
+constexpr int parseDigits(const char *text, int offset, int count)
+{
+	int value = 0;
+	for (int index = 0; index < count; ++index)
+		value = value * 10 + (text[offset + index] - '0');
+	return value;
+}
+
+// Convert a Gregorian calendar date to a stable day number. This keeps the
+// date-only boundary correct across daylight-saving time changes.
+constexpr long long dayNumber(int year, unsigned month, unsigned day)
+{
+	year -= month <= 2;
+	const int era = (year >= 0 ? year : year - 399) / 400;
+	const unsigned yearOfEra = static_cast<unsigned>(year - era * 400);
+	const unsigned adjustedMonth = month > 2 ? month - 3 : month + 9;
+	const unsigned dayOfYear = (153 * adjustedMonth + 2) / 5 + day - 1;
+	const unsigned dayOfEra = yearOfEra * 365 + yearOfEra / 4 - yearOfEra / 100 + dayOfYear;
+	return static_cast<long long>(era) * 146097 + static_cast<long long>(dayOfEra);
+}
+
+inline State currentState()
+{
+	std::time_t now = std::time(nullptr);
+	std::tm local{};
+#ifdef _WIN32
+	localtime_s(&local, &now);
+#else
+	localtime_r(&now, &local);
+#endif
+	const long long today = dayNumber(local.tm_year + 1900, static_cast<unsigned>(local.tm_mon + 1),
+		static_cast<unsigned>(local.tm_mday));
+	const long long expiry = dayNumber(parseDigits(kExpiryDate, 0, 4),
+		static_cast<unsigned>(parseDigits(kExpiryDate, 5, 2)),
+		static_cast<unsigned>(parseDigits(kExpiryDate, 8, 2)));
+	const int remaining = static_cast<int>(expiry - today);
+	return {remaining, remaining >= 0 && remaining <= 14, remaining < 0};
+}
+
+} // namespace RsBeta

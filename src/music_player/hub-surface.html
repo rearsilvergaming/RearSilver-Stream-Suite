@@ -69,7 +69,7 @@ window.rsActiveHas=function(name){
   const target=activeFrame&&activeFrame.contentWindow;
   return !!(target&&typeof target[name]==='function');
 };
-for(const name of ['rsApplyLibrary','rsApplyConfig','rsApplyCommands','rsApplyTools','rsApplySuiteSettings'])
+for(const name of ['rsApplyLibrary','rsApplyConfig','rsApplyCommands','rsApplyTools','rsApplySuiteSettings','rsApplyFeedbackDiagnostics'])
   window[name]=value=>window.rsInvokeAll(name,value);
 
 window.chrome.webview.postMessage('hub-ready');

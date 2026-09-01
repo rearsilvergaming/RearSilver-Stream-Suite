@@ -87,7 +87,9 @@ static QStringList cfg_load_programs()
 	// The Control Hub is part of the Suite runtime, not an optional managed app.
 	// Older builds added it to this list; silently migrate that stale entry out.
 	lines.erase(std::remove_if(lines.begin(), lines.end(), [](const QString &path) {
-		return QFileInfo(path).fileName().compare("RearSilver-Music-Player.exe", Qt::CaseInsensitive) == 0;
+		const QString fileName = QFileInfo(path).fileName();
+		return fileName.compare("RearSilver-Stream-Suite-Control-Hub.exe", Qt::CaseInsensitive) == 0 ||
+		       fileName.compare("RearSilver-Music-Player.exe", Qt::CaseInsensitive) == 0;
 	}), lines.end());
 	return lines;
 }

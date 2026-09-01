@@ -1,4 +1,5 @@
 #include "rs_main_dock.hpp"
+#include "rs_beta_config.hpp"
 
 #include <QWidget>
 #include <QVBoxLayout>
@@ -391,6 +392,22 @@ void RsMainDock::createUi()
 	m_tabBar->setExpanding(true);
 	connect(m_tabBar, &QTabBar::currentChanged, this, &RsMainDock::onTabChanged);
 	m_sidebarLayout->addWidget(m_tabBar);
+
+	const RsBeta::State betaState = RsBeta::currentState();
+	auto *betaNotice = new QLabel(betaState.expired
+		? QStringLiteral("PRIVATE BETA EXPIRED\n%1").arg(QString::fromUtf8(RsBeta::kExpiryDisplay))
+		: QStringLiteral("PRIVATE BETA · %1\nExpires %2")
+			.arg(QString::fromUtf8(RsBeta::kVersion), QString::fromUtf8(RsBeta::kExpiryDisplay)));
+	betaNotice->setObjectName("rs-beta-notice");
+	betaNotice->setWordWrap(true);
+	betaNotice->setAlignment(Qt::AlignCenter);
+	betaNotice->setStyleSheet(betaState.expired
+		? "color:#ff4a57; font-size:11px; font-weight:700; padding:5px;"
+		: "color:#ffb800; font-size:11px; font-weight:700; padding:5px;");
+	betaNotice->setToolTip(QStringLiteral("%1\nBuild %2 · %3\nExpires %4")
+		.arg(QString::fromUtf8(RsBeta::kChannel), QString::fromUtf8(RsBeta::kBuildId),
+			QString::fromUtf8(RsBeta::kBuildDate), QString::fromUtf8(RsBeta::kExpiryDisplay)));
+	m_sidebarLayout->addWidget(betaNotice);
 
 	// DIVIDER (theme-aware)
 	QFrame *divider = new QFrame();

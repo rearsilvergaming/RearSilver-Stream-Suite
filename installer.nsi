@@ -111,8 +111,10 @@ Section "RearSilver Stream Suite"
 
 ; Copy plugin
 SetOutPath "$INSTDIR\obs-plugins\64bit"
+; Remove the obsolete pre-beta companion name before installing the Control Hub.
+Delete "$INSTDIR\obs-plugins\64bit\RearSilver-Music-Player.exe"
 File "${SOURCE_DIR}\build_validation\RelWithDebInfo\RearSilver-Stream-Suite.dll"
-File "${SOURCE_DIR}\build_validation\RelWithDebInfo\RearSilver-Music-Player.exe"
+File "${SOURCE_DIR}\build_validation\RelWithDebInfo\RearSilver-Stream-Suite-Control-Hub.exe"
 
 ; Private Qt TLS backend used for Twitch authentication, IRC and artwork downloads
 CreateDirectory "$INSTDIR\obs-plugins\64bit\RearSilver-Stream-Suite\qt-plugins\tls"

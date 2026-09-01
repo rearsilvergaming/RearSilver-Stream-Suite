@@ -2,6 +2,7 @@
 #include "rs_music_metadata.hpp"
 #include "state/rs_music_track.hpp"
 #include "enhancements/rs_auto_start.hpp"
+#include "rs_beta_config.hpp"
 
 #include <QCoreApplication>
 #include <QCryptographicHash>
@@ -44,6 +45,8 @@ RsMusicLocalPlayer::RsMusicLocalPlayer()
 		m_hubConnectionAttempts = 0;
 		m_connectedThisSession = true;
 		blog(LOG_INFO, "[RS Music] Companion control channel connected.");
+		sendUiCommand("HOST_INFO", QString("%1\t%2").arg(
+			QString::fromUtf8(obs_get_version_string()), QString::fromUtf8(RsBeta::kVersion)));
 		emit hubConnectionChanged(true);
 	});
 	connect(m_socket, &QLocalSocket::disconnected, this, [this]() {
@@ -56,7 +59,7 @@ RsMusicLocalPlayer::RsMusicLocalPlayer()
 	});
 	connect(m_process, &QProcess::errorOccurred, this, [this](QProcess::ProcessError) {
 		if (!m_shuttingDown)
-			emit playbackError("The bundled local music player could not be started.");
+			emit playbackError("The RearSilver Stream Suite Control Hub could not be started.");
 	});
 	QTimer::singleShot(0, this, &RsMusicLocalPlayer::connectToHub);
 }
@@ -108,9 +111,9 @@ RsMusicLocalPlayer::~RsMusicLocalPlayer()
 QString RsMusicLocalPlayer::companionPath() const
 {
 #ifdef Q_OS_WIN
-	const QString executable = "RearSilver-Music-Player.exe";
+	const QString executable = "RearSilver-Stream-Suite-Control-Hub.exe";
 #else
-	const QString executable = "RearSilver-Music-Player";
+	const QString executable = "RearSilver-Stream-Suite-Control-Hub";
 #endif
 	const QString applicationDir = QCoreApplication::applicationDirPath();
 	const QStringList candidates = {
@@ -254,7 +257,7 @@ void RsMusicLocalPlayer::connectPendingPlayback()
 			blog(LOG_ERROR, "[RS Music] Companion control channel did not become ready after startup.");
 			m_pendingMetadata.clear();
 			m_pendingFile.clear();
-			emit playbackError("The Suite could not connect to its bundled local music player.");
+			emit playbackError("The Suite could not connect to the Control Hub.");
 			return;
 		}
 	}

@@ -5,6 +5,18 @@ include(CTest)
 
 option(RS_BUILD_CEF_AUDIO_POC "Build the isolated CEF YouTube PCM capture experiment" OFF)
 
+set(RS_BETA_CHANNEL "Private Beta" CACHE STRING "Pre-release channel displayed by the Suite")
+set(RS_BETA_VERSION "1.0.0-beta.1" CACHE STRING "Private beta version displayed by the Suite")
+set(RS_BETA_EXPIRY_DATE "2026-10-31" CACHE STRING "Private beta expiry date in YYYY-MM-DD format")
+set(RS_BETA_EXPIRY_DISPLAY "31 October 2026" CACHE STRING "Human-readable private beta expiry date")
+if(NOT RS_BETA_EXPIRY_DATE MATCHES "^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]$")
+	message(FATAL_ERROR "RS_BETA_EXPIRY_DATE must use YYYY-MM-DD format.")
+endif()
+string(TIMESTAMP RS_BETA_BUILD_DATE "%Y-%m-%d" UTC)
+string(TIMESTAMP RS_BETA_DEFAULT_BUILD_ID "%Y%m%d-%H%M%S" UTC)
+set(RS_BETA_BUILD_ID "${RS_BETA_DEFAULT_BUILD_ID}" CACHE STRING "Private beta build identifier")
+configure_file(src/rs_beta_config.hpp.in "${CMAKE_CURRENT_BINARY_DIR}/generated/rs_beta_config.hpp" @ONLY)
+
 if(BUILD_TESTING)
 	add_executable(RearSilver-Music-Hub-Tests
 		tests/music_hub_tests.cpp
@@ -58,15 +70,16 @@ if(WIN32)
 	set_target_properties(rs_cef_dll_wrapper_mt PROPERTIES
 		CXX_STANDARD 17 CXX_STANDARD_REQUIRED YES
 		MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
-	add_executable(RearSilver-Music-Player WIN32 src/music_player/main.cpp src/music_player/music_hub.cpp
+	add_executable(RearSilver-Stream-Suite-Control-Hub WIN32 src/music_player/main.cpp src/music_player/music_hub.cpp
 		src/music_player/youtube_resolver.cpp src/music_player/local_library.cpp
 		src/music_player/system_media_provider.cpp src/music_player/spotify_client.cpp
 		src/music_player/twitch_accounts.cpp src/music_player/twitch_chat_service.cpp src/music_player/app.rc)
-	target_include_directories(RearSilver-Music-Player PRIVATE
+	target_include_directories(RearSilver-Stream-Suite-Control-Hub PRIVATE
+		"${CMAKE_CURRENT_BINARY_DIR}/generated"
 		"${CMAKE_CURRENT_SOURCE_DIR}/third_party/miniaudio"
 		"${CMAKE_CURRENT_SOURCE_DIR}/third_party/webview2/include"
 		"${RS_CEF_SDK_ROOT}/include")
-	target_link_libraries(RearSilver-Music-Player PRIVATE
+	target_link_libraries(RearSilver-Stream-Suite-Control-Hub PRIVATE
 		gdiplus
 		dwmapi
 		dwrite.lib
@@ -79,69 +92,74 @@ if(WIN32)
 		Advapi32.lib dbghelp.lib Delayimp.lib ntdll.lib OleAut32.lib PowrProf.lib
 		Propsys.lib psapi.lib SetupAPI.lib Shell32.lib Shcore.lib Userenv.lib
 		version.lib wbemuuid.lib WindowsApp.lib winhttp.lib winmm.lib bcrypt.lib crypt32.lib credui.lib)
-	target_compile_definitions(RearSilver-Music-Player PRIVATE CEF_USE_SANDBOX PSAPI_VERSION=1)
-	set_target_properties(RearSilver-Music-Player PROPERTIES
+	target_compile_definitions(RearSilver-Stream-Suite-Control-Hub PRIVATE CEF_USE_SANDBOX PSAPI_VERSION=1)
+	set_target_properties(RearSilver-Stream-Suite-Control-Hub PROPERTIES
 		CXX_STANDARD 17
 		CXX_STANDARD_REQUIRED YES
 		MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 	if(MSVC)
-		target_compile_options(RearSilver-Music-Player PRIVATE /utf-8)
+		target_compile_options(RearSilver-Stream-Suite-Control-Hub PRIVATE /utf-8)
 	endif()
-	add_custom_command(TARGET RearSilver-Music-Player POST_BUILD
+	add_custom_command(TARGET RearSilver-Stream-Suite-Control-Hub POST_BUILD
+		COMMAND "${CMAKE_COMMAND}" -E rm -f
+			"$<TARGET_FILE_DIR:RearSilver-Stream-Suite-Control-Hub>/RearSilver-Music-Player.exe"
 		COMMAND "${CMAKE_COMMAND}" -E copy_if_different
 			"${CMAKE_CURRENT_SOURCE_DIR}/third_party/webview2/bin/x64/WebView2Loader.dll"
-			"$<TARGET_FILE_DIR:RearSilver-Music-Player>"
+			"$<TARGET_FILE_DIR:RearSilver-Stream-Suite-Control-Hub>"
 		COMMAND "${CMAKE_COMMAND}" -E copy_if_different
 			"${CMAKE_CURRENT_SOURCE_DIR}/src/rs_music/rs_music_player.html"
-			"$<TARGET_FILE_DIR:RearSilver-Music-Player>/youtube-player.html"
+			"$<TARGET_FILE_DIR:RearSilver-Stream-Suite-Control-Hub>/youtube-player.html"
 		COMMAND "${CMAKE_COMMAND}" -E copy_if_different
 			"${CMAKE_CURRENT_SOURCE_DIR}/src/music_player/overlay-designer.html"
-			"$<TARGET_FILE_DIR:RearSilver-Music-Player>/overlay-designer.html"
+			"$<TARGET_FILE_DIR:RearSilver-Stream-Suite-Control-Hub>/overlay-designer.html"
 		COMMAND "${CMAKE_COMMAND}" -E copy_if_different
 			"${CMAKE_CURRENT_SOURCE_DIR}/src/music_player/library.html"
-			"$<TARGET_FILE_DIR:RearSilver-Music-Player>/library.html"
+			"$<TARGET_FILE_DIR:RearSilver-Stream-Suite-Control-Hub>/library.html"
 		COMMAND "${CMAKE_COMMAND}" -E copy_if_different
 			"${CMAKE_CURRENT_SOURCE_DIR}/src/music_player/suite-settings.html"
-			"$<TARGET_FILE_DIR:RearSilver-Music-Player>/suite-settings.html"
+			"$<TARGET_FILE_DIR:RearSilver-Stream-Suite-Control-Hub>/suite-settings.html"
 		COMMAND "${CMAKE_COMMAND}" -E copy_if_different
 			"${CMAKE_CURRENT_SOURCE_DIR}/src/music_player/stream-tools.html"
-			"$<TARGET_FILE_DIR:RearSilver-Music-Player>/stream-tools.html"
+			"$<TARGET_FILE_DIR:RearSilver-Stream-Suite-Control-Hub>/stream-tools.html"
 		COMMAND "${CMAKE_COMMAND}" -E copy_if_different
 			"${CMAKE_CURRENT_SOURCE_DIR}/src/music_player/hub-surface.html"
-			"$<TARGET_FILE_DIR:RearSilver-Music-Player>/hub-surface.html"
+			"$<TARGET_FILE_DIR:RearSilver-Stream-Suite-Control-Hub>/hub-surface.html"
 		COMMAND "${CMAKE_COMMAND}" -E copy_if_different
 			"${CMAKE_CURRENT_SOURCE_DIR}/src/music_player/commands.html"
-			"$<TARGET_FILE_DIR:RearSilver-Music-Player>/commands.html"
+			"$<TARGET_FILE_DIR:RearSilver-Stream-Suite-Control-Hub>/commands.html"
+		COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+			"${CMAKE_CURRENT_SOURCE_DIR}/src/music_player/feedback-diagnostics.html"
+			"$<TARGET_FILE_DIR:RearSilver-Stream-Suite-Control-Hub>/feedback-diagnostics.html"
 		COMMAND "${CMAKE_COMMAND}" -E copy_if_different
 			"${CMAKE_CURRENT_SOURCE_DIR}/assets/music/music-fallback-vinyl.png"
-			"$<TARGET_FILE_DIR:RearSilver-Music-Player>/music-fallback-vinyl.png"
+			"$<TARGET_FILE_DIR:RearSilver-Stream-Suite-Control-Hub>/music-fallback-vinyl.png"
 		COMMAND "${CMAKE_COMMAND}" -E copy_if_different
 			"${CMAKE_CURRENT_SOURCE_DIR}/assets/branding/app-icon.png"
-			"$<TARGET_FILE_DIR:RearSilver-Music-Player>/suite-app-icon.png"
+			"$<TARGET_FILE_DIR:RearSilver-Stream-Suite-Control-Hub>/suite-app-icon.png"
 		COMMAND "${CMAKE_COMMAND}" -E copy_if_different
 			"${CMAKE_CURRENT_SOURCE_DIR}/assets/branding/header-wide.png"
-			"$<TARGET_FILE_DIR:RearSilver-Music-Player>/suite-header.png"
+			"$<TARGET_FILE_DIR:RearSilver-Stream-Suite-Control-Hub>/suite-header.png"
 		COMMAND "${CMAKE_COMMAND}" -E copy_if_different
 			"${CMAKE_CURRENT_SOURCE_DIR}/assets/branding/splash.png"
-			"$<TARGET_FILE_DIR:RearSilver-Music-Player>/suite-splash.png"
+			"$<TARGET_FILE_DIR:RearSilver-Stream-Suite-Control-Hub>/suite-splash.png"
 		COMMAND "${CMAKE_COMMAND}" -E copy_if_different
 			"${CMAKE_CURRENT_SOURCE_DIR}/assets/fonts/Sora-Variable.ttf"
-			"$<TARGET_FILE_DIR:RearSilver-Music-Player>/Sora-Variable.ttf"
+			"$<TARGET_FILE_DIR:RearSilver-Stream-Suite-Control-Hub>/Sora-Variable.ttf"
 		COMMAND "${CMAKE_COMMAND}" -E copy_if_different
 			"${CMAKE_CURRENT_SOURCE_DIR}/assets/fonts/Sora-OFL.txt"
-			"$<TARGET_FILE_DIR:RearSilver-Music-Player>/Sora-OFL.txt"
+			"$<TARGET_FILE_DIR:RearSilver-Stream-Suite-Control-Hub>/Sora-OFL.txt"
 		COMMAND "${CMAKE_COMMAND}" -E copy_directory
 			"${RS_CEF_RUNTIME_ROOT}/runtimes/win-x64/native"
-			"$<TARGET_FILE_DIR:RearSilver-Music-Player>"
+			"$<TARGET_FILE_DIR:RearSilver-Stream-Suite-Control-Hub>"
 		COMMAND "${CMAKE_COMMAND}" -E make_directory
-			"$<TARGET_FILE_DIR:RearSilver-Music-Player>/locales"
+			"$<TARGET_FILE_DIR:RearSilver-Stream-Suite-Control-Hub>/locales"
 		COMMAND "${CMAKE_COMMAND}" -E copy_if_different
 			"${RS_CEF_RUNTIME_ROOT}/CEF/win-x64/locales/en-GB.pak"
-			"$<TARGET_FILE_DIR:RearSilver-Music-Player>/locales/en-GB.pak"
+			"$<TARGET_FILE_DIR:RearSilver-Stream-Suite-Control-Hub>/locales/en-GB.pak"
 		COMMAND "${CMAKE_COMMAND}" -E copy_if_different
 			"${RS_CEF_RUNTIME_ROOT}/CEF/win-x64/locales/en-US.pak"
-			"$<TARGET_FILE_DIR:RearSilver-Music-Player>/locales/en-US.pak"
-		COMMENT "Package CEF runtime and media-player surfaces"
+			"$<TARGET_FILE_DIR:RearSilver-Stream-Suite-Control-Hub>/locales/en-US.pak"
+		COMMENT "Package CEF runtime and Control Hub surfaces"
 		VERBATIM)
 endif()
 
@@ -262,6 +280,7 @@ add_library(${PROJECT_NAME} MODULE
     )
 
 target_include_directories(${PROJECT_NAME} PRIVATE
+    "${CMAKE_CURRENT_BINARY_DIR}/generated"
     "${CMAKE_CURRENT_SOURCE_DIR}/src"
     "${OBS_SOURCE_DIR}/libobs"
     "${OBS_SOURCE_DIR}/frontend/api"
@@ -299,16 +318,16 @@ set_target_properties(${PROJECT_NAME}
 )
 
 if(WIN32)
-	add_dependencies(${PROJECT_NAME} RearSilver-Music-Player)
+	add_dependencies(${PROJECT_NAME} RearSilver-Stream-Suite-Control-Hub)
 	add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
 		COMMAND "${CMAKE_COMMAND}" -E copy_if_different
-			"$<TARGET_FILE:RearSilver-Music-Player>" "$<TARGET_FILE_DIR:${PROJECT_NAME}>"
+			"$<TARGET_FILE:RearSilver-Stream-Suite-Control-Hub>" "$<TARGET_FILE_DIR:${PROJECT_NAME}>"
 		COMMAND "${CMAKE_COMMAND}" -E make_directory
 			"$<TARGET_FILE_DIR:${PROJECT_NAME}>/RearSilver-Stream-Suite/qt-plugins/tls"
 		COMMAND "${CMAKE_COMMAND}" -E copy_if_different
 			"${RS_QT_SCHANNEL_BACKEND}"
 			"$<TARGET_FILE_DIR:${PROJECT_NAME}>/RearSilver-Stream-Suite/qt-plugins/tls/qschannelbackend.dll"
-		COMMENT "Package RearSilver Music Player companion and private Qt TLS backend"
+		COMMENT "Package RearSilver Stream Suite Control Hub and private Qt TLS backend"
 		VERBATIM)
 endif()
 

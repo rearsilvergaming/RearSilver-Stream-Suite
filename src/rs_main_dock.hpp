@@ -154,6 +154,7 @@ private:
 
 	// 🔒 Safety Lock
 	bool m_safetyLockEnabled = false;
+	bool m_frontendCallbackRegistered = false;
 
 	// Long-press confirmation
 	QTimer *m_stopHoldTimer = nullptr;

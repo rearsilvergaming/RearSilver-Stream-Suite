@@ -362,6 +362,7 @@ static std::string relevantLogExcerpt(const std::wstring &path, const char *labe
 	input.seekg(0, std::ios::end); const std::streamoff size = input.tellg();
 	const std::streamoff start = std::max<std::streamoff>(0, size - 65536); input.seekg(start);
 	std::string line; std::deque<std::string> selected;
+	if (start > 0) std::getline(input, line); // Discard the partial line at the read boundary.
 	while (std::getline(input, line)) {
 		std::string lower = line;
 		std::transform(lower.begin(), lower.end(), lower.begin(), [](unsigned char value) { return char(std::tolower(value)); });
@@ -1153,7 +1154,7 @@ static constexpr ULONGLONG kSpotifyRequestPropagationGraceMs = 15000;
 static TwitchAccount g_streamerTwitch("streamer"), g_botTwitch("bot");
 static TwitchChatService g_twitchReader("reader"), g_twitchSender("sender");
 static bool g_closeRequested = false;
-static int g_page = 7;
+static int g_page = RsBeta::currentState().expired ? 9 : 7;
 static std::string g_streamerAuthState = "disconnected", g_streamerLogin;
 static std::string g_botAuthState = "disconnected", g_botLogin, g_authSender = "streamer";
 static std::string g_obsStudioVersion, g_pluginVersion;
@@ -1985,6 +1986,7 @@ public:
 								if (message == "feedback-diagnostics-ready") { if (m_page == 9) { m_ready = true; sendFeedbackDiagnosticsConfig(); } return S_OK; }
 								CefRefPtr<CefValue> parsed = CefParseJSON(message, JSON_PARSER_RFC); if (!parsed || parsed->GetType() != VTYPE_DICTIONARY) return S_OK;
 								CefRefPtr<CefDictionaryValue> object = parsed->GetDictionary();
+								if (RsBeta::currentState().expired && object->GetString("page").ToString() != "feedback") return S_OK;
 								if (object->GetString("page").ToString() == "library") {
 									const std::string action = object->GetString("action").ToString();
 									if (action == "import") { const std::wstring value=utf8ToWide(object->GetString("value").ToString()); SetWindowTextW(g_playlistEdit,value.c_str()); SendMessageW(m_parent,WM_COMMAND,MAKEWPARAM(ID_IMPORT_PLAYLIST,BN_CLICKED),reinterpret_cast<LPARAM>(g_importPlaylistButton)); }
@@ -2120,6 +2122,7 @@ public:
 			}).Get());
 	}
 	void showPage(int page) {
+		if (RsBeta::currentState().expired) page = 9;
 		const bool visible = page >= 2 && page <= 9 && page != 4 && page != 5;
 		if (visible && page != m_page && m_webView) {
 			m_page = page;
@@ -2150,7 +2153,8 @@ public:
 	void resize() {
 		if (!m_controller || !m_parent) return;
 		RECT client{}; GetClientRect(m_parent, &client); const int sidebar = sidebarWidthFor(client.right);
-		RECT bounds{sidebar + 16, 100, std::max(sidebar + 17, int(client.right) - 16), std::max(101, int(client.bottom) - 112)};
+		const int bottomInset = RsBeta::currentState().expired ? 16 : 112;
+		RECT bounds{sidebar + 16, 100, std::max(sidebar + 17, int(client.right) - 16), std::max(101, int(client.bottom) - bottomInset)};
 		if (m_boundsKnown && EqualRect(&m_bounds, &bounds)) return;
 		const HRESULT hr = m_controller->put_Bounds(bounds);
 		if (SUCCEEDED(hr)) { m_bounds = bounds; m_boundsKnown = true; }
@@ -2384,9 +2388,11 @@ private:
 			<< "4. Connection and feature states\n"
 			<< "--------------------------------\n"
 			<< "Control Hub process: Running\nControl Hub/OBS IPC: " << (g_hostPipeConnected ? "Connected" : "Disconnected")
+			<< "\nFeature access: " << (beta.expired ? "Disabled (private beta expired)" : "Enabled")
 			<< "\nActive music provider: " << (g_hub.activeSource().empty() ? "None" : g_hub.activeSource())
 			<< "\nYouTube fallback availability: " << (!g_hub.youtubeFallback().empty() ? "Available" : "No playlist loaded")
 			<< "\nLocal library availability: " << (!g_hub.localLibrary().empty() ? "Available" : "No local library loaded")
+			<< "\nRuntime service evaluation: " << (beta.expired ? "Not started because the private beta expired; inactive states below are not account-status checks" : "Active")
 			<< "\nSpotify configured: " << (!spotify.clientId.empty() ? "Yes" : "No")
 			<< "\nSpotify authorised: " << (spotify.authorized ? "Yes" : "No")
 			<< "\nSpotify connected: " << (spotify.connected ? "Yes" : "No")
@@ -2395,7 +2401,7 @@ private:
 			<< "\nTwitch streamer connected: " << (streamer.connected ? "Yes" : "No")
 			<< "\nTwitch bot configured: " << (bot.authorized ? "Yes" : "No")
 			<< "\nTwitch bot connected: " << (bot.connected ? "Yes" : "No")
-			<< "\nSong requests: " << (musicBool(L"requestsEnabled", true) ? "Enabled" : "Off")
+			<< "\nSong requests: " << (beta.expired ? (musicBool(L"requestsEnabled", true) ? "Disabled by expiry (saved preference: Enabled)" : "Disabled by expiry (saved preference: Off)") : (musicBool(L"requestsEnabled", true) ? "Enabled" : "Off"))
 			<< "\nWaiting requests: " << g_hub.requests().size()
 			<< "\nOverlay placement mode: " << g_overlayPlacementMode
 			<< "\nMusic Capture exists: " << (g_captureExists ? "Yes" : "No")
@@ -2435,6 +2441,7 @@ private:
 		d->SetString("buildId", RsBeta::kBuildId);
 		d->SetString("buildDate", RsBeta::kBuildDate);
 		d->SetString("expiry", RsBeta::kExpiryDisplay);
+		d->SetBool("expired", RsBeta::currentState().expired);
 		d->SetBool("obsConnected", g_hostPipeConnected);
 		d->SetString("obsVersion", g_obsStudioVersion);
 		d->SetString("pluginVersion", g_pluginVersion);
@@ -2716,8 +2723,11 @@ static void handleTwitchChat(HWND window, const TwitchChatMessage &m)
 
 static LRESULT CALLBACK windowProc(HWND window, UINT message, WPARAM wParam, LPARAM lParam)
 {
-	if(message==WM_TWITCH_CHAT){std::unique_ptr<TwitchChatMessage>m(reinterpret_cast<TwitchChatMessage*>(lParam));if(m)handleTwitchChat(window,*m);return 0;}
+	const bool betaExpired = RsBeta::currentState().expired;
+	if(message==WM_TWITCH_CHAT){std::unique_ptr<TwitchChatMessage>m(reinterpret_cast<TwitchChatMessage*>(lParam));if(m&&!betaExpired)handleTwitchChat(window,*m);return 0;}
 	if(message==WM_OBS_CONNECTION_CHANGED){if(g_overlayDesigner)g_overlayDesigner->refresh();return 0;}
+	if (betaExpired && (message == WM_HOTKEY || message == WM_COMMAND || message == WM_LBUTTONDOWN ||
+		message == WM_LBUTTONUP || message == WM_LBUTTONDBLCLK || message == WM_RBUTTONDOWN || message == WM_RBUTTONUP)) return 0;
 	if (message == WM_HOTKEY && g_hubMediaKeysRegistered) {
 		if (wParam == ID_MEDIA_PLAY_PAUSE)
 			runTransportAction(2);
@@ -3648,12 +3658,15 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int)
 	for (HWND control : {g_importPlaylistButton, g_addFilesButton, g_addFolderButton, g_useLocalButton, g_useYouTubeButton, g_clearLocalButton})
 		SendMessageW(control, WM_SETFONT, reinterpret_cast<WPARAM>(uiFont), TRUE);
 	loadHubState();
+	const bool betaExpired = RsBeta::currentState().expired;
 	if (g_hub.activeSource() == "local") disableSongRequestsForLocalSource();
 	g_hub.setNonRequestLabel(wideToUtf8(musicSetting(L"nonRequestLabel", L"Stream DJ")));
 	g_authSender = wideToUtf8(musicSetting(L"authSender", L"streamer"));
-	g_systemMedia.start("spotify.exe");
-	g_spotify.start();
-	g_streamerTwitch.start(); g_botTwitch.start();
+	if (!betaExpired) {
+		g_systemMedia.start("spotify.exe");
+		g_spotify.start();
+		g_streamerTwitch.start(); g_botTwitch.start();
+	}
 	g_overlayDesigner = std::make_unique<OverlayDesignerSurface>();
 	g_overlayDesigner->initialise(window);
 	positionLibraryControls(window);
@@ -3665,22 +3678,22 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int)
 	// Restoring the provider does not pass through the Library button handler.
 	// Resume the persisted source explicitly so both YouTube and Local sessions
 	// are immediately usable without asking the user to reselect their library.
-	if (g_hub.activeSource() == "youtube") {
+	if (!betaExpired && g_hub.activeSource() == "youtube") {
 		traceLog("youtube-restored-provider-init", g_hub.hasCurrent() ? "current=1" : "current=0");
 		if (g_hub.hasCurrent() && g_hub.current().provider != "local")
 			startHubTrack(g_hub.current(), false);
 		else
 			playHubNext();
-	} else if (g_hub.activeSource() == "local") {
+	} else if (!betaExpired && g_hub.activeSource() == "local") {
 		traceLog("local-restored-provider-init", g_hub.hasCurrent() ? "current=1" : "current=0");
 		const bool restored = g_hub.hasCurrent() && g_hub.current().provider == "local" &&
 			startHubTrack(g_hub.current(), false);
 		if (!restored)
 			playHubNext();
 	}
-	updateHubMediaKeyRegistration(window);
+	if (!betaExpired) updateHubMediaKeyRegistration(window);
 	// OBS launches the Hub; the Hub is the sole owner of its optional apps.
-	launchManagedPrograms();
+	if (!betaExpired) launchManagedPrograms();
 	HANDLE pipe = CreateNamedPipeW(L"\\\\.\\pipe\\RearSilverStreamSuiteMusicPlayer", PIPE_ACCESS_DUPLEX,
 		PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_NOWAIT, 1, 1024 * 1024, 1024 * 1024, 0, nullptr);
 	if (pipe == INVALID_HANDLE_VALUE) return 3;
@@ -3688,10 +3701,10 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int)
 	while (running) {
 		MSG message{}; while (PeekMessageW(&message, nullptr, 0, 0, PM_REMOVE)) { TranslateMessage(&message); DispatchMessageW(&message); }
 		if (g_closeRequested) { running = false; continue; }
-		if (g_youtubePlayer->active() && GetTickCount64() - lastYouTubePoll >= 250) {
+		if (!betaExpired && g_youtubePlayer->active() && GetTickCount64() - lastYouTubePoll >= 250) {
 			g_youtubePlayer->pollStatus(); lastYouTubePoll = GetTickCount64();
 		}
-		if (externalActive() && GetTickCount64() - lastExternalPoll >= 500) {
+		if (!betaExpired && externalActive() && GetTickCount64() - lastExternalPoll >= 500) {
 			const SpotifyClientState spotify=g_spotify.state();const SystemMediaState liveMedia=g_systemMedia.state();bool cancelledCurrent=false;
 			for(const auto &request:g_hub.requests())if(request.provider=="spotify"&&request.cancelled&&(request.providerId==spotify.current.uri||(!liveMedia.title.empty()&&request.title==liveMedia.title&&request.artist==liveMedia.artist))){commandExternalPlayer(SystemMediaProvider::Action::Next);g_hub.removeRequest(request.id);saveHubState();syncHubQueueView();cancelledCurrent=true;break;}
 			if(!cancelledCurrent)refreshExternalPlayer(window);
@@ -3726,7 +3739,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int)
 		// page-ready handshake if a document's first message was lost in a rapid
 		// Library/Accounts navigation or source switch.
 		if(((g_page>=2&&g_page<=6)||g_page==8)&&g_overlayDesigner&&GetTickCount64()-lastSpotifyUiRefresh>=250){g_overlayDesigner->refresh();lastSpotifyUiRefresh=GetTickCount64();}
-		if(GetTickCount64()-lastTwitchValidation>=3600000){g_streamerTwitch.reconnect(false);g_botTwitch.reconnect(false);lastTwitchValidation=GetTickCount64();}
+		if(!betaExpired&&GetTickCount64()-lastTwitchValidation>=3600000){g_streamerTwitch.reconnect(false);g_botTwitch.reconnect(false);lastTwitchValidation=GetTickCount64();}
 		auto publishTwitch=[&](const char*name,TwitchAccount &auth,TwitchChatService &chat,bool chatRequired,uint64_t &seenAuth,uint64_t &seenChat){const uint64_t authRevision=auth.revision(),chatRevision=chat.revision();if(!connected||(authRevision==seenAuth&&chatRevision==seenChat))return;seenAuth=authRevision;seenChat=chatRevision;const auto state=auth.state();const std::string shownName=state.displayName.empty()?state.login:state.displayName;const std::string transportState=!state.connected?"disconnected":chatRequired&&!chat.connected()?"chat-reconnecting":"connected";std::lock_guard<std::mutex>lock(g_hostEventMutex);g_hostEvents.push_back(std::string("HOST\tACCOUNT_STATE\t")+name+'\t'+transportState+'\t'+shownName+"\n");};
 		auto syncChat=[&]{
 			const auto streamer=g_streamerTwitch.state();const auto bot=g_botTwitch.state();const std::string streamerToken=g_streamerTwitch.accessToken(),botToken=g_botTwitch.accessToken();const std::string streamerSignature=streamer.connected?streamer.login+'\n'+streamer.userId+'\n'+streamerToken:"disconnected";const std::string botSignature=bot.connected?bot.login+'\n'+bot.userId+'\n'+botToken:"disconnected";
@@ -3734,10 +3747,10 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int)
 			if(streamerChanged){lastChatStreamerSignature=streamerSignature;g_twitchReader.disconnect();if(streamer.connected){const std::string channel=streamer.login;g_twitchReader.connect(streamer.login,streamerToken,channel,streamer.userId,[window](const TwitchChatMessage&m){auto*copy=new TwitchChatMessage(m);if(!PostMessageW(window,WM_TWITCH_CHAT,0,reinterpret_cast<LPARAM>(copy)))delete copy;});}}
 			if(botSignature!=lastChatBotSignature||streamerChanged||lastChatSender!=g_authSender){lastChatBotSignature=botSignature;lastChatSender=g_authSender;g_twitchSender.disconnect();if(streamer.connected&&bot.connected&&g_authSender=="bot")g_twitchSender.connect(bot.login,botToken,streamer.login,streamer.userId);}
 		};
-		syncChat();
-		g_twitchReader.tick();g_twitchSender.tick();const bool readerReady=g_twitchReader.connected();if(readerReady&&!lastReaderReady)chatAnnouncementPending=true;lastReaderReady=readerReady;if(chatAnnouncementPending&&sendTwitchMessage("RearSilver Stream Suite Hub Connected ⚡"))chatAnnouncementPending=false;
+		if(!betaExpired){syncChat();
+		g_twitchReader.tick();g_twitchSender.tick();const bool readerReady=g_twitchReader.connected();if(readerReady&&!lastReaderReady)chatAnnouncementPending=true;lastReaderReady=readerReady;if(chatAnnouncementPending&&sendTwitchMessage("RearSilver Stream Suite Hub Connected ⚡"))chatAnnouncementPending=false;}
 		if (!connected) { connected = ConnectNamedPipe(pipe, nullptr) || GetLastError() == ERROR_PIPE_CONNECTED; g_hostPipeConnected=connected; if (connected) { g_obsStudioVersion.clear(); g_pluginVersion.clear(); PostMessageW(window,WM_OBS_CONNECTION_CHANGED,TRUE,0); send(pipe, player.status()); queueOverlayPlacementMode(); queueReplayConfiguration(); lastStreamerRevision=lastBotRevision=0; } }
-		publishTwitch("streamer",g_streamerTwitch,g_twitchReader,true,lastStreamerRevision,lastPublishedReaderRevision);publishTwitch("bot",g_botTwitch,g_twitchSender,g_authSender=="bot",lastBotRevision,lastPublishedSenderRevision);
+		if(!betaExpired){publishTwitch("streamer",g_streamerTwitch,g_twitchReader,true,lastStreamerRevision,lastPublishedReaderRevision);publishTwitch("bot",g_botTwitch,g_twitchSender,g_authSender=="bot",lastBotRevision,lastPublishedSenderRevision);}
 		if (connected) {
 			{ std::lock_guard<std::mutex> lock(g_hostEventMutex); for(const auto &event:g_hostEvents)send(pipe,event); g_hostEvents.clear(); }
 			char buffer[4096]; DWORD read = 0;
@@ -3748,6 +3761,8 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int)
 					if (line == "SHUTDOWN") { running = false; break; }
 					if (line.rfind("HOST_INFO\t", 0) == 0) {
 						const size_t tab=line.find('\t',10);if(tab!=std::string::npos){g_obsStudioVersion=line.substr(10,tab-10);g_pluginVersion=line.substr(tab+1);if(g_overlayDesigner)g_overlayDesigner->refresh();}
+					} else if (betaExpired) {
+						continue;
 					} else if (line.rfind("SETUP_STATE\t", 0) == 0) {
 						const size_t tab=line.find('\t',12);if(tab!=std::string::npos){g_captureExists=line.substr(12,tab-12)=="true";g_playerAutoStart=line.substr(tab+1)=="true";if(g_overlayDesigner)g_overlayDesigner->refresh();}
 					} else if (line.rfind("REPLAY_STATE\t", 0) == 0) {
@@ -3862,9 +3877,9 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int)
 				lastHubStatus = GetTickCount64();
 			}
 		}
-		if (player.takeEnded()) { if (connected) send(pipe, "EVENT\tended\t" + player.path() + "\n"); playHubNext(); }
+		if (player.takeEnded()) { if (connected) send(pipe, "EVENT\tended\t" + player.path() + "\n"); if (!betaExpired) playHubNext(); }
 		for (const std::string &event : g_youtubePlayer->takeEvents()) {
-			if (event.rfind("EVENT\tyoutube-ended\t", 0) == 0 || event.rfind("EVENT\tyoutube-error\t", 0) == 0) playHubNext();
+			if (!betaExpired && (event.rfind("EVENT\tyoutube-ended\t", 0) == 0 || event.rfind("EVENT\tyoutube-error\t", 0) == 0)) playHubNext();
 			if (connected) send(pipe, event);
 		}
 		if (GetTickCount64() - lastStatus >= 100) {

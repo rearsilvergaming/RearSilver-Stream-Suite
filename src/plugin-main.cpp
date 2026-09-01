@@ -28,6 +28,7 @@
 #include "rs_instant_replay.hpp"
 #include "rs_stream_overlay_server.hpp"
 #include "rs_stream_timer.hpp"
+#include "rs_beta_config.hpp"
 
 // ---------------------------------------------
 // OBS module boilerplate
@@ -93,6 +94,11 @@ static void frontend_event_callback(enum obs_frontend_event event, void *)
 {
 	switch (event) {
 	case OBS_FRONTEND_EVENT_FINISHED_LOADING:
+		if (RsBeta::currentState().expired) {
+			RsMusicLocalPlayer::instance().launchCompanionIfEnabled();
+			create_rs_dock();
+			break;
+		}
 		rsMusicPcmRemoveLegacyTestSource();
 		hub_replay::RsInstantReplay::applyCachedReplayBufferConfiguration();
 		RsMusicLocalPlayer::instance().launchCompanionIfEnabled();
@@ -106,7 +112,8 @@ static void frontend_event_callback(enum obs_frontend_event event, void *)
 
 	case OBS_FRONTEND_EVENT_SCENE_CHANGED:
 	case OBS_FRONTEND_EVENT_SCENE_COLLECTION_CHANGED:
-		QTimer::singleShot(0, []() { rsPublishStreamOverlayPlacementState(); });
+		if (!RsBeta::currentState().expired)
+			QTimer::singleShot(0, []() { rsPublishStreamOverlayPlacementState(); });
 		break;
 
 	default:
@@ -196,15 +203,19 @@ bool obs_module_load(void)
 	rs_try_add_obs_qt_plugins_path();
 	rs_log_qt_library_paths();
 
-	rs_music_tls_probe();
-	rsMusicPcmRegisterSource();
+	if (!RsBeta::currentState().expired) {
+		rs_music_tls_probe();
+		rsMusicPcmRegisterSource();
 
-	// Auto-Start must subscribe before OBS emits FINISHED_LOADING.  Registering
-	// it from the dock constructor is too late because the dock itself is
-	// created in response to that event.
-	RsAutoStart::ensureObsEventHook();
-	hub_replay::RsInstantReplay::registerFrontendCallbacks();
-	RsStreamOverlayServer::instance().start();
+		// Auto-Start must subscribe before OBS emits FINISHED_LOADING. Registering
+		// it from the dock constructor is too late because the dock itself is
+		// created in response to that event.
+		RsAutoStart::ensureObsEventHook();
+		hub_replay::RsInstantReplay::registerFrontendCallbacks();
+		RsStreamOverlayServer::instance().start();
+	} else {
+		LOG_INFO_MSG("private beta expired; feature services remain disabled");
+	}
 	obs_frontend_add_event_callback(frontend_event_callback, nullptr);
 
 	LOG_INFO_MSG("plugin load finished");

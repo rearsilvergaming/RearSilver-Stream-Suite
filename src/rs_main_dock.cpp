@@ -10,6 +10,7 @@
 #include <QComboBox>
 #include <QTabBar>
 #include <QLabel>
+#include <QPushButton>
 #include <QFrame>
 #include <QMainWindow>
 #include <QAction>
@@ -90,7 +91,8 @@ RsMainDock::RsMainDock(QWidget *parent) : QWidget(parent)
 {
 	setObjectName("RearSilverStreamSuiteDock");
 
-	RsAutoStart::ensureObsEventHook(); // ✅ EARLY registration
+	if (!RsBeta::currentState().expired)
+		RsAutoStart::ensureObsEventHook(); // ✅ EARLY registration
 
 	m_central = new QWidget(this);
 
@@ -105,6 +107,31 @@ RsMainDock::RsMainDock(QWidget *parent) : QWidget(parent)
 	root->addWidget(m_central);
 
 	loadSettings();
+	if (RsBeta::currentState().expired) {
+		auto *expiredLayout = new QVBoxLayout(m_central);
+		expiredLayout->setContentsMargins(24, 24, 24, 24);
+		expiredLayout->setSpacing(12);
+		expiredLayout->addStretch();
+		auto *badge = new QLabel("PRIVATE BETA EXPIRED");
+		badge->setAlignment(Qt::AlignCenter);
+		badge->setStyleSheet("color:#ff4a57;font-size:12px;font-weight:800;");
+		auto *title = new QLabel("RearSilver Stream Suite private beta has expired");
+		title->setWordWrap(true);
+		title->setAlignment(Qt::AlignCenter);
+		title->setStyleSheet("font-size:20px;font-weight:750;");
+		auto *detail = new QLabel(QStringLiteral("This test build expired on %1. Suite features are disabled, but you can still open Feedback & Diagnostics to export a report.")
+			.arg(QString::fromUtf8(RsBeta::kExpiryDisplay)));
+		detail->setWordWrap(true);
+		detail->setAlignment(Qt::AlignCenter);
+		auto *feedback = new QPushButton("Open Feedback & Diagnostics");
+		connect(feedback, &QPushButton::clicked, this, [] { RsMusicLocalPlayer::instance().launchCompanionIfEnabled(); });
+		expiredLayout->addWidget(badge);
+		expiredLayout->addWidget(title);
+		expiredLayout->addWidget(detail);
+		expiredLayout->addWidget(feedback);
+		expiredLayout->addStretch();
+		return;
+	}
 
 // Create ONE authoritative music state for the entire dock
 	m_musicState = new RsMusicState(this);
@@ -343,6 +370,7 @@ if (m_lblBotDot && m_botAuth && !m_botAuthResolved) {
 	}
 
 	obs_frontend_add_event_callback(RsMainDock::onFrontendEvent, this);
+	m_frontendCallbackRegistered = true;
 
 	updateControlStates();
 	updateSceneSourceInfo();
@@ -361,7 +389,8 @@ if (m_lblBotDot && m_botAuth && !m_botAuthResolved) {
 
 RsMainDock::~RsMainDock()
 {
-	obs_frontend_remove_event_callback(RsMainDock::onFrontendEvent, this);
+	if (m_frontendCallbackRegistered)
+		obs_frontend_remove_event_callback(RsMainDock::onFrontendEvent, this);
 }
 
 /* -------------------------------------------------------

@@ -70,6 +70,64 @@
       }
     },
     {
+      "name": "windows-owner",
+      "inherits": ["windows-x64"],
+      "displayName": "Windows Owner Build",
+      "description": "Unrestricted personal streaming and development build",
+      "binaryDir": "${sourceDir}/build_owner",
+      "cacheVariables": {
+        "RS_DEFAULT_EDITION": "pro",
+        "RS_BETA_CHANNEL": "Owner Build",
+        "RS_BETA_VERSION": "1.0.0-owner",
+        "RS_BETA_EXPIRY_ENABLED": false,
+        "RS_ARTIFACT_DIR": "${sourceDir}/artifacts/owner"
+      }
+    },
+    {
+      "name": "windows-private-beta",
+      "inherits": ["windows-x64"],
+      "displayName": "Windows Private Beta",
+      "description": "Fully unlocked private beta with fixed expiry and diagnostics",
+      "binaryDir": "${sourceDir}/build_beta",
+      "cacheVariables": {
+        "RS_DEFAULT_EDITION": "pro",
+        "RS_BETA_CHANNEL": "Private Beta",
+        "RS_BETA_VERSION": "1.0.0-beta.1",
+        "RS_BETA_EXPIRY_ENABLED": true,
+        "RS_BETA_EXPIRY_DATE": "2026-10-31",
+        "RS_BETA_EXPIRY_DISPLAY": "31 October 2026",
+        "RS_ARTIFACT_DIR": "${sourceDir}/artifacts/private-beta"
+      }
+    },
+    {
+      "name": "windows-free",
+      "inherits": ["windows-x64"],
+      "displayName": "Windows Free",
+      "description": "Permanent Free-edition build profile",
+      "binaryDir": "${sourceDir}/build_free",
+      "cacheVariables": {
+        "RS_DEFAULT_EDITION": "free",
+        "RS_BETA_CHANNEL": "Free",
+        "RS_BETA_VERSION": "1.0.0",
+        "RS_BETA_EXPIRY_ENABLED": false,
+        "RS_ARTIFACT_DIR": "${sourceDir}/artifacts/free"
+      }
+    },
+    {
+      "name": "windows-pro",
+      "inherits": ["windows-x64"],
+      "displayName": "Windows Pro",
+      "description": "Permanent Pro-edition build profile",
+      "binaryDir": "${sourceDir}/build_pro",
+      "cacheVariables": {
+        "RS_DEFAULT_EDITION": "pro",
+        "RS_BETA_CHANNEL": "Pro",
+        "RS_BETA_VERSION": "1.0.0",
+        "RS_BETA_EXPIRY_ENABLED": false,
+        "RS_ARTIFACT_DIR": "${sourceDir}/artifacts/pro"
+      }
+    },
+    {
       "name": "ubuntu-x86_64",
       "displayName": "Ubuntu x86_64",
       "description": "Build for Ubuntu x86_64",
@@ -126,6 +184,30 @@
       "configurePreset": "windows-ci-x64",
       "displayName": "Windows x64 CI",
       "description": "Windows CI build for x64 (RelWithDebInfo configuration)",
+      "configuration": "RelWithDebInfo"
+    },
+    {
+      "name": "windows-owner",
+      "configurePreset": "windows-owner",
+      "displayName": "Windows Owner Build",
+      "configuration": "RelWithDebInfo"
+    },
+    {
+      "name": "windows-private-beta",
+      "configurePreset": "windows-private-beta",
+      "displayName": "Windows Private Beta",
+      "configuration": "RelWithDebInfo"
+    },
+    {
+      "name": "windows-free",
+      "configurePreset": "windows-free",
+      "displayName": "Windows Free",
+      "configuration": "RelWithDebInfo"
+    },
+    {
+      "name": "windows-pro",
+      "configurePreset": "windows-pro",
+      "displayName": "Windows Pro",
       "configuration": "RelWithDebInfo"
     },
     {

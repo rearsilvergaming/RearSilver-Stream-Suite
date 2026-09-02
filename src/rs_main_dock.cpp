@@ -423,19 +423,23 @@ void RsMainDock::createUi()
 	m_sidebarLayout->addWidget(m_tabBar);
 
 	const RsBeta::State betaState = RsBeta::currentState();
+	const QString channel = QString::fromUtf8(RsBeta::kChannel).toUpper();
 	auto *betaNotice = new QLabel(betaState.expired
-		? QStringLiteral("PRIVATE BETA EXPIRED\n%1").arg(QString::fromUtf8(RsBeta::kExpiryDisplay))
-		: QStringLiteral("PRIVATE BETA · %1\nExpires %2")
-			.arg(QString::fromUtf8(RsBeta::kVersion), QString::fromUtf8(RsBeta::kExpiryDisplay)));
+		? QStringLiteral("%1 EXPIRED\n%2").arg(channel, QString::fromUtf8(RsBeta::kExpiryDisplay))
+		: RsBeta::kExpiryEnabled
+			? QStringLiteral("%1 · %2\nExpires %3").arg(channel, QString::fromUtf8(RsBeta::kVersion), QString::fromUtf8(RsBeta::kExpiryDisplay))
+			: QStringLiteral("%1 · %2").arg(channel, QString::fromUtf8(RsBeta::kVersion)));
 	betaNotice->setObjectName("rs-beta-notice");
 	betaNotice->setWordWrap(true);
 	betaNotice->setAlignment(Qt::AlignCenter);
 	betaNotice->setStyleSheet(betaState.expired
 		? "color:#ff4a57; font-size:11px; font-weight:700; padding:5px;"
 		: "color:#ffb800; font-size:11px; font-weight:700; padding:5px;");
-	betaNotice->setToolTip(QStringLiteral("%1\nBuild %2 · %3\nExpires %4")
-		.arg(QString::fromUtf8(RsBeta::kChannel), QString::fromUtf8(RsBeta::kBuildId),
-			QString::fromUtf8(RsBeta::kBuildDate), QString::fromUtf8(RsBeta::kExpiryDisplay)));
+	betaNotice->setToolTip(RsBeta::kExpiryEnabled
+		? QStringLiteral("%1\nBuild %2 · %3\nExpires %4").arg(QString::fromUtf8(RsBeta::kChannel),
+			QString::fromUtf8(RsBeta::kBuildId), QString::fromUtf8(RsBeta::kBuildDate), QString::fromUtf8(RsBeta::kExpiryDisplay))
+		: QStringLiteral("%1\nBuild %2 · %3").arg(QString::fromUtf8(RsBeta::kChannel),
+			QString::fromUtf8(RsBeta::kBuildId), QString::fromUtf8(RsBeta::kBuildDate)));
 	m_sidebarLayout->addWidget(betaNotice);
 
 	// DIVIDER (theme-aware)

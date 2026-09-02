@@ -5,6 +5,8 @@
 /.deps/
 /.vs/
 /package/
+/artifacts/
+/CMakeUserPresets.json
 /RearSilver-Stream-Suite/
 /installer/
 /third_party/cef_poc/

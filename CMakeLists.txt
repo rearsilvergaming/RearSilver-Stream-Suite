@@ -7,14 +7,21 @@ option(RS_BUILD_CEF_AUDIO_POC "Build the isolated CEF YouTube PCM capture experi
 
 set(RS_BETA_CHANNEL "Private Beta" CACHE STRING "Pre-release channel displayed by the Suite")
 set(RS_BETA_VERSION "1.0.0-beta.1" CACHE STRING "Private beta version displayed by the Suite")
+option(RS_BETA_EXPIRY_ENABLED "Enforce the configured private beta expiry date" ON)
 set(RS_BETA_EXPIRY_DATE "2026-10-31" CACHE STRING "Private beta expiry date in YYYY-MM-DD format")
 set(RS_BETA_EXPIRY_DISPLAY "31 October 2026" CACHE STRING "Human-readable private beta expiry date")
+set(RS_ARTIFACT_DIR "" CACHE PATH "Optional directory used to stage this build variant")
 if(NOT RS_BETA_EXPIRY_DATE MATCHES "^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]$")
 	message(FATAL_ERROR "RS_BETA_EXPIRY_DATE must use YYYY-MM-DD format.")
 endif()
 string(TIMESTAMP RS_BETA_BUILD_DATE "%Y-%m-%d" UTC)
 string(TIMESTAMP RS_BETA_DEFAULT_BUILD_ID "%Y%m%d-%H%M%S" UTC)
 set(RS_BETA_BUILD_ID "${RS_BETA_DEFAULT_BUILD_ID}" CACHE STRING "Private beta build identifier")
+if(RS_BETA_EXPIRY_ENABLED)
+	set(RS_BETA_EXPIRY_ENABLED_VALUE 1)
+else()
+	set(RS_BETA_EXPIRY_ENABLED_VALUE 0)
+endif()
 configure_file(src/rs_beta_config.hpp.in "${CMAKE_CURRENT_BINARY_DIR}/generated/rs_beta_config.hpp" @ONLY)
 
 if(BUILD_TESTING)
@@ -97,6 +104,11 @@ if(WIN32)
 		CXX_STANDARD 17
 		CXX_STANDARD_REQUIRED YES
 		MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+	if(RS_ARTIFACT_DIR)
+		set_target_properties(RearSilver-Stream-Suite-Control-Hub PROPERTIES
+			RUNTIME_OUTPUT_DIRECTORY "${RS_ARTIFACT_DIR}"
+			RUNTIME_OUTPUT_DIRECTORY_RELWITHDEBINFO "${RS_ARTIFACT_DIR}")
+	endif()
 	if(MSVC)
 		target_compile_options(RearSilver-Stream-Suite-Control-Hub PRIVATE /utf-8)
 	endif()
@@ -316,6 +328,14 @@ set_target_properties(${PROJECT_NAME}
         AUTOUIC ON
         AUTORCC ON
 )
+
+if(RS_ARTIFACT_DIR)
+	set_target_properties(${PROJECT_NAME} PROPERTIES
+		RUNTIME_OUTPUT_DIRECTORY "${RS_ARTIFACT_DIR}"
+		RUNTIME_OUTPUT_DIRECTORY_RELWITHDEBINFO "${RS_ARTIFACT_DIR}"
+		LIBRARY_OUTPUT_DIRECTORY "${RS_ARTIFACT_DIR}"
+		LIBRARY_OUTPUT_DIRECTORY_RELWITHDEBINFO "${RS_ARTIFACT_DIR}")
+endif()
 
 if(WIN32)
 	add_dependencies(${PROJECT_NAME} RearSilver-Stream-Suite-Control-Hub)

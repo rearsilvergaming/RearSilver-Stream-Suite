@@ -2361,15 +2361,16 @@ private:
 		const SpotifyClientState spotify = g_spotify.state();
 		const TwitchAccountState streamer = g_streamerTwitch.state(), bot = g_botTwitch.state();
 		std::ostringstream report;
-		report << "RearSilver Stream Suite — Private Beta Feedback Report\n"
+		report << "RearSilver Stream Suite — " << RsBeta::kChannel << " Feedback Report\n"
 			<< "======================================================\n\n"
 			<< "1. Beta/build information\n"
 			<< "-------------------------\n"
 			<< "Product: " << RsBeta::kProductName << "\nChannel: " << RsBeta::kChannel
 			<< "\nVersion: " << RsBeta::kVersion << "\nBuild ID: " << RsBeta::kBuildId
-			<< "\nBuild date: " << RsBeta::kBuildDate << "\nExpiry date: " << RsBeta::kExpiryDisplay
-			<< "\nExpiry state: " << (beta.expired ? "Expired" : beta.warning ? "Warning period" : "Active")
-			<< "\nDays remaining: " << beta.daysRemaining << "\nReport created: " << localReportTime() << "\n\n"
+			<< "\nBuild date: " << RsBeta::kBuildDate
+			<< "\nExpiry date: " << (RsBeta::kExpiryEnabled ? RsBeta::kExpiryDisplay : "Not applicable")
+			<< "\nExpiry state: " << (!RsBeta::kExpiryEnabled ? "Not applicable" : beta.expired ? "Expired" : beta.warning ? "Warning period" : "Active")
+			<< "\nDays remaining: " << (RsBeta::kExpiryEnabled ? std::to_string(beta.daysRemaining) : "Not applicable") << "\nReport created: " << localReportTime() << "\n\n"
 			<< "2. Tester feedback\n"
 			<< "------------------\n"
 			<< "Category: " << field("category") << "\nSummary: " << field("summary")
@@ -2441,6 +2442,7 @@ private:
 		d->SetString("buildId", RsBeta::kBuildId);
 		d->SetString("buildDate", RsBeta::kBuildDate);
 		d->SetString("expiry", RsBeta::kExpiryDisplay);
+		d->SetBool("expiryEnabled", RsBeta::kExpiryEnabled);
 		d->SetBool("expired", RsBeta::currentState().expired);
 		d->SetBool("obsConnected", g_hostPipeConnected);
 		d->SetString("obsVersion", g_obsStudioVersion);
@@ -3209,37 +3211,41 @@ static LRESULT CALLBACK windowProc(HWND window, UINT message, WPARAM wParam, LPA
 	}
 	const RsBeta::State betaState = RsBeta::currentState();
 	const Color betaColour = betaState.expired ? Color(255, 255, 74, 87) : gold;
-	const std::wstring betaExpiryText = std::wstring(L"Expires ") + utf8ToWide(RsBeta::kExpiryDisplay);
+	const std::wstring betaExpiryText = RsBeta::kExpiryEnabled
+		? std::wstring(L"Expires ") + utf8ToWide(RsBeta::kExpiryDisplay)
+		: utf8ToWide(std::string("Version ") + RsBeta::kVersion);
+	const std::wstring betaBadgeText = betaState.expired ? L"EXPIRED" : utf8ToWide(RsBeta::kChannel);
 	if (expanded) {
 		g_betaNoticeRect = RECT{20, height - 68, sidebar - 20, height - 18};
 		roundedPanel(graphics, RectF(20, float(height - 68), float(sidebar - 40), 24), 7, accentSoft);
-		label(graphics, betaState.expired ? L"EXPIRED" : L"PRIVATE BETA", smallFont,
+		label(graphics, betaBadgeText, smallFont,
 			RectF(20, float(height - 68), float(sidebar - 40), 24), betaColour, StringAlignmentCenter);
 		label(graphics, betaExpiryText, smallFont, RectF(20, float(height - 40), float(sidebar - 40), 20), tertiary,
 			StringAlignmentCenter);
 	} else {
 		g_betaNoticeRect = RECT{18, height - 50, sidebar - 18, height - 20};
-		label(graphics, betaState.expired ? L"EXP" : L"BETA", smallFont,
+		label(graphics, betaState.expired ? L"EXP" : utf8ToWide(RsBeta::kChannel), smallFont,
 			RectF(18, float(height - 50), float(sidebar - 36), 24), betaColour, StringAlignmentCenter);
 	}
 	if (g_betaTooltipVisible && expanded) {
 		const float cardY = float(height - 198);
 		roundedPanel(graphics, RectF(18, cardY, float(sidebar - 36), 118), 10, raised);
-		label(graphics, L"PRIVATE BETA", bodyBold, RectF(30, cardY + 10, float(sidebar - 60), 22), accent);
+		label(graphics, utf8ToWide(RsBeta::kChannel), bodyBold, RectF(30, cardY + 10, float(sidebar - 60), 22), accent);
 		label(graphics, utf8ToWide(std::string("Version ") + RsBeta::kVersion), smallFont,
 			RectF(30, cardY + 35, float(sidebar - 60), 18), primary);
 		label(graphics, utf8ToWide(std::string("Build ") + RsBeta::kBuildId), smallFont,
 			RectF(30, cardY + 55, float(sidebar - 60), 18), secondary);
 		label(graphics, utf8ToWide(std::string("Built ") + RsBeta::kBuildDate), smallFont,
 			RectF(30, cardY + 75, float(sidebar - 60), 18), secondary);
-		label(graphics, betaExpiryText, smallFont, RectF(30, cardY + 95, float(sidebar - 60), 18), secondary);
+		if (RsBeta::kExpiryEnabled)
+			label(graphics, betaExpiryText, smallFont, RectF(30, cardY + 95, float(sidebar - 60), 18), secondary);
 	}
 
 	const float contentX = float(sidebar + 28), contentWidth = float(width - sidebar - 56);
 	const wchar_t *subtitles[] = {L"Your stream soundtrack at a glance", L"Manage what plays next",
 		L"Organise local music and provider playlists", L"Create a design that fits your stream",
 		L"Playback, appearance and accessibility", L"Connect Twitch identities and choose the chat sender", L"Chat controls at a glance", L"Quality-of-life tools for live production",
-		L"Guided setup and every Suite preference", L"Export private-beta feedback and privacy-redacted diagnostics"};
+		L"Guided setup and every Suite preference", L"Export feedback and privacy-redacted diagnostics"};
 	label(graphics, pages[g_page], display, RectF(contentX, 22, contentWidth, 44), primary);
 	label(graphics, subtitles[g_page], body, RectF(contentX, 64, contentWidth, 28), secondary);
 
@@ -3600,7 +3606,8 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int)
 	if (!player.initialise()) return 2;
 	HICON appIcon = static_cast<HICON>(LoadImageW(instance, MAKEINTRESOURCEW(101), IMAGE_ICON, 0, 0, LR_DEFAULTSIZE));
 	WNDCLASSW wc{}; wc.style = CS_DBLCLKS; wc.lpfnWndProc = windowProc; wc.hInstance = instance; wc.hCursor = LoadCursor(nullptr, IDC_ARROW); wc.hIcon = appIcon; wc.lpszClassName = L"RearSilverMusicPlayerWindow"; RegisterClassW(&wc);
-	HWND window = CreateWindowExW(0, wc.lpszClassName, L"RearSilver Stream Suite | Control Hub — Private Beta", WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN,
+	const std::wstring windowTitle = std::wstring(L"RearSilver Stream Suite | Control Hub — ") + utf8ToWide(RsBeta::kChannel);
+	HWND window = CreateWindowExW(0, wc.lpszClassName, windowTitle.c_str(), WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN,
 		CW_USEDEFAULT, CW_USEDEFAULT, 1120, 720, nullptr, nullptr, instance, nullptr);
 	SendMessageW(window, WM_SETICON, ICON_BIG, reinterpret_cast<LPARAM>(appIcon));
 	SendMessageW(window, WM_SETICON, ICON_SMALL, reinterpret_cast<LPARAM>(appIcon));

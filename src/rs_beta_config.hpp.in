@@ -10,6 +10,7 @@ inline constexpr const char kChannel[] = "@RS_BETA_CHANNEL@";
 inline constexpr const char kVersion[] = "@RS_BETA_VERSION@";
 inline constexpr const char kBuildId[] = "@RS_BETA_BUILD_ID@";
 inline constexpr const char kBuildDate[] = "@RS_BETA_BUILD_DATE@";
+inline constexpr bool kExpiryEnabled = @RS_BETA_EXPIRY_ENABLED_VALUE@ != 0;
 inline constexpr const char kExpiryDate[] = "@RS_BETA_EXPIRY_DATE@";
 inline constexpr const char kExpiryDisplay[] = "@RS_BETA_EXPIRY_DISPLAY@";
 
@@ -42,6 +43,8 @@ constexpr long long dayNumber(int year, unsigned month, unsigned day)
 
 inline State currentState()
 {
+	if (!kExpiryEnabled)
+		return {};
 	std::time_t now = std::time(nullptr);
 	std::tm local{};
 #ifdef _WIN32

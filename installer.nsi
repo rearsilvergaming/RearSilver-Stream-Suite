@@ -6,6 +6,9 @@ Unicode True
 !ifndef RS_ARTIFACT_ROOT
   !error "RS_ARTIFACT_ROOT must point to a clean artifacts/<profile> directory."
 !endif
+!ifndef RS_PREREQUISITE_ROOT
+  !error "RS_PREREQUISITE_ROOT must contain the verified Microsoft prerequisite installers."
+!endif
 !ifndef RS_VERSION
   !define RS_VERSION "1.0.0"
 !endif
@@ -78,8 +81,64 @@ Function .onInit
   obs_found:
 FunctionEnd
 
+Function HasWebView2Runtime
+  Push $0
+  Push $1
+  StrCpy $1 "0"
+  SetRegView 32
+  ReadRegStr $0 HKLM "Software\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}" "pv"
+  ${If} $0 != ""
+  ${AndIf} $0 != "0.0.0.0"
+    StrCpy $1 "1"
+  ${Else}
+    ReadRegStr $0 HKCU "Software\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}" "pv"
+    ${If} $0 != ""
+    ${AndIf} $0 != "0.0.0.0"
+      StrCpy $1 "1"
+    ${EndIf}
+  ${EndIf}
+  SetRegView 64
+  Pop $0
+  Exch $1
+FunctionEnd
+
+Function InstallPrerequisites
+  SetOutPath "$PLUGINSDIR"
+
+  DetailPrint "Checking Microsoft Visual C++ Runtime..."
+  File "/oname=$PLUGINSDIR\vc_redist.x64.exe" "${RS_PREREQUISITE_ROOT}\vc_redist.x64.exe"
+  ExecWait '"$PLUGINSDIR\vc_redist.x64.exe" /install /quiet /norestart' $0
+  ${If} $0 != 0
+  ${AndIf} $0 != 1638
+  ${AndIf} $0 != 3010
+    MessageBox MB_ICONSTOP|MB_OK "Microsoft Visual C++ Runtime setup failed with code $0. RearSilver Stream Suite was not installed."
+    Abort
+  ${EndIf}
+
+  Call HasWebView2Runtime
+  Pop $1
+  ${If} $1 != "1"
+    DetailPrint "Installing Microsoft Edge WebView2 Runtime..."
+    File "/oname=$PLUGINSDIR\MicrosoftEdgeWebView2RuntimeInstallerX64.exe" "${RS_PREREQUISITE_ROOT}\MicrosoftEdgeWebView2RuntimeInstallerX64.exe"
+    ExecWait '"$PLUGINSDIR\MicrosoftEdgeWebView2RuntimeInstallerX64.exe" /silent /install' $0
+    ${If} $0 != 0
+    ${AndIf} $0 != 3010
+      MessageBox MB_ICONSTOP|MB_OK "Microsoft Edge WebView2 Runtime setup failed with code $0. RearSilver Stream Suite was not installed."
+      Abort
+    ${EndIf}
+    Call HasWebView2Runtime
+    Pop $1
+    ${If} $1 != "1"
+      MessageBox MB_ICONSTOP|MB_OK "Microsoft Edge WebView2 Runtime could not be verified after installation. RearSilver Stream Suite was not installed."
+      Abort
+    ${EndIf}
+  ${EndIf}
+FunctionEnd
+
 Section "RearSilver Stream Suite" MainSection
   SetShellVarContext all
+
+  Call InstallPrerequisites
 
   ; Build inputs are checked by build-installer.ps1 and the File instructions
   ; at compile time. Installation uses embedded files, never developer paths.

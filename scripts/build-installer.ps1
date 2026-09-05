@@ -17,6 +17,44 @@ $profiles = @{
 
 $profileInfo = $profiles[$Profile]
 $artifactRoot = Join-Path $sourceDir "artifacts\$Profile"
+$prerequisiteRoot = Join-Path $sourceDir '.deps\installer-prerequisites'
+$prerequisites = @(
+    @{
+        Name = 'Microsoft Edge WebView2 Runtime (x64)'
+        Uri = 'https://go.microsoft.com/fwlink/?linkid=2124701'
+        File = 'MicrosoftEdgeWebView2RuntimeInstallerX64.exe'
+    },
+    @{
+        Name = 'Microsoft Visual C++ Redistributable (x64)'
+        Uri = 'https://aka.ms/vs/17/release/vc_redist.x64.exe'
+        File = 'vc_redist.x64.exe'
+    }
+)
+
+New-Item -ItemType Directory -Path $prerequisiteRoot -Force | Out-Null
+foreach ($prerequisite in $prerequisites) {
+    $destination = Join-Path $prerequisiteRoot $prerequisite.File
+    if (-not (Test-Path -LiteralPath $destination -PathType Leaf)) {
+        $temporary = "$destination.download"
+        Write-Output "Downloading $($prerequisite.Name) from Microsoft..."
+        try {
+            Invoke-WebRequest -Uri $prerequisite.Uri -OutFile $temporary -UseBasicParsing
+            Move-Item -LiteralPath $temporary -Destination $destination -Force
+        } finally {
+            if (Test-Path -LiteralPath $temporary) {
+                Remove-Item -LiteralPath $temporary -Force
+            }
+        }
+    }
+
+    $signature = Get-AuthenticodeSignature -LiteralPath $destination
+    if ($signature.Status -ne [System.Management.Automation.SignatureStatus]::Valid -or
+        $signature.SignerCertificate.Subject -notmatch 'Microsoft Corporation') {
+        throw "$($prerequisite.Name) is not validly signed by Microsoft: $destination"
+    }
+    Write-Output "Verified prerequisite: $($prerequisite.Name)"
+}
+
 $requiredFiles = @(
     (Join-Path $artifactRoot 'obs-plugins\64bit\RearSilver-Stream-Suite.dll'),
     (Join-Path $artifactRoot 'control-hub\RearSilver-Stream-Suite-Control-Hub.exe'),
@@ -45,7 +83,7 @@ $outputFile = Join-Path $installerDir $profileInfo.File
 Push-Location -LiteralPath $sourceDir
 try {
 	Write-Output 'NSIS is compressing the bundled Control Hub runtime. This can take several minutes without updating the console.'
-	& $makensis "/DRS_ARTIFACT_ROOT=$artifactRoot" "/DRS_VERSION=$($profileInfo.Version)" "/DRS_CHANNEL=$($profileInfo.Channel)" "/DRS_OUTPUT_FILE=$outputFile" '.\installer.nsi'
+	& $makensis "/DRS_ARTIFACT_ROOT=$artifactRoot" "/DRS_PREREQUISITE_ROOT=$prerequisiteRoot" "/DRS_VERSION=$($profileInfo.Version)" "/DRS_CHANNEL=$($profileInfo.Channel)" "/DRS_OUTPUT_FILE=$outputFile" '.\installer.nsi'
     if ($LASTEXITCODE -ne 0) {
         exit $LASTEXITCODE
     }

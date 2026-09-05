@@ -3186,7 +3186,13 @@ static LRESULT CALLBACK windowProc(HWND window, UINT message, WPARAM wParam, LPA
 	graphics.FillRectangle(&sidebarBrush, 0, 0, sidebar, height);
 	roundedPanel(graphics, RectF(14, 16, float(sidebar - 28), 62), 12, raised);
 	if (expanded && g_brandHeaderImage && g_brandHeaderImage->GetLastStatus() == Ok) {
-		graphics.DrawImage(g_brandHeaderImage.get(), 20.0f, 21.0f, 168.0f, 52.5f);
+		const float boxX = 20.0f, boxY = 21.0f, boxWidth = 168.0f, boxHeight = 52.5f;
+		const float imageWidth = static_cast<float>(g_brandHeaderImage->GetWidth());
+		const float imageHeight = static_cast<float>(g_brandHeaderImage->GetHeight());
+		const float scale = std::min(boxWidth / imageWidth, boxHeight / imageHeight);
+		const float drawWidth = imageWidth * scale, drawHeight = imageHeight * scale;
+		graphics.DrawImage(g_brandHeaderImage.get(), boxX + (boxWidth - drawWidth) / 2.0f,
+			boxY + (boxHeight - drawHeight) / 2.0f, drawWidth, drawHeight);
 	} else if (g_brandIconImage && g_brandIconImage->GetLastStatus() == Ok) {
 		graphics.DrawImage(g_brandIconImage.get(), 22.0f, 24.0f, 46.0f, 46.0f);
 	} else {

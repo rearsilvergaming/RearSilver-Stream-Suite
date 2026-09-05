@@ -76,6 +76,7 @@
       "description": "Unrestricted personal streaming and development build",
       "binaryDir": "${sourceDir}/build_owner",
       "cacheVariables": {
+		"BUILD_TESTING": false,
         "RS_DEFAULT_EDITION": "pro",
         "RS_BETA_CHANNEL": "Owner Build",
         "RS_BETA_VERSION": "1.0.0-owner",
@@ -90,6 +91,7 @@
       "description": "Fully unlocked private beta with fixed expiry and diagnostics",
       "binaryDir": "${sourceDir}/build_beta",
       "cacheVariables": {
+		"BUILD_TESTING": false,
         "RS_DEFAULT_EDITION": "pro",
         "RS_BETA_CHANNEL": "Private Beta",
         "RS_BETA_VERSION": "1.0.0-beta.1",
@@ -106,6 +108,7 @@
       "description": "Permanent Free-edition build profile",
       "binaryDir": "${sourceDir}/build_free",
       "cacheVariables": {
+		"BUILD_TESTING": false,
         "RS_DEFAULT_EDITION": "free",
         "RS_BETA_CHANNEL": "Free",
         "RS_BETA_VERSION": "1.0.0",
@@ -120,6 +123,7 @@
       "description": "Permanent Pro-edition build profile",
       "binaryDir": "${sourceDir}/build_pro",
       "cacheVariables": {
+		"BUILD_TESTING": false,
         "RS_DEFAULT_EDITION": "pro",
         "RS_BETA_CHANNEL": "Pro",
         "RS_BETA_VERSION": "1.0.0",

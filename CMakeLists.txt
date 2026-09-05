@@ -25,13 +25,13 @@ endif()
 configure_file(src/rs_beta_config.hpp.in "${CMAKE_CURRENT_BINARY_DIR}/generated/rs_beta_config.hpp" @ONLY)
 
 if(BUILD_TESTING)
-	add_executable(RearSilver-Music-Hub-Tests
+	add_executable(RearSilver-Stream-Suite-Tests
 		tests/music_hub_tests.cpp
 		src/music_player/music_hub.cpp)
-	target_include_directories(RearSilver-Music-Hub-Tests PRIVATE src/music_player)
-	set_target_properties(RearSilver-Music-Hub-Tests PROPERTIES
+	target_include_directories(RearSilver-Stream-Suite-Tests PRIVATE src/music_player)
+	set_target_properties(RearSilver-Stream-Suite-Tests PROPERTIES
 		CXX_STANDARD 17 CXX_STANDARD_REQUIRED YES)
-	add_test(NAME RearSilver-Music-Hub-Tests COMMAND RearSilver-Music-Hub-Tests)
+	add_test(NAME RearSilver-Stream-Suite-Tests COMMAND RearSilver-Stream-Suite-Tests)
 endif()
 
 set(RS_DEFAULT_EDITION "pro" CACHE STRING "Default product edition: free or pro")
@@ -66,6 +66,13 @@ if(WIN32)
 endif()
 
 if(WIN32)
+	if(RS_ARTIFACT_DIR)
+		set(RS_PLUGIN_ARTIFACT_DIR "${RS_ARTIFACT_DIR}/obs-plugins/64bit")
+		set(RS_HUB_ARTIFACT_DIR "${RS_ARTIFACT_DIR}/control-hub")
+	else()
+		set(RS_PLUGIN_ARTIFACT_DIR "")
+		set(RS_HUB_ARTIFACT_DIR "")
+	endif()
 	set(RS_CEF_POC_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/third_party/cef_poc")
 	set(RS_CEF_SDK_ROOT "${RS_CEF_POC_ROOT}/sdk/CEF")
 	set(RS_CEF_RUNTIME_ROOT "${RS_CEF_POC_ROOT}/runtime")
@@ -106,8 +113,12 @@ if(WIN32)
 		MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 	if(RS_ARTIFACT_DIR)
 		set_target_properties(RearSilver-Stream-Suite-Control-Hub PROPERTIES
-			RUNTIME_OUTPUT_DIRECTORY "${RS_ARTIFACT_DIR}"
-			RUNTIME_OUTPUT_DIRECTORY_RELWITHDEBINFO "${RS_ARTIFACT_DIR}")
+			RUNTIME_OUTPUT_DIRECTORY "${RS_HUB_ARTIFACT_DIR}"
+			RUNTIME_OUTPUT_DIRECTORY_RELWITHDEBINFO "${RS_HUB_ARTIFACT_DIR}"
+			PDB_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/symbols"
+			PDB_OUTPUT_DIRECTORY_RELWITHDEBINFO "${CMAKE_CURRENT_BINARY_DIR}/symbols/RelWithDebInfo"
+			COMPILE_PDB_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/symbols"
+			COMPILE_PDB_OUTPUT_DIRECTORY_RELWITHDEBINFO "${CMAKE_CURRENT_BINARY_DIR}/symbols/RelWithDebInfo")
 	endif()
 	if(MSVC)
 		target_compile_options(RearSilver-Stream-Suite-Control-Hub PRIVATE /utf-8)
@@ -171,6 +182,11 @@ if(WIN32)
 		COMMAND "${CMAKE_COMMAND}" -E copy_if_different
 			"${RS_CEF_RUNTIME_ROOT}/CEF/win-x64/locales/en-US.pak"
 			"$<TARGET_FILE_DIR:RearSilver-Stream-Suite-Control-Hub>/locales/en-US.pak"
+		COMMAND "${CMAKE_COMMAND}" -E make_directory
+			"$<TARGET_FILE_DIR:RearSilver-Stream-Suite-Control-Hub>/qt-plugins/tls"
+		COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+			"${RS_QT_SCHANNEL_BACKEND}"
+			"$<TARGET_FILE_DIR:RearSilver-Stream-Suite-Control-Hub>/qt-plugins/tls/qschannelbackend.dll"
 		COMMENT "Package CEF runtime and Control Hub surfaces"
 		VERBATIM)
 endif()
@@ -331,24 +347,28 @@ set_target_properties(${PROJECT_NAME}
 
 if(RS_ARTIFACT_DIR)
 	set_target_properties(${PROJECT_NAME} PROPERTIES
-		RUNTIME_OUTPUT_DIRECTORY "${RS_ARTIFACT_DIR}"
-		RUNTIME_OUTPUT_DIRECTORY_RELWITHDEBINFO "${RS_ARTIFACT_DIR}"
-		LIBRARY_OUTPUT_DIRECTORY "${RS_ARTIFACT_DIR}"
-		LIBRARY_OUTPUT_DIRECTORY_RELWITHDEBINFO "${RS_ARTIFACT_DIR}")
+		RUNTIME_OUTPUT_DIRECTORY "${RS_PLUGIN_ARTIFACT_DIR}"
+		RUNTIME_OUTPUT_DIRECTORY_RELWITHDEBINFO "${RS_PLUGIN_ARTIFACT_DIR}"
+		LIBRARY_OUTPUT_DIRECTORY "${RS_PLUGIN_ARTIFACT_DIR}"
+		LIBRARY_OUTPUT_DIRECTORY_RELWITHDEBINFO "${RS_PLUGIN_ARTIFACT_DIR}"
+		PDB_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/symbols"
+		PDB_OUTPUT_DIRECTORY_RELWITHDEBINFO "${CMAKE_CURRENT_BINARY_DIR}/symbols/RelWithDebInfo"
+		COMPILE_PDB_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/symbols"
+		COMPILE_PDB_OUTPUT_DIRECTORY_RELWITHDEBINFO "${CMAKE_CURRENT_BINARY_DIR}/symbols/RelWithDebInfo")
 endif()
 
 if(WIN32)
 	add_dependencies(${PROJECT_NAME} RearSilver-Stream-Suite-Control-Hub)
-	add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
-		COMMAND "${CMAKE_COMMAND}" -E copy_if_different
-			"$<TARGET_FILE:RearSilver-Stream-Suite-Control-Hub>" "$<TARGET_FILE_DIR:${PROJECT_NAME}>"
-		COMMAND "${CMAKE_COMMAND}" -E make_directory
-			"$<TARGET_FILE_DIR:${PROJECT_NAME}>/RearSilver-Stream-Suite/qt-plugins/tls"
-		COMMAND "${CMAKE_COMMAND}" -E copy_if_different
-			"${RS_QT_SCHANNEL_BACKEND}"
-			"$<TARGET_FILE_DIR:${PROJECT_NAME}>/RearSilver-Stream-Suite/qt-plugins/tls/qschannelbackend.dll"
-		COMMENT "Package RearSilver Stream Suite Control Hub and private Qt TLS backend"
-		VERBATIM)
+	if(RS_ARTIFACT_DIR)
+		add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
+			COMMAND "${CMAKE_COMMAND}" -E make_directory
+				"${RS_ARTIFACT_DIR}/data/obs-plugins/RearSilver-Stream-Suite/locale"
+			COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+				"${CMAKE_CURRENT_SOURCE_DIR}/data/locale/en-GB.ini"
+				"${RS_ARTIFACT_DIR}/data/obs-plugins/RearSilver-Stream-Suite/locale/en-GB.ini"
+			COMMENT "Stage RearSilver Stream Suite OBS data"
+			VERBATIM)
+	endif()
 endif()
 
 # Force UTF-8 for MSVC (fixes C4828 warnings)

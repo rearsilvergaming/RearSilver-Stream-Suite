@@ -29,6 +29,7 @@
 #include "rs_stream_overlay_server.hpp"
 #include "rs_stream_timer.hpp"
 #include "rs_beta_config.hpp"
+#include "rs_install_paths.hpp"
 
 // ---------------------------------------------
 // OBS module boilerplate
@@ -142,13 +143,17 @@ static void rs_try_add_obs_qt_plugins_path()
 	const QString appDir = QCoreApplication::applicationDirPath();
 	blog(LOG_INFO, "[RS Music] Qt applicationDirPath = %s", appDir.toUtf8().constData());
 
-// Prefer a plugin-local Qt plugins folder (sellable + does not depend on OBS shipping Qt plugins)
-	// Expected layout:
-	//   obs-plugins/64bit/RearSilver-Stream-Suite/qt-plugins/tls/...
-	const QString pluginLocalPluginsDir =
+	// Prefer the separately installed Suite runtime. Retain the old private
+	// OBS-side path only while migrating existing manual deployments.
+	const QString legacyPluginsDir =
 		QDir(appDir).filePath("../../obs-plugins/64bit/RearSilver-Stream-Suite/qt-plugins");
-
-	const QString pluginsDir = pluginLocalPluginsDir;
+	QString pluginsDir = legacyPluginsDir;
+	const QString installedHub = RsInstallPaths::controlHubDirectory();
+	if (!installedHub.isEmpty()) {
+		const QString installedPluginsDir = QDir(installedHub).filePath("qt-plugins");
+		if (QFileInfo(QDir(installedPluginsDir).filePath("tls/qschannelbackend.dll")).isFile())
+			pluginsDir = installedPluginsDir;
+	}
 	blog(LOG_INFO, "[RS Music] Checking for Qt plugins dir: %s", pluginsDir.toUtf8().constData());
 
 	if (QDir(pluginsDir).exists()) {

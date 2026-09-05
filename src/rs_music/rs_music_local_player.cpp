@@ -3,6 +3,7 @@
 #include "state/rs_music_track.hpp"
 #include "enhancements/rs_auto_start.hpp"
 #include "rs_beta_config.hpp"
+#include "rs_install_paths.hpp"
 
 #include <QCoreApplication>
 #include <QCryptographicHash>
@@ -116,10 +117,14 @@ QString RsMusicLocalPlayer::companionPath() const
 	const QString executable = "RearSilver-Stream-Suite-Control-Hub";
 #endif
 	const QString applicationDir = QCoreApplication::applicationDirPath();
-	const QStringList candidates = {
+	QStringList candidates;
+	const QString installedHub = RsInstallPaths::controlHubDirectory();
+	if (!installedHub.isEmpty())
+		candidates.push_back(QDir(installedHub).filePath(executable));
+	candidates.append({
 		QDir(applicationDir).filePath(executable),
 		QDir(applicationDir).filePath(QString("../../obs-plugins/64bit/%1").arg(executable)),
-		QDir(applicationDir).filePath(QString("../../obs-plugins/64bit/RearSilver-Stream-Suite/%1").arg(executable))};
+		QDir(applicationDir).filePath(QString("../../obs-plugins/64bit/RearSilver-Stream-Suite/%1").arg(executable))});
 	for (const QString &candidate : candidates) {
 		if (QFileInfo::exists(candidate))
 			return QFileInfo(candidate).absoluteFilePath();

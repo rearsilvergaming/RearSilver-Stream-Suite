@@ -1,4 +1,4 @@
-RearSilver Stream Suite
+﻿RearSilver Stream Suite
 Software Licence Agreement
 
 Copyright © 2025 RearSilver.

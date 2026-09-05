@@ -1,137 +1,157 @@
-; ----------------------------------------
-; RearSilver Stream Suite Installer
-; Modern UI 2 – CLEAN BASE
-; ----------------------------------------
-
 Unicode True
 !include "MUI2.nsh"
+!include "FileFunc.nsh"
+!include "LogicLib.nsh"
 
-; ----------------------------------------
-; Product Info
-; ----------------------------------------
-Name "RearSilver Stream Suite"
-!define PRODUCT_VERSION "1.0.0"
+!ifndef RS_ARTIFACT_ROOT
+  !error "RS_ARTIFACT_ROOT must point to a clean artifacts/<profile> directory."
+!endif
+!ifndef RS_VERSION
+  !define RS_VERSION "1.0.0"
+!endif
+!ifndef RS_CHANNEL
+  !define RS_CHANNEL "Release"
+!endif
+!ifndef RS_OUTPUT_FILE
+  !define RS_OUTPUT_FILE "RearSilver-Stream-Suite-Setup.exe"
+!endif
+
+!define PRODUCT_NAME "RearSilver Stream Suite"
 !define PRODUCT_PUBLISHER "RearSilver Gaming"
 !define PRODUCT_WEB_SITE "https://github.com/rearsilvergaming/RearSilver-Stream-Suite"
+!define PRODUCT_REG_KEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\RearSilver Stream Suite"
 
-; ----------------------------------------
-; Output + Icons (ORDER MATTERS)
-; ----------------------------------------
+Name "${PRODUCT_NAME} | ${RS_CHANNEL}"
+OutFile "${RS_OUTPUT_FILE}"
+InstallDir "$PROGRAMFILES64\RearSilver Stream Suite"
+InstallDirRegKey HKLM "${PRODUCT_REG_KEY}" "InstallLocation"
+RequestExecutionLevel admin
+SetCompressor /SOLID lzma
+SetCompressorDictSize 64
+ManifestDPIAware true
+
 !define MUI_ICON "assets\branding\rearsilver-stream-suite.ico"
-
-; Top header (right-side header area)
+!define MUI_UNICON "assets\branding\rearsilver-stream-suite.ico"
 !define MUI_HEADERIMAGE
 !define MUI_HEADERIMAGE_BITMAP "assets\branding\installer-header.bmp"
-
-; Left-side big image (Welcome + Finish)
 !define MUI_WELCOMEFINISHPAGE_BITMAP "assets\branding\installer-welcome.bmp"
-; Optional (uncomment if you don’t want it stretched/cropped)
-; !define MUI_WELCOMEFINISHPAGE_BITMAP_NOSTRETCH
-
-OutFile "RearSilver Stream Suite.exe"
-
-; ----------------------------------------
-; Install target
-; ----------------------------------------
-InstallDir "$PROGRAMFILES64\obs-studio"
-RequestExecutionLevel admin
-
-; ----------------------------------------
-; Project root (the installer script lives in this directory)
-; ----------------------------------------
-!define SOURCE_DIR "${__FILEDIR__}"
-
-; ----------------------------------------
-; UI Behaviour
-; ----------------------------------------
 !define MUI_ABORTWARNING
 !define MUI_FINISHPAGE_NOAUTOCLOSE
-
-; Header text (this DOES work)
 !define MUI_HEADER_TEXT "RearSilver Stream Suite"
-!define MUI_HEADER_SUBTEXT "Professional OBS Dock"
-
-BrandingText "RearSilver Stream Suite | RearSilver Gaming"
-
-; ----------------------------------------
-; Pages (TEXT CONTENT)
-; ----------------------------------------
-
-; --- WELCOME: big bold heading (top) ---
+!define MUI_HEADER_SUBTEXT "OBS tools and the Control Hub"
 !define MUI_WELCOMEPAGE_TITLE "Welcome to RearSilver Stream Suite"
 !define MUI_WELCOMEPAGE_TITLE_3LINES
-
-; --- WELCOME: paragraph body (under the title) ---
-!define MUI_WELCOMEPAGE_TEXT "This setup will install RearSilver Stream Suite into OBS Studio.$\r$\n$\r$\n\
-It is designed to feel calm, clean, and professional with quick-access \
-enhancements and theme support.$\r$\n$\r$\n\
-Click Next to continue."
-
-; --- FINISH: big bold heading (top) ---
-!define MUI_FINISHPAGE_TITLE "RearSilver Stream Suite is now installed"
+!define MUI_WELCOMEPAGE_TEXT "This setup installs RearSilver Stream Suite ${RS_VERSION} (${RS_CHANNEL}).$\r$\n$\r$\nThe OBS plugin and Control Hub are installed as one managed product and can be updated or removed cleanly. Close OBS Studio and the Control Hub before continuing."
+!define MUI_FINISHPAGE_TITLE "RearSilver Stream Suite is ready"
 !define MUI_FINISHPAGE_TITLE_3LINES
-
-; --- FINISH: paragraph body ---
-!define MUI_FINISHPAGE_TEXT "RearSilver Stream Suite has been successfully installed.$\r$\n$\r$\n\
-Restart OBS to begin using the dock.$\r$\n$\r$\n\
-We really hope you enjoy using RearSilver Stream Suite and if you do, tell your friends!"
-
-; ----------------------------------------
-; Launch OBS (KEEPING YOUR EXISTING SETUP)
-; ----------------------------------------
+!define MUI_FINISHPAGE_TEXT "RearSilver Stream Suite has been installed successfully.$\r$\n$\r$\nStart OBS Studio to open the Suite dock and Control Hub."
 !define MUI_FINISHPAGE_RUN
 !define MUI_FINISHPAGE_RUN_TEXT "Launch OBS Studio"
 !define MUI_FINISHPAGE_RUN_FUNCTION LaunchOBS
 
-; ----------------------------------------
-; Pages (INSTALL ONLY)
-; ----------------------------------------
 !insertmacro MUI_PAGE_WELCOME
 !insertmacro MUI_PAGE_LICENSE "License.txt"
 !insertmacro MUI_PAGE_DIRECTORY
 !insertmacro MUI_PAGE_INSTFILES
 !insertmacro MUI_PAGE_FINISH
-
-; ----------------------------------------
-; Language (MUST be AFTER pages)
-; ----------------------------------------
+!insertmacro MUI_UNPAGE_CONFIRM
+!insertmacro MUI_UNPAGE_INSTFILES
+!insertmacro MUI_UNPAGE_FINISH
 !insertmacro MUI_LANGUAGE "English"
 
-; ----------------------------------------
-; Install Section
-; ----------------------------------------
-Section "RearSilver Stream Suite"
+Var ObsDir
 
-  ; Ensure OBS plugin directory exists
-  CreateDirectory "$INSTDIR\obs-plugins\64bit"
+Function FindObsDirectory
+  StrCpy $ObsDir "$PROGRAMFILES64\obs-studio"
+  ReadRegStr $0 HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\OBS Studio" "InstallLocation"
+  ${If} $0 != ""
+    StrCpy $ObsDir $0
+  ${EndIf}
+FunctionEnd
 
-  ; Safety check
-  IfFileExists "${SOURCE_DIR}\build_validation\RelWithDebInfo\RearSilver-Stream-Suite.dll" +2
-    Abort "RearSilver-Stream-Suite.dll not found. Build the plugin first."
+Function .onInit
+  SetRegView 64
+  Call FindObsDirectory
+  IfFileExists "$ObsDir\bin\64bit\obs64.exe" obs_found
+    MessageBox MB_ICONSTOP|MB_OK "OBS Studio could not be found at $ObsDir. Install the 64-bit version of OBS Studio before installing RearSilver Stream Suite."
+    Abort
+  obs_found:
+FunctionEnd
 
-; Copy plugin
-SetOutPath "$INSTDIR\obs-plugins\64bit"
-; Remove the obsolete pre-beta companion name before installing the Control Hub.
-Delete "$INSTDIR\obs-plugins\64bit\RearSilver-Music-Player.exe"
-File "${SOURCE_DIR}\build_validation\RelWithDebInfo\RearSilver-Stream-Suite.dll"
-File "${SOURCE_DIR}\build_validation\RelWithDebInfo\RearSilver-Stream-Suite-Control-Hub.exe"
+Section "RearSilver Stream Suite" MainSection
+  SetShellVarContext all
 
-; Private Qt TLS backend used for Twitch authentication, IRC and artwork downloads
-CreateDirectory "$INSTDIR\obs-plugins\64bit\RearSilver-Stream-Suite\qt-plugins\tls"
-SetOutPath "$INSTDIR\obs-plugins\64bit\RearSilver-Stream-Suite\qt-plugins\tls"
-File "${SOURCE_DIR}\build_validation\RelWithDebInfo\RearSilver-Stream-Suite\qt-plugins\tls\qschannelbackend.dll"
+  ; Build inputs are checked by build-installer.ps1 and the File instructions
+  ; at compile time. Installation uses embedded files, never developer paths.
 
-; Copy plugin localisation data
-CreateDirectory "$INSTDIR\data\obs-plugins\RearSilver-Stream-Suite\locale"
-SetOutPath "$INSTDIR\data\obs-plugins\RearSilver-Stream-Suite\locale"
-File "${SOURCE_DIR}\data\locale\en-GB.ini"
+  CreateDirectory "$ObsDir\obs-plugins\64bit"
+  SetOutPath "$ObsDir\obs-plugins\64bit"
+  File "${RS_ARTIFACT_ROOT}\obs-plugins\64bit\RearSilver-Stream-Suite.dll"
 
+  ; Legacy manual deployments left these private directories behind. Never
+  ; recurse: non-empty directories must be preserved for separate review.
+  RMDir "$ObsDir\obs-plugins\64bit\RearSilver-Stream-Suite\qt-plugins\tls"
+  RMDir "$ObsDir\obs-plugins\64bit\RearSilver-Stream-Suite\qt-plugins"
+  RMDir "$ObsDir\obs-plugins\64bit\RearSilver-Stream-Suite"
+  ClearErrors
 
+  CreateDirectory "$ObsDir\data\obs-plugins\RearSilver-Stream-Suite\locale"
+  SetOutPath "$ObsDir\data\obs-plugins\RearSilver-Stream-Suite\locale"
+  File "${RS_ARTIFACT_ROOT}\data\obs-plugins\RearSilver-Stream-Suite\locale\en-GB.ini"
+
+  RMDir /r "$INSTDIR\Control Hub"
+  SetOutPath "$INSTDIR\Control Hub"
+  File /r "${RS_ARTIFACT_ROOT}\control-hub\*.*"
+
+  WriteUninstaller "$INSTDIR\Uninstall.exe"
+  CreateDirectory "$SMPROGRAMS\RearSilver Stream Suite"
+  CreateShortcut "$SMPROGRAMS\RearSilver Stream Suite\RearSilver Stream Suite - Control Hub.lnk" "$INSTDIR\Control Hub\RearSilver-Stream-Suite-Control-Hub.exe"
+  CreateShortcut "$SMPROGRAMS\RearSilver Stream Suite\Uninstall RearSilver Stream Suite.lnk" "$INSTDIR\Uninstall.exe"
+
+  WriteRegStr HKLM "${PRODUCT_REG_KEY}" "DisplayName" "${PRODUCT_NAME} (${RS_CHANNEL})"
+  WriteRegStr HKLM "${PRODUCT_REG_KEY}" "DisplayVersion" "${RS_VERSION}"
+  WriteRegStr HKLM "${PRODUCT_REG_KEY}" "Publisher" "${PRODUCT_PUBLISHER}"
+  WriteRegStr HKLM "${PRODUCT_REG_KEY}" "URLInfoAbout" "${PRODUCT_WEB_SITE}"
+  WriteRegStr HKLM "${PRODUCT_REG_KEY}" "DisplayIcon" "$INSTDIR\Control Hub\RearSilver-Stream-Suite-Control-Hub.exe"
+  WriteRegStr HKLM "${PRODUCT_REG_KEY}" "InstallLocation" "$INSTDIR"
+  WriteRegStr HKLM "${PRODUCT_REG_KEY}" "OBSInstallLocation" "$ObsDir"
+  WriteRegStr HKLM "${PRODUCT_REG_KEY}" "UninstallString" '"$INSTDIR\Uninstall.exe"'
+  WriteRegStr HKLM "${PRODUCT_REG_KEY}" "QuietUninstallString" '"$INSTDIR\Uninstall.exe" /S'
+  WriteRegDWORD HKLM "${PRODUCT_REG_KEY}" "NoModify" 1
+  WriteRegDWORD HKLM "${PRODUCT_REG_KEY}" "NoRepair" 1
 SectionEnd
 
-; ----------------------------------------
-; Functions
-; ----------------------------------------
+Section "Uninstall"
+  SetShellVarContext all
+  SetRegView 64
+  ReadRegStr $ObsDir HKLM "${PRODUCT_REG_KEY}" "OBSInstallLocation"
+
+  ${If} $ObsDir != ""
+    Delete "$ObsDir\obs-plugins\64bit\RearSilver-Stream-Suite.dll"
+    RMDir "$ObsDir\obs-plugins\64bit\RearSilver-Stream-Suite\qt-plugins\tls"
+    RMDir "$ObsDir\obs-plugins\64bit\RearSilver-Stream-Suite\qt-plugins"
+    RMDir "$ObsDir\obs-plugins\64bit\RearSilver-Stream-Suite"
+    ClearErrors
+    Delete "$ObsDir\data\obs-plugins\RearSilver-Stream-Suite\locale\en-GB.ini"
+    RMDir "$ObsDir\data\obs-plugins\RearSilver-Stream-Suite\locale"
+    RMDir "$ObsDir\data\obs-plugins\RearSilver-Stream-Suite"
+  ${EndIf}
+
+  RMDir /r "$INSTDIR\Control Hub"
+  Delete "$SMPROGRAMS\RearSilver Stream Suite\RearSilver Stream Suite - Control Hub.lnk"
+  Delete "$SMPROGRAMS\RearSilver Stream Suite\Uninstall RearSilver Stream Suite.lnk"
+  RMDir "$SMPROGRAMS\RearSilver Stream Suite"
+  Delete "$INSTDIR\Uninstall.exe"
+  RMDir "$INSTDIR"
+  DeleteRegKey HKLM "${PRODUCT_REG_KEY}"
+SectionEnd
+
 Function LaunchOBS
-  Exec '"$INSTDIR\bin\64bit\obs64.exe"'
+  ; OBS resolves its data/locale paths relative to its binary directory.
+  ; Do not inherit the Control Hub extraction directory from installation.
+  SetOutPath "$ObsDir\bin\64bit"
+  ClearErrors
+  Exec '"$ObsDir\bin\64bit\obs64.exe"'
+  IfErrors 0 +2
+    MessageBox MB_ICONEXCLAMATION|MB_OK "Setup could not launch OBS Studio. You can open it from your normal shortcut."
 FunctionEnd

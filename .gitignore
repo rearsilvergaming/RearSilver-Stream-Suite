@@ -13,6 +13,15 @@
 /services/youtube-resolver/node_modules/
 /services/youtube-resolver/.wrangler/
 
+# Generated documentation-image working files and export bundles
+/assets/hub-images/preview/
+/assets/hub-images/native-originals/
+/assets/hub-images/contact-sheet.jpg
+/assets/hub-images/index.html
+/assets/hub-images/manifest.json
+/assets/hub-images/publication-candidates.zip
+/assets/publication-candidates.zip
+
 # Generated installers and debugging artefacts
 /*.exe
 /*.dll

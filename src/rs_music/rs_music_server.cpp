@@ -107,6 +107,11 @@ void RsMusicServer::readRequest(QTcpSocket *socket)
 	if (target == "/music-overlay" || target == "/") {
 		QFile file(":/rs/music/overlay/music-overlay.html");
 		if (file.open(QIODevice::ReadOnly)) payload = response("text/html; charset=utf-8", file.readAll());
+	} else if (target == "/fonts/Sora-Variable.ttf") {
+		// OBS browser sources are separate Chromium processes. Qt's private
+		// application font is not available there; serve the embedded font.
+		QFile file(":/rs/branding/Sora-Variable.ttf");
+		if (file.open(QIODevice::ReadOnly)) payload = response("font/ttf", file.readAll());
 	} else if (target == "/api/state") {
 		payload = response("application/json", stateJson());
 	} else if (target == "/api/config") {

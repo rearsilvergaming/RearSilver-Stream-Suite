@@ -76,14 +76,22 @@ if (-not $makensis) {
     throw 'NSIS 3.x was not found. Install NSIS or add makensis.exe to PATH.'
 }
 
+# Compare against the version actually bundled, not a permanently hardcoded
+# runtime version. An unknown version falls back to running the prerequisite.
+$vcRuntimeInfo = (Get-Item -LiteralPath (Join-Path $prerequisiteRoot 'vc_redist.x64.exe')).VersionInfo
+$vcRuntimeVersion = if ($vcRuntimeInfo.FileVersionRaw) { $vcRuntimeInfo.FileVersionRaw.ToString() } else { '0' }
+if ($vcRuntimeVersion -notmatch '^\d+\.\d+\.\d+\.\d+$') { $vcRuntimeVersion = '0' }
+
 $installerDir = Join-Path $artifactRoot 'installer'
 New-Item -ItemType Directory -Path $installerDir -Force | Out-Null
 $outputFile = Join-Path $installerDir $profileInfo.File
+$installerSource = Join-Path $sourceDir 'installer.nsi'
+$installerChannel = $profileInfo.Channel
 
 Push-Location -LiteralPath $sourceDir
 try {
-	Write-Output 'NSIS is compressing the bundled Control Hub runtime. This can take several minutes without updating the console.'
-	& $makensis "/DRS_ARTIFACT_ROOT=$artifactRoot" "/DRS_PREREQUISITE_ROOT=$prerequisiteRoot" "/DRS_VERSION=$($profileInfo.Version)" "/DRS_CHANNEL=$($profileInfo.Channel)" "/DRS_OUTPUT_FILE=$outputFile" '.\installer.nsi'
+	Write-Output 'Packaging the bundled Control Hub runtime...'
+	& $makensis /NOCD "/DRS_ARTIFACT_ROOT=$artifactRoot" "/DRS_PREREQUISITE_ROOT=$prerequisiteRoot" "/DRS_VERSION=$($profileInfo.Version)" "/DRS_CHANNEL=$installerChannel" "/DRS_OUTPUT_FILE=$outputFile" "/DRS_VC_RUNTIME_MIN_VERSION=$vcRuntimeVersion" $installerSource
     if ($LASTEXITCODE -ne 0) {
         exit $LASTEXITCODE
     }

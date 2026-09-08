@@ -6,11 +6,16 @@ html,body,#pages{width:100%;height:100%;margin:0;overflow:hidden;background:#0b0
 #pages{position:relative}
 .page{position:absolute;inset:0;width:100%;height:100%;margin:0;border:0;display:none;background:#0b0f14}
 .page.active{display:block}
+#loading{position:absolute;inset:0;z-index:2;padding:30px;background:#0b0f14;color:#b2bdcc;font:15px "Segoe UI",sans-serif}#loading[hidden]{display:none}
 </style></head>
-<body><div id="pages"></div><script>
+<body><div id="pages"></div><div id="loading" role="status" aria-live="polite">Loading Control Hub…</div><script>
 const pages=document.getElementById('pages');
+const loading=document.getElementById('loading');
 const frames=new Map();
+let warming=false;
 let activeFrame=null;
+let pendingFrame=null;
+let loadingTimer=null;
 
 // Child pages live in same-origin iframes. Route their commands through this
 // single top-level WebView2 surface so native code receives one message stream.
@@ -30,7 +35,7 @@ function createPage(url){
 
 let readinessGeneration=0;
 function announceWhenReady(frame,functionName,readyMessage,generation,attempt=0){
-  if(generation!==readinessGeneration||frame!==activeFrame)return;
+  if(generation!==readinessGeneration||frame!==pendingFrame)return;
   try{
     const target=frame.contentWindow;
     if(target&&typeof target[functionName]==='function'){
@@ -38,18 +43,35 @@ function announceWhenReady(frame,functionName,readyMessage,generation,attempt=0)
       return;
     }
   }catch(_){}
-  if(attempt<100)setTimeout(()=>announceWhenReady(frame,functionName,readyMessage,generation,attempt+1),50);
+  if(attempt===100)loading.textContent='This page is taking longer to load…';
+  setTimeout(()=>announceWhenReady(frame,functionName,readyMessage,generation,attempt+1),attempt<100?50:1000);
 }
 
+function activatePage(frame){
+  if(frame!==pendingFrame)return;
+  if(loadingTimer){clearTimeout(loadingTimer);loadingTimer=null}
+  if(activeFrame&&activeFrame!==frame)activeFrame.classList.remove('active');
+  activeFrame=frame;
+  pendingFrame=null;
+  activeFrame.classList.add('active');
+  loading.hidden=true;
+}
+function waitWithoutFlashing(){
+  if(loadingTimer){clearTimeout(loadingTimer);loadingTimer=null}
+  if(!activeFrame){loading.hidden=false;return}
+  loading.hidden=true;
+  loadingTimer=setTimeout(()=>{
+    loadingTimer=null;
+    if(pendingFrame){loading.textContent='Loading page…';loading.hidden=false}
+  },150);
+}
 window.rsShowPage=function(url,functionName,readyMessage){
   if(!url)return;
   const next=createPage(url);
-  if(activeFrame!==next){
-    if(activeFrame)activeFrame.classList.remove('active');
-    activeFrame=next;
-    activeFrame.classList.add('active');
-  }
+  pendingFrame=next;
   const generation=++readinessGeneration;
+  if(next.rsConfigured){activatePage(next);return}
+  waitWithoutFlashing();
   if(functionName&&readyMessage)announceWhenReady(next,functionName,readyMessage,generation);
 };
 window.rsInvokeAll=function(name,value){
@@ -60,8 +82,18 @@ window.rsInvokeAll=function(name,value){
       if(target&&typeof target[name]==='function'){
         target[name](value);
         handled=true;
+        if(!frame.rsConfigured){
+          frame.rsConfigured=true;
+        }
+        if(frame===pendingFrame)activatePage(frame); if(frame===activeFrame)warmPages()
       }
-    }catch(_){}
+    }catch(_){
+      if(!frame.rsErrorReported){
+        frame.rsErrorReported=true;
+        window.chrome.webview.postMessage('hub-page-error:'+new URL(frame.src).pathname);
+      }
+      if(frame===pendingFrame){if(loadingTimer){clearTimeout(loadingTimer);loadingTimer=null}loading.textContent='This page could not finish loading. Try another page and return, or reopen the Hub.';loading.hidden=false}
+    }
   }
   return handled;
 };
@@ -74,10 +106,18 @@ for(const name of ['rsApplyLibrary','rsApplyConfig','rsApplyCommands','rsApplyTo
 
 window.chrome.webview.postMessage('hub-ready');
 
-// Warm the remaining Hub pages after first paint. They remain ordinary DOM
-// iframes inside this one WebView2 controller; navigation only changes CSS.
-setTimeout(()=>{
-  for(const name of ['stream-tools','library','overlay-designer','suite-settings','commands'])
-    createPage('https://rearsilver.local/'+name+'.html');
-},250);
+// Start background loading only after the active page has received its
+// configuration. Stagger it so old machines can paint the requested page first.
+function warmPages(){
+  if(warming)return;
+  warming=true;
+  const remaining=['stream-tools','library','overlay-designer','suite-settings','commands','feedback-diagnostics'];
+  const next=()=>{
+    const name=remaining.shift();
+    if(!name)return;
+    createPage('https://app.rearsilver.test/'+name+'.html');
+    if(remaining.length)setTimeout(next,700);
+  };
+  setTimeout(next,700);
+}
 </script></body></html>

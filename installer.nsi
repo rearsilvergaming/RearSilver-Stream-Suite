@@ -2,6 +2,11 @@ Unicode True
 !include "MUI2.nsh"
 !include "FileFunc.nsh"
 !include "LogicLib.nsh"
+!include "WordFunc.nsh"
+
+!ifndef RS_VC_RUNTIME_MIN_VERSION
+  !define RS_VC_RUNTIME_MIN_VERSION "0"
+!endif
 
 !ifndef RS_ARTIFACT_ROOT
   !error "RS_ARTIFACT_ROOT must point to a clean artifacts/<profile> directory."
@@ -29,7 +34,7 @@ OutFile "${RS_OUTPUT_FILE}"
 InstallDir "$PROGRAMFILES64\RearSilver Stream Suite"
 InstallDirRegKey HKLM "${PRODUCT_REG_KEY}" "InstallLocation"
 RequestExecutionLevel admin
-SetCompressor /SOLID lzma
+SetCompressor lzma
 SetCompressorDictSize 64
 ManifestDPIAware true
 
@@ -63,6 +68,7 @@ ManifestDPIAware true
 !insertmacro MUI_LANGUAGE "English"
 
 Var ObsDir
+Var InstallInstance
 
 Function FindObsDirectory
   StrCpy $ObsDir "$PROGRAMFILES64\obs-studio"
@@ -106,7 +112,26 @@ Function InstallPrerequisites
   SetOutPath "$PLUGINSDIR"
 
   DetailPrint "Checking Microsoft Visual C++ Runtime..."
+  StrCpy $3 "1"
+  ReadRegDWORD $0 HKLM "SOFTWARE\Microsoft\VisualStudio\14.0\VC\Runtimes\x64" "Installed"
+  ReadRegStr $1 HKLM "SOFTWARE\Microsoft\VisualStudio\14.0\VC\Runtimes\x64" "Version"
+  ${If} $0 == 1
+  ${AndIf} $1 != ""
+  ${AndIf} "${RS_VC_RUNTIME_MIN_VERSION}" != "0"
+    StrCpy $2 $1 1
+    ${If} $2 == "v"
+      StrCpy $1 $1 "" 1
+    ${EndIf}
+    ${VersionCompare} $1 "${RS_VC_RUNTIME_MIN_VERSION}" $2
+    ${If} $2 == 0
+    ${OrIf} $2 == 1
+      StrCpy $3 "0"
+    ${EndIf}
+  ${EndIf}
+  ${If} $3 == "1"
+  DetailPrint "Extracting Microsoft Visual C++ installer..."
   File "/oname=$PLUGINSDIR\vc_redist.x64.exe" "${RS_PREREQUISITE_ROOT}\vc_redist.x64.exe"
+  DetailPrint "Installing Microsoft Visual C++ Runtime; please wait..."
   ExecWait '"$PLUGINSDIR\vc_redist.x64.exe" /install /quiet /norestart' $0
   ${If} $0 != 0
   ${AndIf} $0 != 1638
@@ -114,11 +139,15 @@ Function InstallPrerequisites
     MessageBox MB_ICONSTOP|MB_OK "Microsoft Visual C++ Runtime setup failed with code $0. RearSilver Stream Suite was not installed."
     Abort
   ${EndIf}
+  ${Else}
+    DetailPrint "Microsoft Visual C++ Runtime $1 is already suitable; skipping installation."
+  ${EndIf}
 
+  DetailPrint "Checking Microsoft Edge WebView2 Runtime..."
   Call HasWebView2Runtime
   Pop $1
   ${If} $1 != "1"
-    DetailPrint "Installing Microsoft Edge WebView2 Runtime..."
+    DetailPrint "Extracting and installing Microsoft Edge WebView2 Runtime; this may take a few minutes..."
     File "/oname=$PLUGINSDIR\MicrosoftEdgeWebView2RuntimeInstallerX64.exe" "${RS_PREREQUISITE_ROOT}\MicrosoftEdgeWebView2RuntimeInstallerX64.exe"
     ExecWait '"$PLUGINSDIR\MicrosoftEdgeWebView2RuntimeInstallerX64.exe" /silent /install' $0
     ${If} $0 != 0
@@ -132,17 +161,29 @@ Function InstallPrerequisites
       MessageBox MB_ICONSTOP|MB_OK "Microsoft Edge WebView2 Runtime could not be verified after installation. RearSilver Stream Suite was not installed."
       Abort
     ${EndIf}
+  ${Else}
+    DetailPrint "Microsoft Edge WebView2 Runtime is already installed."
   ${EndIf}
 FunctionEnd
 
 Section "RearSilver Stream Suite" MainSection
   SetShellVarContext all
 
+  ; Preserve the installation identity on upgrade. A missing installation
+  ; gets a new identity even when the user's saved settings still exist.
+  ReadRegStr $InstallInstance HKLM "${PRODUCT_REG_KEY}" "InstallInstance"
+  IfFileExists "$INSTDIR\Control Hub\RearSilver-Stream-Suite-Control-Hub.exe" 0 fresh_install_identity
+  StrCmp $InstallInstance "" fresh_install_identity install_identity_ready
+  fresh_install_identity:
+    ${GetTime} "" "L" $0 $1 $2 $3 $4 $5 $6
+    StrCpy $InstallInstance "$2$1$0-$4$5$6"
+  install_identity_ready:
   Call InstallPrerequisites
 
   ; Build inputs are checked by build-installer.ps1 and the File instructions
   ; at compile time. Installation uses embedded files, never developer paths.
 
+  DetailPrint "Installing RearSilver OBS plugin and Control Hub files..."
   CreateDirectory "$ObsDir\obs-plugins\64bit"
   SetOutPath "$ObsDir\obs-plugins\64bit"
   File "${RS_ARTIFACT_ROOT}\obs-plugins\64bit\RearSilver-Stream-Suite.dll"
@@ -161,13 +202,14 @@ Section "RearSilver Stream Suite" MainSection
   RMDir /r "$INSTDIR\Control Hub"
   SetOutPath "$INSTDIR\Control Hub"
   File /r "${RS_ARTIFACT_ROOT}\control-hub\*.*"
-
+  DetailPrint "Creating shortcuts and completing installation..."
   WriteUninstaller "$INSTDIR\Uninstall.exe"
   CreateDirectory "$SMPROGRAMS\RearSilver Stream Suite"
   CreateShortcut "$SMPROGRAMS\RearSilver Stream Suite\RearSilver Stream Suite - Control Hub.lnk" "$INSTDIR\Control Hub\RearSilver-Stream-Suite-Control-Hub.exe"
   CreateShortcut "$SMPROGRAMS\RearSilver Stream Suite\Uninstall RearSilver Stream Suite.lnk" "$INSTDIR\Uninstall.exe"
 
   WriteRegStr HKLM "${PRODUCT_REG_KEY}" "DisplayName" "${PRODUCT_NAME} (${RS_CHANNEL})"
+  WriteRegStr HKLM "${PRODUCT_REG_KEY}" "InstallInstance" "$InstallInstance"
   WriteRegStr HKLM "${PRODUCT_REG_KEY}" "DisplayVersion" "${RS_VERSION}"
   WriteRegStr HKLM "${PRODUCT_REG_KEY}" "Publisher" "${PRODUCT_PUBLISHER}"
   WriteRegStr HKLM "${PRODUCT_REG_KEY}" "URLInfoAbout" "${PRODUCT_WEB_SITE}"

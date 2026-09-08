@@ -9,6 +9,7 @@
 #include <objidl.h>
 #include <shobjidl.h>
 #include <gdiplus.h>
+#include "native_ui_font.hpp"
 #include <dwrite.h>
 #include <wrl.h>
 
@@ -67,6 +68,7 @@ using Microsoft::WRL::ComPtr;
 
 static std::string wideToUtf8(const std::wstring &value);
 
+static NativeUiFont g_nativeUiFont;
 static std::mutex g_traceMutex;
 static std::wstring g_tracePath;
 static ULONGLONG g_traceStarted = 0;
@@ -1155,6 +1157,8 @@ static TwitchAccount g_streamerTwitch("streamer"), g_botTwitch("bot");
 static TwitchChatService g_twitchReader("reader"), g_twitchSender("sender");
 static bool g_closeRequested = false;
 static int g_page = RsBeta::currentState().expired ? 9 : 7;
+static bool g_setupReviewPending = false;
+static std::wstring g_installInstance;
 static std::string g_streamerAuthState = "disconnected", g_streamerLogin;
 static std::string g_botAuthState = "disconnected", g_botLogin, g_authSender = "streamer";
 static std::string g_obsStudioVersion, g_pluginVersion;
@@ -1635,7 +1639,8 @@ static const std::vector<std::wstring> &installedFontFamilies()
 				}
 			}
 		}
-		if (found.empty()) found = {L"Arial", L"Calibri", L"Segoe UI", L"Sora"};
+		// Sora is bundled for the Hub, Qt replay renderer and browser overlays.
+		// Every other choice must come from the real Windows font collection.
 		if (std::none_of(found.begin(), found.end(), [](const std::wstring &family) {
 			return _wcsicmp(family.c_str(), L"Sora") == 0;
 		})) found.emplace_back(L"Sora");
@@ -1968,13 +1973,15 @@ public:
 								traceLog("webview-overlay-process-failed", "kind=" + std::to_string(static_cast<int>(kind)));
 								return S_OK;
 							}).Get(), &processFailedToken);
-						ComPtr<ICoreWebView2_3> webView3; if (SUCCEEDED(m_webView.As(&webView3))) webView3->SetVirtualHostNameToFolderMapping(L"rearsilver.local", folder.c_str(), COREWEBVIEW2_HOST_RESOURCE_ACCESS_KIND_ALLOW);
+						ComPtr<ICoreWebView2_3> webView3; if (SUCCEEDED(m_webView.As(&webView3))) webView3->SetVirtualHostNameToFolderMapping(L"app.rearsilver.test", folder.c_str(), COREWEBVIEW2_HOST_RESOURCE_ACCESS_KIND_ALLOW);
 						ComPtr<ICoreWebView2Settings> settings; if (SUCCEEDED(m_webView->get_Settings(&settings))) { settings->put_AreDefaultContextMenusEnabled(FALSE); settings->put_AreDevToolsEnabled(FALSE); settings->put_IsZoomControlEnabled(FALSE); }
 						EventRegistrationToken token{}; m_webView->add_WebMessageReceived(
 							Callback<ICoreWebView2WebMessageReceivedEventHandler>([this](ICoreWebView2 *, ICoreWebView2WebMessageReceivedEventArgs *args) -> HRESULT {
 								wchar_t *raw = nullptr; if (FAILED(args->TryGetWebMessageAsString(&raw)) || !raw) return S_OK;
-								const std::string message = wideToUtf8(raw); CoTaskMemFree(raw);
+								const std::string message = wideToUtf8(raw);
+								CoTaskMemFree(raw);
 								if (message == "hub-ready") { showCurrentPage(); return S_OK; }
+								if (message.rfind("hub-page-error:", 0) == 0) { traceLog("hub-page-warning", message.substr(15)); return S_OK; }
 								// A message from the document being replaced may arrive after the next
 								// page has been selected. Never let that stale message mark the new page
 								// ready or it can remain stuck showing its default/disconnected state.
@@ -2003,7 +2010,18 @@ public:
 									sendSuiteSettingsConfig();return S_OK;
 								}
 								if(object->GetString("page").ToString()=="suiteSettings"){
-									if(object->GetString("action").ToString()=="saveState"){
+									if(object->GetString("action").ToString()=="dismissSetupReview"){
+										g_setupReviewPending = false;
+										if (!g_installInstance.empty()) setMusicSetting(L"suiteSettings.installInstance", g_installInstance);
+									}
+									else if(object->GetString("action").ToString()=="keepSavedSetup"){
+										g_setupReviewPending = false;
+										if (!g_installInstance.empty()) setMusicSetting(L"suiteSettings.installInstance", g_installInstance);
+										showPage(7);
+									}
+									else if(object->GetString("action").ToString()=="saveState"){
+										g_setupReviewPending = false;
+										if (!g_installInstance.empty()) setMusicSetting(L"suiteSettings.installInstance", g_installInstance);
 										CefRefPtr<CefDictionaryValue> value=object->GetDictionary("value");
 										if(value){setMusicSetting(L"suiteSettings.setupCompleted",value->GetBool("completed")?L"true":L"false");setMusicSetting(L"suiteSettings.setupStep",std::to_wstring(std::clamp(value->GetInt("step"),0,4)));setMusicSetting(L"suiteSettings.setupSchemaVersion",std::to_wstring(std::max(1,value->GetInt("schemaVersion"))));}
 									}
@@ -2116,7 +2134,7 @@ public:
 								if(g_hostPipeConnected){std::lock_guard<std::mutex>lock(g_hostEventMutex);g_hostEvents.push_back("HOST\tTOOL\tmusicOverlayRefresh\t\"\"\n");}
 								return S_OK;
 							}).Get(), &token);
-						m_webView->Navigate(L"https://rearsilver.local/hub-surface.html");
+						m_webView->Navigate(L"https://app.rearsilver.test/hub-surface.html");
 						resize(); m_page=-1; showPage(g_page); return S_OK;
 					}).Get());
 			}).Get());
@@ -2178,7 +2196,7 @@ private:
 		const wchar_t *readyMessage = m_page == 2 ? L"library-ready" : m_page == 3 ? L"ready" :
 			m_page == 6 ? L"commands-ready" :
 			m_page == 8 ? L"suite-settings-ready" : m_page == 9 ? L"feedback-diagnostics-ready" : L"tools-ready";
-		const std::wstring script = L"window.rsShowPage&&window.rsShowPage('https://rearsilver.local/" + std::wstring(name) +
+		const std::wstring script = L"window.rsShowPage&&window.rsShowPage('https://app.rearsilver.test/" + std::wstring(name) +
 			L"','" + functionName + L"','" + readyMessage + L"')";
 		m_webView->ExecuteScript(script.c_str(), nullptr);
 	}
@@ -2303,6 +2321,7 @@ private:
 			return;
 
 		CefRefPtr<CefDictionaryValue> d = CefDictionaryValue::Create();
+		d->SetBool("setupReviewPending", g_setupReviewPending);
 		d->SetBool("setupCompleted", musicBool(L"suiteSettings.setupCompleted", false));
 		d->SetInt("setupStep", std::clamp(_wtoi(musicSetting(L"suiteSettings.setupStep", L"0").c_str()), 0, 4));
 		d->SetInt("setupSchemaVersion", std::max(1, _wtoi(musicSetting(L"suiteSettings.setupSchemaVersion", L"1").c_str())));
@@ -2546,7 +2565,7 @@ static void drawBrandedButton(const DRAWITEMSTRUCT &item)
 	roundedPanel(graphics, RectF(float(item.rcItem.left), float(item.rcItem.top), float(item.rcItem.right-item.rcItem.left), float(item.rcItem.bottom-item.rcItem.top)), 7.0f, fill);
 	Pen border(selected ? Color(255, 0, 212, 255) : Color(255, 55, 70, 91), selected ? 1.5f : 1.0f);
 	graphics.DrawRectangle(&border, RectF(float(item.rcItem.left)+0.5f, float(item.rcItem.top)+0.5f, float(item.rcItem.right-item.rcItem.left)-1.0f, float(item.rcItem.bottom-item.rcItem.top)-1.0f));
-	wchar_t text[256]{}; GetWindowTextW(item.hwndItem, text, 256); FontFamily family(L"Sora"); Font font(&family, 14, FontStyleBold, UnitPixel);
+	wchar_t text[256]{}; GetWindowTextW(item.hwndItem, text, 256); const FontFamily &family = g_nativeUiFont.family(); Font font(&family, 14, FontStyleBold, UnitPixel);
 	label(graphics, text, font, RectF(float(item.rcItem.left)+12, float(item.rcItem.top), float(item.rcItem.right-item.rcItem.left)-24, float(item.rcItem.bottom-item.rcItem.top)), disabled ? Color(255, 93, 111, 139) : Color(255, 230, 232, 235), StringAlignmentCenter);
 }
 
@@ -2576,7 +2595,7 @@ static LRESULT CALLBACK legacyWindowProc(HWND window, UINT message, WPARAM wPara
 		SetViewportOrgEx(bufferDc, -paint.rcPaint.left, -paint.rcPaint.top, nullptr);
 		Graphics graphics(bufferDc); graphics.SetSmoothingMode(SmoothingModeHighQuality); graphics.Clear(Color(255, 12, 12, 18));
 		SolidBrush white(Color(255, 230, 232, 235)), muted(Color(255, 164, 175, 194)), accent(Color(255, 0, 212, 255));
-		FontFamily family(L"Sora"); Font titleFont(&family, 22, FontStyleBold, UnitPixel), bodyFont(&family, 16, FontStyleRegular, UnitPixel), smallFont(&family, 13, FontStyleRegular, UnitPixel);
+		const FontFamily &family = g_nativeUiFont.family(); Font titleFont(&family, 22, FontStyleBold, UnitPixel), bodyFont(&family, 16, FontStyleRegular, UnitPixel), smallFont(&family, 13, FontStyleRegular, UnitPixel);
 		const int width = client.right - client.left, artSize = std::min(width - 48, 360), artX = (width - artSize) / 2, artY = 24;
 		if (g_player && g_player->artwork() && g_player->artwork()->GetLastStatus() == Ok)
 			graphics.DrawImage(g_player->artwork(), artX, artY, artSize, artSize);
@@ -3173,7 +3192,7 @@ static LRESULT CALLBACK windowProc(HWND window, UINT message, WPARAM wParam, LPA
 	const Color primary(255, 230, 232, 235), secondary(255, 178, 189, 204), tertiary(255, 112, 130, 151);
 	const Color accent(255, 0, 212, 255), accentSoft(56, 0, 212, 255), signalBlue(255, 10, 140, 255), gold(255, 255, 184, 0);
 	const Color surface(255, 17, 24, 33), raised(255, 30, 36, 48), border(255, 48, 59, 74);
-	FontFamily family(L"Sora");
+	const FontFamily &family = g_nativeUiFont.family();
 	Font display(&family, 28, FontStyleBold, UnitPixel), heading(&family, 20, FontStyleBold, UnitPixel);
 	Font body(&family, 15, FontStyleRegular, UnitPixel), bodyBold(&family, 15, FontStyleBold, UnitPixel);
 	Font smallFont(&family, 12, FontStyleRegular, UnitPixel);
@@ -3256,7 +3275,11 @@ static LRESULT CALLBACK windowProc(HWND window, UINT message, WPARAM wParam, LPA
 	label(graphics, subtitles[g_page], body, RectF(contentX, 64, contentWidth, 28), secondary);
 
 	const bool videoVisible = g_youtubePlayer && g_youtubePlayer->active() && g_page == 0;
-	if (g_page == 0 && !videoVisible) {
+	const bool webOwnedPage = g_page == 2 || g_page == 3 || g_page == 6 || g_page == 7 || g_page == 8 || g_page == 9;
+	if (webOwnedPage) {
+		// The single WebView2 surface owns this page body. Keep the native layer blank
+		// underneath it so startup and page transitions cannot expose retired UI.
+	} else if (g_page == 0 && !videoVisible) {
 		const float cardY = 108, cardHeight = float(transportTop) - cardY - 20;
 		roundedPanel(graphics, RectF(contentX, cardY, contentWidth, cardHeight), 16, surface);
 		const float artSize = std::max(170.0f, std::min(420.0f, std::min(cardHeight - 48, contentWidth * 0.40f)));
@@ -3555,6 +3578,22 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int)
 		CloseHandle(singleInstance);
 		return 0;
 	}
+	// The installer keeps this marker across upgrades, replaces it after an
+	// uninstall, and never changes per-user settings. Each Windows user gets
+	// their own acknowledgement of a reinstallation.
+	wchar_t installInstance[128]{};
+	DWORD instanceBytes = sizeof(installInstance);
+	if (RegGetValueW(HKEY_LOCAL_MACHINE,
+		L"Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\RearSilver Stream Suite",
+		L"InstallInstance", RRF_RT_REG_SZ | RRF_SUBKEY_WOW6464KEY, nullptr,
+		installInstance, &instanceBytes) == ERROR_SUCCESS)
+		g_installInstance = installInstance;
+	const bool setupCompleted = musicBool(L"suiteSettings.setupCompleted", false);
+	g_setupReviewPending = setupCompleted && !g_installInstance.empty() &&
+		musicSetting(L"suiteSettings.installInstance", L"") != g_installInstance;
+	g_page = RsBeta::currentState().expired ? 9 : (!setupCompleted || g_setupReviewPending ? 8 : 7);
+	traceLog("startup-page", std::string("page=") + std::to_string(g_page) +
+		" review=" + (g_setupReviewPending ? "1" : "0"));
 	const HRESULT comResult = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
 	{
 		std::ostringstream detail; detail << "hr=0x" << std::hex << static_cast<unsigned long>(comResult);
@@ -3562,7 +3601,15 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int)
 	}
 	GdiplusStartupInput gdiplusInput; ULONG_PTR gdiplusToken = 0; GdiplusStartup(&gdiplusToken, &gdiplusInput, nullptr);
 	const std::wstring soraPath = executableAssetPath(L"Sora-Variable.ttf");
-	AddFontResourceExW(soraPath.c_str(), FR_PRIVATE, nullptr);
+	const int gdiFontCount = AddFontResourceExW(soraPath.c_str(), FR_PRIVATE, nullptr);
+	const auto privateFontStatus = g_nativeUiFont.initialise(soraPath.c_str());
+	{
+		std::ostringstream detail;
+		detail << "gdi_count=" << gdiFontCount << " gdiplus_status=" << static_cast<int>(privateFontStatus)
+		       << " bundled=" << (g_nativeUiFont.bundled() ? 1 : 0)
+		       << " family=" << (g_nativeUiFont.bundled() ? "Sora" : "system-fallback");
+		traceLog(g_nativeUiFont.bundled() ? "native-ui-font-ready" : "native-ui-font-warning", detail.str());
+	}
 	g_brandIconImage.reset(Image::FromFile(executableAssetPath(L"suite-app-icon.png").c_str()));
 	g_brandHeaderImage.reset(Image::FromFile(executableAssetPath(L"suite-header.png").c_str()));
 	g_splashImage.reset(Image::FromFile(executableAssetPath(L"suite-splash.png").c_str()));
@@ -3603,7 +3650,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int)
 	if (!CefInitialize(cefMainArgs, cefSettings, cefApp, nullptr)) {
 		traceLog("cef-initialise-failed");
 		if (splash) DestroyWindow(splash); RemoveFontResourceExW(soraPath.c_str(), FR_PRIVATE, nullptr);
-		GdiplusShutdown(gdiplusToken); CoUninitialize(); return 1;
+		g_nativeUiFont.reset(); GdiplusShutdown(gdiplusToken); CoUninitialize(); return 1;
 	}
 	traceLog("cef-initialise-complete");
 	auto playerOwner = std::make_unique<Player>();
@@ -3963,5 +4010,5 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int)
 	lifecycleLog("clean-exit");
 	traceProcessMemory();
 	traceLog("process-exit-clean");
-	GdiplusShutdown(gdiplusToken); CoUninitialize(); ReleaseMutex(singleInstance); CloseHandle(singleInstance); return 0;
+	g_nativeUiFont.reset(); GdiplusShutdown(gdiplusToken); CoUninitialize(); ReleaseMutex(singleInstance); CloseHandle(singleInstance); return 0;
 }

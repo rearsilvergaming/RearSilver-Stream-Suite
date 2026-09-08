@@ -1,0 +1,30 @@
+# Keep source files stable across Windows and CI checkouts. These explicit
+# rules avoid rewriting unrelated legacy files that still contain mixed EOLs.
+.gitattributes text eol=lf
+*.cpp text eol=lf
+*.h text eol=lf
+*.hpp text eol=lf
+*.html text eol=lf
+*.js text eol=lf
+*.json text eol=lf
+*.md text eol=lf
+*.nsi text eol=lf
+*.ps1 text eol=lf
+*.py text eol=lf
+*.svg text eol=lf
+*.txt text eol=lf
+
+# Windows command scripts require Windows line endings.
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# Binary assets must never be line-ending normalised.
+*.ai binary
+*.bmp binary
+*.ico binary
+*.jpg binary
+*.jpeg binary
+*.png binary
+*.psd binary
+*.ttf binary
+*.zip binary

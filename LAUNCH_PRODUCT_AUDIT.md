@@ -598,8 +598,9 @@ Secondary action: **See everything it can do**
 
 The following remain intentionally outside version 1.0 unless a launch-critical dependency emerges:
 
-- Playing With Viewers.
-- Raffles and giveaways.
+- A live participation queue (working name: Playing With Viewers). Viewers join and leave through chat and can request the current queue. Streamers and moderators open or close entries and call one or more participants through configurable commands. The Hub selects either the next people in order or random people, according to the streamer's chosen mode. Commands can optionally accept activity from the streamer's channel only or from shared chat where the connected platforms make that possible. This tool does not require an on-stream overlay.
+- Raffles and giveaways. Entrants form a list from which the Hub draws one or more winners, including ranked winners such as first, second and third place. Unlike the participation queue, this tool should offer viewer-facing draw overlays, with possible presentations such as a spinning wheel. Exact visual options remain to be designed.
+- Shoutouts. Streamers should be able to design and trigger viewer-facing shoutout overlays, including separate presentations with a channel clip and without a clip. The command, moderation, clip-selection and fallback behaviour remain to be designed.
 - Additional command-driven stream games or audience systems.
 - New music providers.
 - General feature expansion beyond the audited launch set.

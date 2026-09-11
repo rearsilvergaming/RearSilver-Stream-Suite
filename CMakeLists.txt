@@ -10,6 +10,8 @@ set(RS_BETA_VERSION "1.0.0-beta.1" CACHE STRING "Private beta version displayed 
 option(RS_BETA_EXPIRY_ENABLED "Enforce the configured private beta expiry date" ON)
 set(RS_BETA_EXPIRY_DATE "2026-10-31" CACHE STRING "Private beta expiry date in YYYY-MM-DD format")
 set(RS_BETA_EXPIRY_DISPLAY "31 October 2026" CACHE STRING "Human-readable private beta expiry date")
+option(RS_UPDATE_CHECK_ENABLED "Enable update detection in this build variant" OFF)
+set(RS_UPDATE_BASE_URL "" CACHE STRING "HTTPS origin serving RearSilver update manifests")
 set(RS_ARTIFACT_DIR "" CACHE PATH "Optional directory used to stage this build variant")
 if(NOT RS_BETA_EXPIRY_DATE MATCHES "^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]$")
 	message(FATAL_ERROR "RS_BETA_EXPIRY_DATE must use YYYY-MM-DD format.")
@@ -22,12 +24,18 @@ if(RS_BETA_EXPIRY_ENABLED)
 else()
 	set(RS_BETA_EXPIRY_ENABLED_VALUE 0)
 endif()
+if(RS_UPDATE_CHECK_ENABLED)
+	set(RS_UPDATE_CHECK_ENABLED_VALUE 1)
+else()
+	set(RS_UPDATE_CHECK_ENABLED_VALUE 0)
+endif()
 configure_file(src/rs_beta_config.hpp.in "${CMAKE_CURRENT_BINARY_DIR}/generated/rs_beta_config.hpp" @ONLY)
 
 if(BUILD_TESTING)
 	add_executable(RearSilver-Stream-Suite-Tests
 		tests/music_hub_tests.cpp
-		src/music_player/music_hub.cpp)
+		src/music_player/music_hub.cpp
+		src/music_player/update_version.cpp)
 	target_include_directories(RearSilver-Stream-Suite-Tests PRIVATE src/music_player)
 	set_target_properties(RearSilver-Stream-Suite-Tests PROPERTIES
 		CXX_STANDARD 17 CXX_STANDARD_REQUIRED YES)
@@ -86,8 +94,15 @@ if(WIN32)
 		MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 	add_executable(RearSilver-Stream-Suite-Control-Hub WIN32 src/music_player/main.cpp src/music_player/music_hub.cpp
 		src/music_player/youtube_resolver.cpp src/music_player/local_library.cpp
+		src/music_player/update_service.cpp src/music_player/update_version.cpp src/music_player/update_download.cpp
 		src/music_player/system_media_provider.cpp src/music_player/spotify_client.cpp
 		src/music_player/twitch_accounts.cpp src/music_player/twitch_chat_service.cpp src/music_player/app.rc)
+	add_executable(RearSilver-Stream-Suite-Updater WIN32 src/updater/updater_main.cpp)
+	target_link_libraries(RearSilver-Stream-Suite-Updater PRIVATE Shell32.lib)
+	target_compile_definitions(RearSilver-Stream-Suite-Updater PRIVATE UNICODE _UNICODE)
+	set_target_properties(RearSilver-Stream-Suite-Updater PROPERTIES
+		CXX_STANDARD 17 CXX_STANDARD_REQUIRED YES
+		MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 	target_include_directories(RearSilver-Stream-Suite-Control-Hub PRIVATE
 		"${CMAKE_CURRENT_BINARY_DIR}/generated"
 		"${CMAKE_CURRENT_SOURCE_DIR}/third_party/miniaudio"
@@ -119,7 +134,11 @@ if(WIN32)
 			PDB_OUTPUT_DIRECTORY_RELWITHDEBINFO "${CMAKE_CURRENT_BINARY_DIR}/symbols/RelWithDebInfo"
 			COMPILE_PDB_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/symbols"
 			COMPILE_PDB_OUTPUT_DIRECTORY_RELWITHDEBINFO "${CMAKE_CURRENT_BINARY_DIR}/symbols/RelWithDebInfo")
+		set_target_properties(RearSilver-Stream-Suite-Updater PROPERTIES
+			RUNTIME_OUTPUT_DIRECTORY "${RS_HUB_ARTIFACT_DIR}"
+			RUNTIME_OUTPUT_DIRECTORY_RELWITHDEBINFO "${RS_HUB_ARTIFACT_DIR}")
 	endif()
+	add_dependencies(RearSilver-Stream-Suite-Control-Hub RearSilver-Stream-Suite-Updater)
 	if(MSVC)
 		target_compile_options(RearSilver-Stream-Suite-Control-Hub PRIVATE /utf-8)
 	endif()
@@ -375,5 +394,3 @@ endif()
 if (MSVC)
     target_compile_options(${PROJECT_NAME} PRIVATE /utf-8 /FS)
 endif()
-
-

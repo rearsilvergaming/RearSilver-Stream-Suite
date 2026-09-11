@@ -9,14 +9,29 @@ $ErrorActionPreference = 'Stop'
 $sourceDir = Split-Path -Parent $PSScriptRoot
 
 $profiles = @{
-    'owner' = @{ Version = '1.0.0-owner'; Channel = 'Owner Build'; File = 'RearSilver-Stream-Suite-Owner-Setup.exe' }
-    'private-beta' = @{ Version = '1.0.0-beta.1'; Channel = 'Private Beta'; File = 'RearSilver-Stream-Suite-Private-Beta-Setup.exe' }
-    'free' = @{ Version = '1.0.0'; Channel = 'Free'; File = 'RearSilver-Stream-Suite-Free-Setup.exe' }
-    'pro' = @{ Version = '1.0.0'; Channel = 'Pro'; File = 'RearSilver-Stream-Suite-Pro-Setup.exe' }
+    'owner' = @{ Name = 'Owner' }
+    'private-beta' = @{ Name = 'Private-Beta' }
+    'free' = @{ Name = 'Free' }
+    'pro' = @{ Name = 'Pro' }
 }
 
 $profileInfo = $profiles[$Profile]
-$artifactRoot = Join-Path $sourceDir "artifacts\$Profile"
+$presetName = "windows-$Profile"
+$presets = Get-Content -LiteralPath (Join-Path $sourceDir 'CMakePresets.json') -Raw | ConvertFrom-Json
+$preset = $presets.configurePresets | Where-Object { $_.name -eq $presetName } | Select-Object -First 1
+if (-not $preset) {
+    throw "Configure preset '$presetName' was not found."
+}
+$version = [string] $preset.cacheVariables.RS_BETA_VERSION
+$installerChannel = [string] $preset.cacheVariables.RS_BETA_CHANNEL
+if ([string]::IsNullOrWhiteSpace($version) -or [string]::IsNullOrWhiteSpace($installerChannel)) {
+    throw "Configure preset '$presetName' must define RS_BETA_VERSION and RS_BETA_CHANNEL."
+}
+$artifactRoot = Join-Path $sourceDir "artifacts\$Profile\$version"
+$presetArtifactRoot = [System.IO.Path]::GetFullPath(([string] $preset.cacheVariables.RS_ARTIFACT_DIR).Replace('${sourceDir}', $sourceDir))
+if ($presetArtifactRoot -ne [System.IO.Path]::GetFullPath($artifactRoot)) {
+    throw "Configure preset '$presetName' must stage artifacts in '$artifactRoot'."
+}
 $prerequisiteRoot = Join-Path $sourceDir '.deps\installer-prerequisites'
 $prerequisites = @(
     @{
@@ -58,6 +73,7 @@ foreach ($prerequisite in $prerequisites) {
 $requiredFiles = @(
     (Join-Path $artifactRoot 'obs-plugins\64bit\RearSilver-Stream-Suite.dll'),
     (Join-Path $artifactRoot 'control-hub\RearSilver-Stream-Suite-Control-Hub.exe'),
+    (Join-Path $artifactRoot 'control-hub\RearSilver-Stream-Suite-Updater.exe'),
     (Join-Path $artifactRoot 'data\obs-plugins\RearSilver-Stream-Suite\locale\en-GB.ini')
 )
 foreach ($requiredFile in $requiredFiles) {
@@ -84,14 +100,13 @@ if ($vcRuntimeVersion -notmatch '^\d+\.\d+\.\d+\.\d+$') { $vcRuntimeVersion = '0
 
 $installerDir = Join-Path $artifactRoot 'installer'
 New-Item -ItemType Directory -Path $installerDir -Force | Out-Null
-$outputFile = Join-Path $installerDir $profileInfo.File
+$outputFile = Join-Path $installerDir "RearSilver-Stream-Suite-$($profileInfo.Name)-$version-Setup.exe"
 $installerSource = Join-Path $sourceDir 'installer.nsi'
-$installerChannel = $profileInfo.Channel
 
 Push-Location -LiteralPath $sourceDir
 try {
 	Write-Output 'Packaging the bundled Control Hub runtime...'
-	& $makensis /NOCD "/DRS_ARTIFACT_ROOT=$artifactRoot" "/DRS_PREREQUISITE_ROOT=$prerequisiteRoot" "/DRS_VERSION=$($profileInfo.Version)" "/DRS_CHANNEL=$installerChannel" "/DRS_OUTPUT_FILE=$outputFile" "/DRS_VC_RUNTIME_MIN_VERSION=$vcRuntimeVersion" $installerSource
+	& $makensis /NOCD "/DRS_ARTIFACT_ROOT=$artifactRoot" "/DRS_PREREQUISITE_ROOT=$prerequisiteRoot" "/DRS_VERSION=$version" "/DRS_CHANNEL=$installerChannel" "/DRS_OUTPUT_FILE=$outputFile" "/DRS_VC_RUNTIME_MIN_VERSION=$vcRuntimeVersion" $installerSource
     if ($LASTEXITCODE -ne 0) {
         exit $LASTEXITCODE
     }

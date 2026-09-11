@@ -1,5 +1,6 @@
 #include "music_hub.hpp"
 #include "local_order.hpp"
+#include "update_version.hpp"
 
 #include <algorithm>
 #include <cstdlib>
@@ -36,6 +37,24 @@ void requireIds(const std::vector<HubTrack> &tracks, std::initializer_list<const
 	size_t index = 0;
 	for (const char *id : expected)
 		require(tracks[index++].id == id, message);
+}
+
+void updateVersionsFollowSemanticPrecedence()
+{
+	int comparison = 0;
+	require(compareUpdateVersions("1.0.0-beta.2", "1.0.0-beta.1", comparison) && comparison > 0,
+		"new beta iteration is newer");
+	require(compareUpdateVersions("1.0.0-beta.10", "1.0.0-beta.2", comparison) && comparison > 0,
+		"numeric prerelease identifiers are not compared lexically");
+	require(compareUpdateVersions("1.0.0", "1.0.0-beta.10", comparison) && comparison > 0,
+		"stable release follows prerelease");
+	require(compareUpdateVersions("1.2.3+build.9", "1.2.3+build.2", comparison) && comparison == 0,
+		"build metadata does not affect precedence");
+	require(!compareUpdateVersions("1.0", "1.0.0", comparison), "incomplete versions are rejected");
+	require(!compareUpdateVersions("1.0.0-beta.01", "1.0.0", comparison),
+		"numeric prerelease identifiers with leading zeroes are rejected");
+	require(updateChannelSlug("Private Beta") == "private-beta", "display channel maps to API slug");
+	require(updateChannelSlug("Owner Build") == "owner-build", "owner channel maps to isolated API slug");
 }
 
 void requestsOutrankHistoryAndFallback()
@@ -259,6 +278,7 @@ void localPathsUseNaturalAlbumAndDiscOrder()
 
 int main()
 {
+	updateVersionsFollowSemanticPrecedence();
 	requestsOutrankHistoryAndFallback();
 	shufflePreservesCanonicalOrder();
 	restartBeginsCanonicalRotation();

@@ -61,6 +61,7 @@ ManifestDPIAware true
 !insertmacro MUI_PAGE_LICENSE "License.txt"
 !insertmacro MUI_PAGE_DIRECTORY
 !insertmacro MUI_PAGE_INSTFILES
+!define MUI_PAGE_CUSTOMFUNCTION_PRE FinishPagePre
 !insertmacro MUI_PAGE_FINISH
 !insertmacro MUI_UNPAGE_CONFIRM
 !insertmacro MUI_UNPAGE_INSTFILES
@@ -69,6 +70,7 @@ ManifestDPIAware true
 
 Var ObsDir
 Var InstallInstance
+Var UpdateHandoff
 
 Function FindObsDirectory
   StrCpy $ObsDir "$PROGRAMFILES64\obs-studio"
@@ -80,11 +82,24 @@ FunctionEnd
 
 Function .onInit
   SetRegView 64
+  StrCpy $UpdateHandoff "0"
+  ${GetParameters} $0
+  ClearErrors
+  ${GetOptions} $0 "/UPDATEHANDOFF" $1
+  IfErrors +2 0
+    StrCpy $UpdateHandoff "1"
   Call FindObsDirectory
   IfFileExists "$ObsDir\bin\64bit\obs64.exe" obs_found
     MessageBox MB_ICONSTOP|MB_OK "OBS Studio could not be found at $ObsDir. Install the 64-bit version of OBS Studio before installing RearSilver Stream Suite."
     Abort
   obs_found:
+FunctionEnd
+
+Function FinishPagePre
+  ; The external updater restores the Hub and OBS after an update. Skip the
+  ; normal Finish page so it cannot offer a second OBS launch.
+  StrCmp $UpdateHandoff "1" 0 +2
+    Abort
 FunctionEnd
 
 Function HasWebView2Runtime

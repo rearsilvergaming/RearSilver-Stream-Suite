@@ -1,6 +1,7 @@
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
 #include <windows.h>
+#include <wincred.h>
 #include "rs_beta_config.hpp"
 #include <dwmapi.h>
 #include <psapi.h>
@@ -40,6 +41,9 @@
 #include "spotify_client.hpp"
 #include "twitch_accounts.hpp"
 #include "twitch_chat_service.hpp"
+#include "update_service.hpp"
+#include "update_download.hpp"
+#include "update_version.hpp"
 
 #define MINIAUDIO_IMPLEMENTATION
 #include "miniaudio.h"
@@ -52,6 +56,7 @@
 #include <cstring>
 #include <deque>
 #include <fstream>
+#include <filesystem>
 #include <iomanip>
 #include <memory>
 #include <mutex>
@@ -216,6 +221,10 @@ static constexpr UINT WM_HUB_PLAYLIST_RESULT = WM_APP + 40;
 static constexpr UINT WM_HUB_REQUEST_RESULT = WM_APP + 41;
 static constexpr UINT WM_TWITCH_CHAT = WM_APP + 42;
 static constexpr UINT WM_OBS_CONNECTION_CHANGED = WM_APP + 43;
+static constexpr UINT WM_HUB_UPDATE_RESULT = WM_APP + 44;
+static constexpr UINT WM_HUB_UPDATE_DOWNLOAD = WM_APP + 45;
+static constexpr UINT_PTR ID_TIMER_AUTOMATIC_UPDATE = 4301;
+static constexpr UINT_PTR ID_TIMER_UPDATE_HANDOFF_CLOSE = 4302;
 static constexpr int ID_IMPORT_PLAYLIST = 4101;
 static constexpr int ID_ADD_LOCAL_FILES = 4102, ID_ADD_LOCAL_FOLDER = 4103, ID_USE_LOCAL = 4104,
 	ID_USE_YOUTUBE = 4105, ID_CLEAR_LOCAL = 4106, ID_USE_EXTERNAL = 4107;
@@ -224,6 +233,17 @@ static constexpr int ID_OVERLAY_FONT = 4120;
 static constexpr int ID_OVERLAY_TITLE_SIZE = 4121, ID_OVERLAY_BODY_SIZE = 4122,
 	ID_OVERLAY_OPACITY = 4123, ID_OVERLAY_BACKGROUND_COLOUR = 4124, ID_OVERLAY_TEXT_COLOUR = 4125,
 	ID_OVERLAY_ACCENT_COLOUR = 4126, ID_OVERLAY_WIDTH = 4127, ID_OVERLAY_HEIGHT = 4128;
+static constexpr int ID_MENU_CLOSE = 4201, ID_MENU_TOGGLE_SIDEBAR = 4202, ID_MENU_RELOAD_PAGE = 4203,
+	ID_MENU_FULLSCREEN = 4204, ID_MENU_GUIDED_SETUP = 4205, ID_MENU_SUITE_SETTINGS = 4206,
+	ID_MENU_DIAGNOSTICS = 4207, ID_MENU_OPEN_LOGS = 4208, ID_MENU_GETTING_STARTED = 4209,
+	ID_MENU_DOCUMENTATION = 4210, ID_MENU_FAQ = 4211, ID_MENU_CHECK_UPDATES = 4212,
+	ID_MENU_ABOUT = 4213, ID_FULLSCREEN_EXIT_F11 = 4214, ID_FULLSCREEN_EXIT_ESCAPE = 4215;
+static HMENU g_mainMenu = nullptr;
+static HACCEL g_menuAccelerators = nullptr;
+static bool g_fullScreen = false;
+static bool g_fullScreenF11Registered = false, g_fullScreenEscapeRegistered = false;
+static WINDOWPLACEMENT g_windowedPlacement{sizeof(WINDOWPLACEMENT)};
+static LONG_PTR g_windowedStyle = 0;
 static int g_queuePage = 0;
 static RECT g_transportProgress{};
 static bool g_transportSeeking = false;
@@ -233,8 +253,92 @@ static bool g_transportSeekPending = false;
 static ULONGLONG g_transportSeekPendingSince = 0;
 static std::mutex g_hostEventMutex;
 static std::vector<std::string> g_hostEvents;
+static std::atomic<bool> g_updateCheckRunning{false};
+static std::atomic<bool> g_anyUpdateCheckStarted{false};
+static UpdateCheckResult g_updateCheckResult;
+static bool g_updateCheckHasResult = false;
+static bool g_updateCheckDialogRequested = false;
+static RECT g_updateNoticeRect{};
+static std::atomic<bool> g_updateDownloadRunning{false};
+static std::atomic<bool> g_updateDownloadCancel{false};
+static UpdateDownloadProgress g_updateDownloadProgress;
+static bool g_updateHandoffAwaitingAck = false;
 static bool g_hubMediaKeysRegistered = false;
 static RECT g_queuePreviousPage{}, g_queueNextPage{}, g_queueShuffle{}, g_queuePlayFromBeginning{};
+
+static void startUpdateCheck(HWND window, bool manual)
+{
+	if (!RsBeta::kUpdateCheckEnabled || !RsBeta::kUpdateBaseUrl[0]) {
+		g_updateCheckResult = {};
+		g_updateCheckResult.manual = manual;
+		g_updateCheckResult.message = "Update checks are not configured for this build.";
+		g_updateCheckHasResult = true;
+		InvalidateRect(window, nullptr, FALSE);
+		return;
+	}
+	if (g_updateCheckRunning.exchange(true)) return;
+	g_anyUpdateCheckStarted.store(true);
+	g_updateCheckResult = {};
+	g_updateCheckResult.status = UpdateCheckStatus::Checking;
+	g_updateCheckResult.manual = manual;
+	g_updateCheckResult.message = "Checking for updates…";
+	g_updateCheckHasResult = true;
+	InvalidateRect(window, nullptr, FALSE);
+	std::thread([window, manual] {
+		auto *result = new UpdateCheckResult(checkForSuiteUpdate(RsBeta::kUpdateBaseUrl,
+			RsBeta::kChannel, RsBeta::kVersion, manual));
+		if (!PostMessageW(window, WM_HUB_UPDATE_RESULT, 0, reinterpret_cast<LPARAM>(result))) {
+			delete result;
+			g_updateCheckRunning.store(false);
+		}
+	}).detach();
+}
+
+static std::string ownerDownloadToken()
+{
+	if (updateChannelSlug(RsBeta::kChannel) != "owner-build") return {};
+	wchar_t value[512]{};
+	const DWORD length = GetEnvironmentVariableW(L"REARSILVER_OWNER_UPDATE_TOKEN", value, DWORD(std::size(value)));
+	if (length && length < std::size(value)) return wideToUtf8(std::wstring(value, length));
+	PCREDENTIALW credential = nullptr;
+	if (!CredReadW(L"RearSilverStreamSuite/OwnerUpdateToken", CRED_TYPE_GENERIC, 0, &credential) || !credential)
+		return {};
+	std::string token;
+	if (credential->CredentialBlob && credential->CredentialBlobSize) {
+		const auto *bytes = reinterpret_cast<const char *>(credential->CredentialBlob);
+		if (credential->CredentialBlobSize >= 2 && credential->CredentialBlobSize % sizeof(wchar_t) == 0 && bytes[1] == '\0') {
+			const auto *characters = reinterpret_cast<const wchar_t *>(credential->CredentialBlob);
+			token = wideToUtf8(std::wstring(characters, credential->CredentialBlobSize / sizeof(wchar_t)));
+		} else {
+			token.assign(bytes, bytes + credential->CredentialBlobSize);
+		}
+	}
+	CredFree(credential);
+	return token;
+}
+
+static void startUpdateDownload(HWND window)
+{
+	if (g_updateDownloadRunning.exchange(true)) return;
+	const std::string token = ownerDownloadToken();
+	if (!g_updateCheckResult.downloadAvailable || token.empty()) {
+		g_updateDownloadRunning.store(false);
+		auto *failure = new UpdateDownloadProgress{UpdateDownloadStatus::Error, 0, 0, {},
+			token.empty() ? "Owner update download credentials are not available in this test session." :
+			"The update manifest does not contain a complete verified download."};
+		PostMessageW(window, WM_HUB_UPDATE_DOWNLOAD, 0, reinterpret_cast<LPARAM>(failure));
+		return;
+	}
+	g_updateDownloadCancel.store(false);
+	g_updateDownloadProgress = {UpdateDownloadStatus::Downloading, 0, g_updateCheckResult.installerSize, {}, "Starting update download…"};
+	const UpdateCheckResult update = g_updateCheckResult;
+	std::thread([window, update, token] {
+		downloadAndVerifySuiteUpdate(update, token, g_updateDownloadCancel, [window](const UpdateDownloadProgress &progress) {
+			auto *copy = new UpdateDownloadProgress(progress);
+			if (!PostMessageW(window, WM_HUB_UPDATE_DOWNLOAD, 0, reinterpret_cast<LPARAM>(copy))) delete copy;
+		});
+	}).detach();
+}
 
 class SuiteCefApp final : public CefApp, public CefBrowserProcessHandler {
 public:
@@ -1694,6 +1798,7 @@ static void setFontFamilies(CefRefPtr<CefDictionaryValue> dictionary, const char
 
 static std::wstring musicSetting(const wchar_t *name,const wchar_t *fallback){HKEY key{};if(RegOpenKeyExW(HKEY_CURRENT_USER,kMusicSettingsRegistry,0,KEY_READ,&key)!=ERROR_SUCCESS)return fallback;wchar_t value[1024]{};DWORD type=0,bytes=sizeof(value);const LSTATUS result=RegQueryValueExW(key,name,nullptr,&type,reinterpret_cast<BYTE*>(value),&bytes);RegCloseKey(key);return result==ERROR_SUCCESS&&type==REG_SZ?value:fallback;}
 static void setMusicSetting(const wchar_t *name,const std::wstring &value){HKEY key{};DWORD d=0;if(RegCreateKeyExW(HKEY_CURRENT_USER,kMusicSettingsRegistry,0,nullptr,0,KEY_WRITE,nullptr,&key,&d)!=ERROR_SUCCESS)return;RegSetValueExW(key,name,0,REG_SZ,reinterpret_cast<const BYTE*>(value.c_str()),DWORD((value.size()+1)*sizeof(wchar_t)));RegCloseKey(key);}
+static void startManualUpdateCheck(HWND window){startUpdateCheck(window,true);}
 static bool musicBool(const wchar_t *name,bool fallback){const auto value=musicSetting(name,fallback?L"true":L"false");return value==L"true"||value==L"1";}
 static void disableSongRequestsForLocalSource()
 {
@@ -1875,6 +1980,78 @@ static void closeManagedProgramsAndWait()
 		Sleep(20);
 	}
 }
+struct ObsProcessInfo { DWORD processId = 0; std::wstring path; };
+static ObsProcessInfo findObsProcess()
+{
+	ObsProcessInfo found; HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+	if (snapshot == INVALID_HANDLE_VALUE) return found;
+	PROCESSENTRY32W entry{}; entry.dwSize = sizeof(entry);
+	if (Process32FirstW(snapshot, &entry)) do {
+		if (_wcsicmp(entry.szExeFile, L"obs64.exe") != 0) continue;
+		HANDLE process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, entry.th32ProcessID);
+		if (!process) continue;
+		wchar_t path[32768]{}; DWORD length = DWORD(std::size(path));
+		if (QueryFullProcessImageNameW(process, 0, path, &length)) found = {entry.th32ProcessID, std::wstring(path, length)};
+		CloseHandle(process); if (found.processId) break;
+	} while (Process32NextW(snapshot, &entry));
+	CloseHandle(snapshot); return found;
+}
+
+static std::wstring quotedArgument(const std::wstring &value) { return L"\"" + value + L"\""; }
+
+static bool startUpdaterHandoff(HWND window, bool handoffTest)
+{
+	if (g_updateDownloadProgress.status != UpdateDownloadStatus::Verified || g_updateDownloadProgress.verifiedPath.empty()) return false;
+	if (!g_hostPipeConnected) {
+		MessageBoxW(window, L"OBS Studio is not connected to the Control Hub. Open OBS and wait for the connection before starting the update handoff.",
+			L"RearSilver Stream Suite Update", MB_OK | MB_ICONWARNING); return false;
+	}
+	const wchar_t *warning = handoffTest ?
+		L"This test will close the RearSilver Control Hub and request a normal OBS Studio close.\r\n\r\nOBS may ask you to confirm that active streams, recordings or the replay buffer will end. The test payload will not be executed, and OBS and the Control Hub will reopen after the handoff succeeds.\r\n\r\nContinue?" :
+		L"OBS Studio and the RearSilver Control Hub must close to install this update. OBS may ask you to confirm that active outputs will end.\r\n\r\nContinue?";
+	if (MessageBoxW(window, warning, L"RearSilver Stream Suite Update", MB_YESNO | MB_ICONWARNING) != IDYES) return false;
+	wchar_t module[32768]{}; const DWORD moduleLength = GetModuleFileNameW(nullptr, module, DWORD(std::size(module)));
+	if (!moduleLength || moduleLength >= std::size(module)) return false;
+	const std::wstring executable(module, moduleLength); const size_t slash = executable.find_last_of(L"\\/");
+	const std::wstring helperSource = executable.substr(0, slash + 1) + L"RearSilver-Stream-Suite-Updater.exe";
+	if (GetFileAttributesW(helperSource.c_str()) == INVALID_FILE_ATTRIBUTES) {
+		MessageBoxW(window, L"The update helper is missing from the Control Hub folder.", L"RearSilver Stream Suite Update", MB_OK | MB_ICONERROR); return false;
+	}
+	wchar_t localAppData[32768]{};
+	const DWORD localAppDataLength = GetEnvironmentVariableW(L"LOCALAPPDATA", localAppData, DWORD(std::size(localAppData)));
+	if (!localAppDataLength || localAppDataLength >= std::size(localAppData)) return false;
+	const std::filesystem::path runnerFolder = std::filesystem::path(std::wstring(localAppData, localAppDataLength)) /
+		L"RearSilver Stream Suite" / L"Updates" / L"Runner";
+	std::error_code runnerError; std::filesystem::create_directories(runnerFolder, runnerError);
+	if (runnerError) return false;
+	const std::wstring helper = (runnerFolder / (L"RearSilver-Stream-Suite-Updater-" +
+		std::to_wstring(GetCurrentProcessId()) + L".exe")).wstring();
+	if (!CopyFileW(helperSource.c_str(), helper.c_str(), FALSE)) {
+		MessageBoxW(window, L"The update helper could not be prepared outside the installation folder.",
+			L"RearSilver Stream Suite Update", MB_OK | MB_ICONERROR); return false;
+	}
+	const ObsProcessInfo obs = findObsProcess();
+	std::wstring command = quotedArgument(helper) + L" --hub-pid " + std::to_wstring(GetCurrentProcessId()) +
+		L" --hub-path " + quotedArgument(executable) + L" --obs-pid " +
+		std::to_wstring(obs.processId) + L" --version " + quotedArgument(utf8ToWide(g_updateCheckResult.availableVersion)) +
+		L" --installer " + quotedArgument(g_updateDownloadProgress.verifiedPath);
+	if (!obs.path.empty()) command += L" --obs-path " + quotedArgument(obs.path);
+	if (handoffTest) command += L" --handoff-test";
+	if (g_hostPipeConnected) {
+		std::lock_guard<std::mutex> lock(g_hostEventMutex);
+		g_hostEvents.push_back("HOST\tUPDATE_CLOSE_OBS\n");
+		g_updateHandoffAwaitingAck = true;
+	}
+	STARTUPINFOW startup{}; startup.cb = sizeof(startup); PROCESS_INFORMATION process{};
+	if (!CreateProcessW(helper.c_str(), command.data(), nullptr, nullptr, FALSE, CREATE_BREAKAWAY_FROM_JOB | CREATE_UNICODE_ENVIRONMENT,
+		nullptr, nullptr, &startup, &process)) {
+		MessageBoxW(window, L"The update helper could not be started.", L"RearSilver Stream Suite Update", MB_OK | MB_ICONERROR); return false;
+	}
+	CloseHandle(process.hThread); CloseHandle(process.hProcess);
+	SetTimer(window, ID_TIMER_UPDATE_HANDOFF_CLOSE, 5000, nullptr);
+	return true;
+}
+
 static std::wstring textOutputFolder(){wchar_t appData[MAX_PATH]{};GetEnvironmentVariableW(L"APPDATA",appData,MAX_PATH);std::wstring folder=std::wstring(appData)+L"\\RearSilver Stream Suite";CreateDirectoryW(folder.c_str(),nullptr);return folder;}
 static std::wstring textOutputPath(){return textOutputFolder()+L"\\now-playing.txt";}
 static void ensureTextOutputFile(){const std::wstring path=textOutputPath();if(GetFileAttributesW(path.c_str())==INVALID_FILE_ATTRIBUTES){std::ofstream output(path,std::ios::binary);}}
@@ -2026,10 +2203,30 @@ public:
 										if(value){setMusicSetting(L"suiteSettings.setupCompleted",value->GetBool("completed")?L"true":L"false");setMusicSetting(L"suiteSettings.setupStep",std::to_wstring(std::clamp(value->GetInt("step"),0,4)));setMusicSetting(L"suiteSettings.setupSchemaVersion",std::to_wstring(std::max(1,value->GetInt("schemaVersion"))));}
 									}
 									else if(object->GetString("action").ToString()=="setOpenHubWithObs")setMusicSetting(L"openHubWithObs",object->GetBool("value")?L"true":L"false");
-									else if(object->GetString("action").ToString()=="openCommands"){
-										g_page=6;showPage(g_page);InvalidateRect(m_parent,nullptr,FALSE);return S_OK;
-									}
-									sendSuiteSettingsConfig();return S_OK;
+								else if(object->GetString("action").ToString()=="openCommands"){
+									g_page=6;showPage(g_page);InvalidateRect(m_parent,nullptr,FALSE);return S_OK;
+								}
+								else if(object->GetString("action").ToString()=="checkUpdates"){
+									startManualUpdateCheck(m_parent);
+								}
+								else if(object->GetString("action").ToString()=="downloadUpdate"){
+									startUpdateDownload(m_parent);
+								}
+								else if(object->GetString("action").ToString()=="cancelUpdateDownload"){
+									g_updateDownloadCancel.store(true);
+								}
+								else if(object->GetString("action").ToString()=="testUpdateHandoff"){
+									startUpdaterHandoff(m_parent, true);
+								}
+								else if(object->GetString("action").ToString()=="installUpdate"){
+									startUpdaterHandoff(m_parent, false);
+								}
+								else if(object->GetString("action").ToString()=="openUpdateNotes" &&
+									g_updateCheckResult.status==UpdateCheckStatus::Available &&
+									!g_updateCheckResult.releaseNotesUrl.empty()){
+									ShellExecuteW(m_parent,L"open",utf8ToWide(g_updateCheckResult.releaseNotesUrl).c_str(),nullptr,nullptr,SW_SHOWNORMAL);
+								}
+								sendSuiteSettingsConfig();return S_OK;
 								}
 								if(object->GetString("page").ToString()=="feedback"){
 									const std::string action=object->GetString("action").ToString();
@@ -2167,6 +2364,11 @@ public:
 		else if (m_page == 7) sendToolsConfig();
 		else if (m_page == 8) sendSuiteSettingsConfig();
 		else if (m_page == 9) sendFeedbackDiagnosticsConfig();
+	}
+	void reloadCurrentPage() {
+		if (!m_webView || m_page < 2 || m_page > 9 || m_page == 4 || m_page == 5) return;
+		m_ready = false;
+		m_webView->ExecuteScript(L"window.rsReloadActivePage&&window.rsReloadActivePage()", nullptr);
 	}
 	void resize() {
 		if (!m_controller || !m_parent) return;
@@ -2329,6 +2531,30 @@ private:
 		d->SetString("overlayPlacementMode", wideToUtf8(overlayPlacementMode()));
 		d->SetBool("ipcConnected", g_hostPipeConnected);
 		d->SetBool("captureExists", g_captureExists);
+		d->SetBool("updateEnabled", RsBeta::kUpdateCheckEnabled);
+		d->SetBool("updateConfigured", RsBeta::kUpdateBaseUrl[0] != '\0');
+		d->SetString("updateCurrentVersion", RsBeta::kVersion);
+		d->SetString("updateChannel", RsBeta::kChannel);
+		d->SetString("updateStatus", !g_updateCheckHasResult ? "idle" :
+			g_updateCheckResult.status == UpdateCheckStatus::Checking ? "checking" :
+			g_updateCheckResult.status == UpdateCheckStatus::Available ? "available" :
+			g_updateCheckResult.status == UpdateCheckStatus::UpToDate ? "current" :
+			g_updateCheckResult.status == UpdateCheckStatus::Error ? "error" : "disabled");
+		d->SetString("updateMessage", !g_updateCheckHasResult ? "No update check has run during this session." :
+			(!g_updateCheckResult.manual && g_updateCheckResult.status == UpdateCheckStatus::Error ?
+				"No update information is currently available." : g_updateCheckResult.message));
+		d->SetString("updateAvailableVersion", g_updateCheckResult.availableVersion);
+		d->SetString("updatePublishedAt", g_updateCheckResult.publishedAt);
+		d->SetString("updateReleaseNotesUrl", g_updateCheckResult.releaseNotesUrl);
+		d->SetDouble("updateInstallerSize", static_cast<double>(g_updateCheckResult.installerSize));
+		d->SetBool("updateMandatory", g_updateCheckResult.mandatory);
+		d->SetBool("updateCurrentVersionSupported", g_updateCheckResult.currentVersionSupported);
+		d->SetBool("updateDownloadAvailable", g_updateCheckResult.downloadAvailable);
+		d->SetBool("updateDownloadRunning", g_updateDownloadRunning.load());
+		d->SetString("updateDownloadMessage", g_updateDownloadProgress.message);
+		d->SetDouble("updateDownloadTransferred", static_cast<double>(g_updateDownloadProgress.bytesTransferred));
+		d->SetDouble("updateDownloadTotal", static_cast<double>(g_updateDownloadProgress.bytesTotal));
+		d->SetBool("updateDownloadVerified", g_updateDownloadProgress.status == UpdateDownloadStatus::Verified);
 		auto settingBool = [&](const char *key, bool fallback) { const auto wide = utf8ToWide(key); d->SetBool(key, musicBool(wide.c_str(), fallback)); };
 		auto settingString = [&](const char *key, const wchar_t *fallback) { const auto wide = utf8ToWide(key); d->SetString(key, wideToUtf8(musicSetting(wide.c_str(), fallback))); };
 		auto settingInt = [&](const char *key, const wchar_t *stored, int fallback) { d->SetInt(key, _wtoi(musicSetting(stored, std::to_wstring(fallback).c_str()).c_str())); };
@@ -2487,6 +2713,140 @@ static std::unique_ptr<OverlayDesignerSurface> g_overlayDesigner;
 static void updateOverlayDesignerSurface()
 {
 	if (g_overlayDesigner) { g_overlayDesigner->resize(); g_overlayDesigner->showPage(g_page); }
+}
+
+static void showHubPage(HWND window, int page)
+{
+	g_page = RsBeta::currentState().expired ? 9 : page;
+	positionLibraryControls(window);
+	positionOverlayControls(window);
+	if (g_youtubePlayer && g_youtubePlayer->active()) g_youtubePlayer->resize();
+	updateOverlayDesignerSurface();
+	InvalidateRect(window, nullptr, FALSE);
+}
+
+static void syncMainMenuState()
+{
+	if (!g_mainMenu) return;
+	CheckMenuItem(g_mainMenu, ID_MENU_TOGGLE_SIDEBAR,
+		MF_BYCOMMAND | (g_sidebarCollapsed ? MF_UNCHECKED : MF_CHECKED));
+	CheckMenuItem(g_mainMenu, ID_MENU_FULLSCREEN,
+		MF_BYCOMMAND | (g_fullScreen ? MF_CHECKED : MF_UNCHECKED));
+}
+
+static HMENU createMainMenu()
+{
+	HMENU menu = CreateMenu();
+	HMENU file = CreatePopupMenu(), view = CreatePopupMenu(), tools = CreatePopupMenu(), help = CreatePopupMenu();
+	AppendMenuW(file, MF_STRING, ID_MENU_CLOSE, L"&Close\tCtrl+Q");
+	AppendMenuW(view, MF_STRING | MF_CHECKED, ID_MENU_TOGGLE_SIDEBAR, L"&Sidebar\tCtrl+B");
+	AppendMenuW(view, MF_STRING, ID_MENU_RELOAD_PAGE, L"&Reload current page\tCtrl+R");
+	AppendMenuW(view, MF_SEPARATOR, 0, nullptr);
+	AppendMenuW(view, MF_STRING, ID_MENU_FULLSCREEN, L"&Full screen\tF11");
+	AppendMenuW(tools, MF_STRING, ID_MENU_GUIDED_SETUP, L"&Guided setup");
+	AppendMenuW(tools, MF_STRING, ID_MENU_SUITE_SETTINGS, L"&Suite Settings");
+	AppendMenuW(tools, MF_STRING, ID_MENU_DIAGNOSTICS, L"&Feedback && Diagnostics");
+	AppendMenuW(tools, MF_SEPARATOR, 0, nullptr);
+	AppendMenuW(tools, MF_STRING, ID_MENU_OPEN_LOGS, L"Open &log folder");
+	AppendMenuW(help, MF_STRING, ID_MENU_GETTING_STARTED, L"&Getting Started");
+	AppendMenuW(help, MF_STRING, ID_MENU_DOCUMENTATION, L"&Wiki / Documentation");
+	AppendMenuW(help, MF_STRING, ID_MENU_FAQ, L"&FAQ");
+	AppendMenuW(help, MF_SEPARATOR, 0, nullptr);
+	AppendMenuW(help, MF_STRING | (RsBeta::kUpdateCheckEnabled ? MF_ENABLED : MF_GRAYED),
+		ID_MENU_CHECK_UPDATES, L"Check for &updates");
+	AppendMenuW(help, MF_SEPARATOR, 0, nullptr);
+	AppendMenuW(help, MF_STRING, ID_MENU_ABOUT, L"&About RearSilver Stream Suite");
+	AppendMenuW(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(file), L"&File");
+	AppendMenuW(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(view), L"&View");
+	AppendMenuW(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(tools), L"&Tools");
+	AppendMenuW(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(help), L"&Help");
+	return menu;
+}
+
+static void toggleFullScreen(HWND window)
+{
+	if (!g_fullScreen) {
+		g_fullScreenF11Registered = RegisterHotKey(window, ID_FULLSCREEN_EXIT_F11, MOD_NOREPEAT, VK_F11) != FALSE;
+		g_fullScreenEscapeRegistered = RegisterHotKey(window, ID_FULLSCREEN_EXIT_ESCAPE, MOD_NOREPEAT, VK_ESCAPE) != FALSE;
+		if (!g_fullScreenF11Registered && !g_fullScreenEscapeRegistered) {
+			MessageBoxW(window, L"Full screen could not reserve an exit key, so it was not enabled.",
+				L"RearSilver Stream Suite", MB_OK | MB_ICONWARNING);
+			return;
+		}
+		g_windowedPlacement = {sizeof(WINDOWPLACEMENT)};
+		GetWindowPlacement(window, &g_windowedPlacement);
+		g_windowedStyle = GetWindowLongPtrW(window, GWL_STYLE);
+		MONITORINFO monitor{sizeof(MONITORINFO)};
+		GetMonitorInfoW(MonitorFromWindow(window, MONITOR_DEFAULTTONEAREST), &monitor);
+		SetMenu(window, nullptr);
+		SetWindowLongPtrW(window, GWL_STYLE, g_windowedStyle & ~WS_OVERLAPPEDWINDOW);
+		SetWindowPos(window, HWND_TOP, monitor.rcMonitor.left, monitor.rcMonitor.top,
+			monitor.rcMonitor.right - monitor.rcMonitor.left, monitor.rcMonitor.bottom - monitor.rcMonitor.top,
+			SWP_FRAMECHANGED | SWP_NOOWNERZORDER);
+		g_fullScreen = true;
+	} else {
+		if (g_fullScreenF11Registered) UnregisterHotKey(window, ID_FULLSCREEN_EXIT_F11);
+		if (g_fullScreenEscapeRegistered) UnregisterHotKey(window, ID_FULLSCREEN_EXIT_ESCAPE);
+		g_fullScreenF11Registered = g_fullScreenEscapeRegistered = false;
+		SetWindowLongPtrW(window, GWL_STYLE, g_windowedStyle);
+		SetMenu(window, g_mainMenu);
+		SetWindowPlacement(window, &g_windowedPlacement);
+		SetWindowPos(window, nullptr, 0, 0, 0, 0,
+			SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOOWNERZORDER);
+		g_fullScreen = false;
+	}
+	syncMainMenuState();
+	DrawMenuBar(window);
+	if (g_youtubePlayer) g_youtubePlayer->resize();
+	if (g_overlayDesigner) g_overlayDesigner->resize();
+	InvalidateRect(window, nullptr, FALSE);
+}
+
+static void showAboutDialog(HWND window)
+{
+	std::wstring text = L"RearSilver Stream Suite\r\n\r\nVersion: " + utf8ToWide(RsBeta::kVersion) +
+		L"\r\nBuild: " + utf8ToWide(RsBeta::kBuildId) + L"\r\nChannel: " + utf8ToWide(RsBeta::kChannel) +
+		L"\r\nBuilt: " + utf8ToWide(RsBeta::kBuildDate);
+	if (!g_pluginVersion.empty()) text += L"\r\nOBS plugin: " + utf8ToWide(g_pluginVersion);
+	if (RsBeta::kExpiryEnabled) text += L"\r\nExpires: " + utf8ToWide(RsBeta::kExpiryDisplay);
+	text += L"\r\n\r\nhttps://imperialinfusions.com\r\n© 2026 Imperial Infusions Limited";
+	MessageBoxW(window, text.c_str(), L"About RearSilver Stream Suite", MB_OK | MB_ICONINFORMATION);
+}
+
+static void showUpdateCheckDialog(HWND window, const UpdateCheckResult &result)
+{
+	std::wstring text;
+	UINT flags = MB_OK | MB_ICONINFORMATION;
+	if (result.status == UpdateCheckStatus::UpToDate) {
+		text = L"RearSilver Stream Suite is up to date.\r\n\r\nInstalled version: " + utf8ToWide(RsBeta::kVersion);
+	} else if (result.status == UpdateCheckStatus::Available) {
+		const bool required = result.mandatory || !result.currentVersionSupported;
+		text = required ? L"A required RearSilver Stream Suite update is available."
+			: L"A RearSilver Stream Suite update is available.";
+		text += L"\r\n\r\nInstalled version: " + utf8ToWide(RsBeta::kVersion) +
+			L"\r\nAvailable version: " + utf8ToWide(result.availableVersion);
+		if (result.downloadAvailable) {
+			text += L"\r\n\r\nDownload this update now?";
+			flags = MB_YESNO | (required ? MB_ICONWARNING : MB_ICONINFORMATION);
+		} else if (!result.releaseNotesUrl.empty()) {
+			text += L"\r\n\r\nOpen the release notes?";
+			flags = MB_YESNO | (required ? MB_ICONWARNING : MB_ICONINFORMATION);
+		} else if (required) {
+			flags = MB_OK | MB_ICONWARNING;
+		}
+	} else {
+		text = L"RearSilver Stream Suite could not check for updates.\r\n\r\n" +
+			utf8ToWide(result.message.empty() ? "No update information is currently available." : result.message);
+		flags = MB_OK | MB_ICONWARNING;
+	}
+	const int response = MessageBoxW(window, text.c_str(), L"Software updates", flags);
+	if (response == IDYES && result.downloadAvailable) {
+		g_page = 8;
+		updateOverlayDesignerSurface();
+		InvalidateRect(window, nullptr, FALSE);
+		startUpdateDownload(window);
+	} else if (response == IDYES && !result.releaseNotesUrl.empty())
+		ShellExecuteW(window, L"open", utf8ToWide(result.releaseNotesUrl).c_str(), nullptr, nullptr, SW_SHOWNORMAL);
 }
 
 static std::wstring cycleValue(const std::wstring &current, const std::vector<std::wstring> &values)
@@ -2744,9 +3104,118 @@ static void handleTwitchChat(HWND window, const TwitchChatMessage &m)
 
 static LRESULT CALLBACK windowProc(HWND window, UINT message, WPARAM wParam, LPARAM lParam)
 {
+	if (message == WM_TIMER && wParam == ID_TIMER_AUTOMATIC_UPDATE) {
+		KillTimer(window, ID_TIMER_AUTOMATIC_UPDATE);
+		if (!g_anyUpdateCheckStarted.load() && RsBeta::kUpdateCheckEnabled && RsBeta::kUpdateBaseUrl[0])
+			startUpdateCheck(window, false);
+		return 0;
+	}
+	if (message == WM_TIMER && wParam == ID_TIMER_UPDATE_HANDOFF_CLOSE) {
+		KillTimer(window, ID_TIMER_UPDATE_HANDOFF_CLOSE);
+		if (g_updateHandoffAwaitingAck) {
+			g_updateHandoffAwaitingAck = false;
+			MessageBoxW(window, L"OBS Studio did not acknowledge the update close request. The Control Hub will remain open.",
+				L"RearSilver Stream Suite Update", MB_OK | MB_ICONWARNING);
+		}
+		return 0;
+	}
+	if (message == WM_HUB_UPDATE_RESULT) {
+		std::unique_ptr<UpdateCheckResult> result(reinterpret_cast<UpdateCheckResult *>(lParam));
+		if (result) {
+			g_updateCheckResult = *result;
+			g_updateCheckHasResult = true;
+		}
+		g_updateCheckRunning.store(false);
+		if (g_overlayDesigner) g_overlayDesigner->refresh();
+		InvalidateRect(window, nullptr, FALSE);
+		if (g_updateCheckDialogRequested) {
+			g_updateCheckDialogRequested = false;
+			showUpdateCheckDialog(window, g_updateCheckResult);
+		}
+		return 0;
+	}
+	if (message == WM_HUB_UPDATE_DOWNLOAD) {
+		std::unique_ptr<UpdateDownloadProgress> progress(reinterpret_cast<UpdateDownloadProgress *>(lParam));
+		if (progress) {
+			g_updateDownloadProgress = *progress;
+			if (progress->status != UpdateDownloadStatus::Downloading && progress->status != UpdateDownloadStatus::Verifying)
+				g_updateDownloadRunning.store(false);
+		}
+		if (g_overlayDesigner) g_overlayDesigner->refresh();
+		InvalidateRect(window, nullptr, FALSE);
+		return 0;
+	}
+	if (message == WM_INITMENU) { syncMainMenuState(); return 0; }
+	if (message == WM_COMMAND && LOWORD(wParam) >= ID_MENU_CLOSE && LOWORD(wParam) <= ID_MENU_ABOUT) {
+		switch (LOWORD(wParam)) {
+		case ID_MENU_CLOSE:
+			SendMessageW(window, WM_CLOSE, 0, 0);
+			break;
+		case ID_MENU_TOGGLE_SIDEBAR:
+			g_sidebarCollapsed = !g_sidebarCollapsed;
+			syncMainMenuState();
+			if (g_youtubePlayer) g_youtubePlayer->resize();
+			if (g_overlayDesigner) g_overlayDesigner->resize();
+			InvalidateRect(window, nullptr, FALSE);
+			break;
+		case ID_MENU_RELOAD_PAGE:
+			if (g_overlayDesigner) g_overlayDesigner->reloadCurrentPage();
+			InvalidateRect(window, nullptr, FALSE);
+			break;
+		case ID_MENU_FULLSCREEN:
+			toggleFullScreen(window);
+			break;
+		case ID_MENU_GUIDED_SETUP:
+			if (!RsBeta::currentState().expired) {
+				setMusicSetting(L"suiteSettings.setupCompleted", L"false");
+				setMusicSetting(L"suiteSettings.setupStep", L"0");
+				showHubPage(window, 8);
+			}
+			break;
+		case ID_MENU_SUITE_SETTINGS:
+			if (!RsBeta::currentState().expired) showHubPage(window, 8);
+			break;
+		case ID_MENU_DIAGNOSTICS:
+			showHubPage(window, 9);
+			break;
+		case ID_MENU_OPEN_LOGS: {
+			const std::wstring folder = suiteDataFolder(false);
+			if (!folder.empty()) ShellExecuteW(window, L"open", folder.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+			break;
+		}
+		case ID_MENU_GETTING_STARTED:
+			ShellExecuteW(window, L"open", L"https://imperialinfusions.com/pages/rearsilver-getting-started", nullptr, nullptr, SW_SHOWNORMAL);
+			break;
+		case ID_MENU_DOCUMENTATION:
+			ShellExecuteW(window, L"open", L"https://imperialinfusions.com/pages/rearsilver-wiki", nullptr, nullptr, SW_SHOWNORMAL);
+			break;
+		case ID_MENU_FAQ:
+			ShellExecuteW(window, L"open", L"https://imperialinfusions.com/pages/rearsilver-faq", nullptr, nullptr, SW_SHOWNORMAL);
+			break;
+		case ID_MENU_CHECK_UPDATES:
+			g_updateCheckDialogRequested = true;
+			startManualUpdateCheck(window);
+			if (g_overlayDesigner) g_overlayDesigner->refresh();
+			if (!g_updateCheckRunning.load() && g_updateCheckHasResult &&
+				g_updateCheckResult.status != UpdateCheckStatus::Checking) {
+				g_updateCheckDialogRequested = false;
+				showUpdateCheckDialog(window, g_updateCheckResult);
+			}
+			break;
+		case ID_MENU_ABOUT:
+			showAboutDialog(window);
+			break;
+		}
+		return 0;
+	}
 	const bool betaExpired = RsBeta::currentState().expired;
 	if(message==WM_TWITCH_CHAT){std::unique_ptr<TwitchChatMessage>m(reinterpret_cast<TwitchChatMessage*>(lParam));if(m&&!betaExpired)handleTwitchChat(window,*m);return 0;}
 	if(message==WM_OBS_CONNECTION_CHANGED){if(g_overlayDesigner)g_overlayDesigner->refresh();return 0;}
+	if (message == WM_HOTKEY &&
+		(wParam == ID_FULLSCREEN_EXIT_F11 || wParam == ID_FULLSCREEN_EXIT_ESCAPE)) {
+		if (g_fullScreen) toggleFullScreen(window);
+		return 0;
+	}
 	if (betaExpired && (message == WM_HOTKEY || message == WM_COMMAND || message == WM_LBUTTONDOWN ||
 		message == WM_LBUTTONUP || message == WM_LBUTTONDBLCLK || message == WM_RBUTTONDOWN || message == WM_RBUTTONUP)) return 0;
 	if (message == WM_HOTKEY && g_hubMediaKeysRegistered) {
@@ -3083,6 +3552,12 @@ static LRESULT CALLBACK windowProc(HWND window, UINT message, WPARAM wParam, LPA
 			InvalidateRect(window, nullptr, FALSE);
 			return 0;
 		}
+		if (PtInRect(&g_updateNoticeRect, point)) {
+			g_page = 8;
+			updateOverlayDesignerSurface();
+			InvalidateRect(window, nullptr, FALSE);
+			return 0;
+		}
 		if (g_page == 1 && PtInRect(&g_queuePreviousPage, point)) { g_queuePage = std::max(0, g_queuePage - 1); InvalidateRect(window, nullptr, FALSE); return 0; }
 		if (g_page == 1 && PtInRect(&g_queueNextPage, point)) { ++g_queuePage; InvalidateRect(window, nullptr, FALSE); return 0; }
 		if (g_page == 1 && PtInRect(&g_queueShuffle, point)) {
@@ -3240,6 +3715,16 @@ static LRESULT CALLBACK windowProc(HWND window, UINT message, WPARAM wParam, LPA
 		? std::wstring(L"Expires ") + utf8ToWide(RsBeta::kExpiryDisplay)
 		: utf8ToWide(std::string("Version ") + RsBeta::kVersion);
 	const std::wstring betaBadgeText = betaState.expired ? L"EXPIRED" : utf8ToWide(RsBeta::kChannel);
+	SetRectEmpty(&g_updateNoticeRect);
+	if (g_updateCheckHasResult && g_updateCheckResult.status == UpdateCheckStatus::Available) {
+		const int noticeTop = static_cast<int>(navStart + 8.0f * 52.0f + 10.0f);
+		g_updateNoticeRect = RECT{18, noticeTop, sidebar - 18, noticeTop + 34};
+		roundedPanel(graphics, RectF(float(g_updateNoticeRect.left), float(g_updateNoticeRect.top),
+			float(g_updateNoticeRect.right - g_updateNoticeRect.left), 34), 7, Color(255, 7, 81, 102));
+		label(graphics, expanded ? L"UPDATE AVAILABLE" : L"UPDATE", smallFont,
+			RectF(float(g_updateNoticeRect.left), float(g_updateNoticeRect.top),
+				float(g_updateNoticeRect.right - g_updateNoticeRect.left), 34), accent, StringAlignmentCenter);
+	}
 	if (expanded) {
 		g_betaNoticeRect = RECT{20, height - 68, sidebar - 20, height - 18};
 		roundedPanel(graphics, RectF(20, float(height - 68), float(sidebar - 40), 24), 7, accentSoft);
@@ -3545,7 +4030,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int)
 	HANDLE processJob = CreateJobObjectW(nullptr, nullptr);
 	if (processJob) {
 		JOBOBJECT_EXTENDED_LIMIT_INFORMATION jobLimits{};
-		jobLimits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+		jobLimits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE | JOB_OBJECT_LIMIT_BREAKAWAY_OK;
 		if (!SetInformationJobObject(processJob, JobObjectExtendedLimitInformation,
 			&jobLimits, sizeof(jobLimits)) ||
 			!AssignProcessToJobObject(processJob, GetCurrentProcess())) {
@@ -3662,6 +4147,15 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int)
 	const std::wstring windowTitle = std::wstring(L"RearSilver Stream Suite | Control Hub — ") + utf8ToWide(RsBeta::kChannel);
 	HWND window = CreateWindowExW(0, wc.lpszClassName, windowTitle.c_str(), WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN,
 		CW_USEDEFAULT, CW_USEDEFAULT, 1120, 720, nullptr, nullptr, instance, nullptr);
+	g_mainMenu = createMainMenu();
+	SetMenu(window, g_mainMenu);
+	ACCEL accelerators[] = {
+		{FCONTROL | FVIRTKEY, 'Q', ID_MENU_CLOSE},
+		{FCONTROL | FVIRTKEY, 'B', ID_MENU_TOGGLE_SIDEBAR},
+		{FCONTROL | FVIRTKEY, 'R', ID_MENU_RELOAD_PAGE},
+		{FVIRTKEY, VK_F11, ID_MENU_FULLSCREEN},
+	};
+	g_menuAccelerators = CreateAcceleratorTableW(accelerators, static_cast<int>(_countof(accelerators)));
 	SendMessageW(window, WM_SETICON, ICON_BIG, reinterpret_cast<LPARAM>(appIcon));
 	SendMessageW(window, WM_SETICON, ICON_SMALL, reinterpret_cast<LPARAM>(appIcon));
 	ShowWindow(window, SW_SHOW); UpdateWindow(window);
@@ -3758,8 +4252,15 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int)
 		PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_NOWAIT, 1, 1024 * 1024, 1024 * 1024, 0, nullptr);
 	if (pipe == INVALID_HANDLE_VALUE) return 3;
 	bool connected = false, running = true, lastReaderReady = false, chatAnnouncementPending = false; std::string input, lastSpotifyQueueSignature,lastChatSender,lastChatStreamerSignature,lastChatBotSignature; ULONGLONG lastStatus = 0, lastHubStatus = 0, lastYouTubePoll = 0, lastExternalPoll = 0, lastSpotifyUiRefresh = 0, lastTwitchValidation=GetTickCount64(), lastTraceHeartbeat = 0; uint64_t lastStreamerRevision=0,lastBotRevision=0,lastPublishedReaderRevision=0,lastPublishedSenderRevision=0;
+	if (RsBeta::kUpdateCheckEnabled && RsBeta::kUpdateBaseUrl[0])
+		SetTimer(window, ID_TIMER_AUTOMATIC_UPDATE, 5000, nullptr);
 	while (running) {
-		MSG message{}; while (PeekMessageW(&message, nullptr, 0, 0, PM_REMOVE)) { TranslateMessage(&message); DispatchMessageW(&message); }
+		MSG message{}; while (PeekMessageW(&message, nullptr, 0, 0, PM_REMOVE)) {
+			if (!g_menuAccelerators || !TranslateAcceleratorW(window, g_menuAccelerators, &message)) {
+				TranslateMessage(&message);
+				DispatchMessageW(&message);
+			}
+		}
 		if (g_closeRequested) { running = false; continue; }
 		if (!betaExpired && g_youtubePlayer->active() && GetTickCount64() - lastYouTubePoll >= 250) {
 			g_youtubePlayer->pollStatus(); lastYouTubePoll = GetTickCount64();
@@ -3821,6 +4322,21 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int)
 					if (line == "SHUTDOWN") { running = false; break; }
 					if (line.rfind("HOST_INFO\t", 0) == 0) {
 						const size_t tab=line.find('\t',10);if(tab!=std::string::npos){g_obsStudioVersion=line.substr(10,tab-10);g_pluginVersion=line.substr(tab+1);if(g_overlayDesigner)g_overlayDesigner->refresh();}
+					} else if (line == "UPDATE_CLOSE_ACK") {
+						traceLog("update-close-acknowledged");
+						if (g_updateHandoffAwaitingAck) {
+							g_updateHandoffAwaitingAck = false;
+							KillTimer(window, ID_TIMER_UPDATE_HANDOFF_CLOSE);
+							PostMessageW(window, WM_CLOSE, 0, 0);
+						}
+					} else if (line == "UPDATE_CLOSE_FAILED") {
+						traceLog("update-close-unavailable");
+						if (g_updateHandoffAwaitingAck) {
+							g_updateHandoffAwaitingAck = false;
+							KillTimer(window, ID_TIMER_UPDATE_HANDOFF_CLOSE);
+							MessageBoxW(window, L"OBS Studio could not begin its normal exit process. The Control Hub will remain open.",
+								L"RearSilver Stream Suite Update", MB_OK | MB_ICONWARNING);
+						}
 					} else if (betaExpired) {
 						continue;
 					} else if (line.rfind("SETUP_STATE\t", 0) == 0) {
@@ -3988,6 +4504,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int)
 	traceLog("window-hide-begin");
 	ShowWindow(window, SW_HIDE); UpdateWindow(window);
 	traceLog("window-hide-complete");
+	if (g_menuAccelerators) { DestroyAcceleratorTable(g_menuAccelerators); g_menuAccelerators = nullptr; }
 	CloseHandle(pipe); traceLog("window-destroy-begin"); DestroyWindow(window); traceLog("window-destroy-complete"); g_player = nullptr;
 	// Player owns miniaudio state and a GDI+ artwork Image. Destroy it before
 	// the process tears down either subsystem instead of leaving its destructor

@@ -12,6 +12,7 @@
 #include "rs_stream_timer.hpp"
 
 #include <QDateTime>
+#include <QAction>
 #include <QFileInfo>
 #include <QJsonArray>
 #include <QJsonDocument>
@@ -19,6 +20,7 @@
 #include <QRandomGenerator>
 #include <QSettings>
 #include <QTimer>
+#include <QWidget>
 
 extern "C" {
 #include <obs-module.h>
@@ -148,6 +150,19 @@ RsMusicController::RsMusicController(RsMusicState *state, QObject *parent) : QOb
 				QString("%1\t%2").arg(captureExists ? "true" : "false", autoStart ? "true" : "false"));
 		};
 		if (command == "SETUP_STATUS") { publishSetupState(); return; }
+		if (command == "UPDATE_CLOSE_OBS") {
+			auto *mainWindow = reinterpret_cast<QWidget *>(obs_frontend_get_main_window());
+			// Trigger OBS's own File > Exit action. This preserves its output
+			// confirmation, tray handling, dock layout, and normal save sequence.
+			auto *exitAction = mainWindow ? mainWindow->findChild<QAction *>("actionE_xit") : nullptr;
+			if (!exitAction) {
+				RsMusicLocalPlayer::instance().sendUiCommand("UPDATE_CLOSE_FAILED");
+				return;
+			}
+			RsMusicLocalPlayer::instance().sendUiCommand("UPDATE_CLOSE_ACK");
+			QTimer::singleShot(750, exitAction, [exitAction]() { exitAction->trigger(); });
+			return;
+		}
 		// The Control Hub is mandatory infrastructure now. Legacy AUTOSTART
 		// messages are acknowledged but no longer add it to the optional list.
 		if (command.startsWith("AUTOSTART\t")) { publishSetupState(); return; }

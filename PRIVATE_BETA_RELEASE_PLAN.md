@@ -480,6 +480,7 @@ Repeated failure by multiple testers is product evidence, not user error.
 8. Fix alpha blockers.
 9. Produce the first trusted-streamer beta.
 10. Review reports and convert repeated findings into Hub, dock, onboarding and wiki changes.
+11. Prove launch-time update detection and complete-installer upgrades in the Owner Build, then trial them in a later Private Beta iteration.
 
 ## 12. Relationship to Free and Pro
 
@@ -494,6 +495,7 @@ Reusable work:
 - Complete packaging.
 - Upgrade, repair and uninstall.
 - Clean-machine test matrix.
+- Launch-time, channel-aware update detection and complete-installer upgrade path.
 
 Temporary work:
 
@@ -501,3 +503,5 @@ Temporary work:
 - Private Beta labels and warning schedule.
 
 After beta evidence is reviewed, the Free/Pro feature matrix and real entitlement/licensing architecture can be designed around observed user value rather than assumptions.
+
+The update architecture, hosting decision, security boundaries and staged delivery plan are documented in [UPDATE_SYSTEM_PLAN.md](UPDATE_SYSTEM_PLAN.md). Shopify remains the beta bootstrap and recovery channel until the in-Hub updater has passed external-machine testing.

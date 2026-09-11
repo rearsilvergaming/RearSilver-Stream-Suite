@@ -101,6 +101,12 @@ window.rsActiveHas=function(name){
   const target=activeFrame&&activeFrame.contentWindow;
   return !!(target&&typeof target[name]==='function');
 };
+window.rsReloadActivePage=function(){
+  if(!activeFrame)return false;
+  activeFrame.rsConfigured=false;
+  activeFrame.contentWindow.location.reload();
+  return true;
+};
 for(const name of ['rsApplyLibrary','rsApplyConfig','rsApplyCommands','rsApplyTools','rsApplySuiteSettings','rsApplyFeedbackDiagnostics'])
   window[name]=value=>window.rsInvokeAll(name,value);
 

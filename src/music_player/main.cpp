@@ -294,9 +294,11 @@ static void startUpdateCheck(HWND window, bool manual)
 	}).detach();
 }
 
-static std::string ownerDownloadToken()
+static std::string updateDownloadToken()
 {
-	if (updateChannelSlug(RsBeta::kChannel) != "owner-build") return {};
+	const std::string channel = updateChannelSlug(RsBeta::kChannel);
+	if (channel == "private-beta") return RsBeta::kUpdateDownloadToken;
+	if (channel != "owner-build") return {};
 	wchar_t value[512]{};
 	const DWORD length = GetEnvironmentVariableW(L"REARSILVER_OWNER_UPDATE_TOKEN", value, DWORD(std::size(value)));
 	if (length && length < std::size(value)) return wideToUtf8(std::wstring(value, length));
@@ -320,11 +322,11 @@ static std::string ownerDownloadToken()
 static void startUpdateDownload(HWND window)
 {
 	if (g_updateDownloadRunning.exchange(true)) return;
-	const std::string token = ownerDownloadToken();
+	const std::string token = updateDownloadToken();
 	if (!g_updateCheckResult.downloadAvailable || token.empty()) {
 		g_updateDownloadRunning.store(false);
 		auto *failure = new UpdateDownloadProgress{UpdateDownloadStatus::Error, 0, 0, {},
-			token.empty() ? "Owner update download credentials are not available in this test session." :
+			token.empty() ? "Update download credentials are not available for this build." :
 			"The update manifest does not contain a complete verified download."};
 		PostMessageW(window, WM_HUB_UPDATE_DOWNLOAD, 0, reinterpret_cast<LPARAM>(failure));
 		return;
@@ -1473,15 +1475,49 @@ static void refreshExternalPlayer(HWND window)
 		}
 		return;
 	}
+	const SpotifyClientState spotify = g_spotify.state();
+	const bool spotifyCurrentMatches = spotify.current.title == state.title && spotify.current.artist == state.artist;
+	const std::string currentUri = spotifyCurrentMatches ? spotify.current.uri : std::string{};
+	static std::string suppressedSpotifyTrack;
+	if (!suppressedSpotifyTrack.empty()) {
+		if (suppressedSpotifyTrack == trackKey) return;
+		suppressedSpotifyTrack.clear();
+	}
+	HubTrack matchedRequest;
+	for (const HubTrack &request : g_hub.requests()) {
+		if (request.provider != "spotify") continue;
+		const bool matches = !currentUri.empty() ? request.providerId == currentUri :
+			request.title == state.title && request.artist == state.artist;
+		if (matches) { matchedRequest = request; break; }
+	}
+	if (!matchedRequest.id.empty() && matchedRequest.cancelled) {
+		suppressedSpotifyTrack = trackKey;
+		commandExternalPlayer(SystemMediaProvider::Action::Next);
+		g_hub.removeRequest(matchedRequest.id);
+		saveHubState();
+		syncHubQueueView();
+		return;
+	}
 	HubTrack track;
 	track.id = "external:" + state.sourceAppId + ":" + state.title + ":" + state.artist;
 	track.providerId = state.sourceAppId; track.provider = "external";
-	track.title = state.title; track.artist = state.artist; track.album = state.album;
-	track.artworkUrl = state.artworkPath.empty() ? playerFallbackArtwork() : state.artworkPath;
+	track.title = state.title; track.artist = state.artist;
+	track.album = !matchedRequest.album.empty() ? matchedRequest.album :
+		(spotifyCurrentMatches && !spotify.current.album.empty() ? spotify.current.album : state.album);
+	track.artworkUrl = !matchedRequest.artworkUrl.empty() ? matchedRequest.artworkUrl :
+		(spotifyCurrentMatches && !spotify.current.artworkUrl.empty() ? spotify.current.artworkUrl :
+			(state.artworkPath.empty() ? playerFallbackArtwork() : state.artworkPath));
 	track.requestedBy = wideToUtf8(musicSetting(L"nonRequestLabel", L"Stream DJ"));
 	track.durationSeconds = int(state.durationMs / 1000);
+	if (!matchedRequest.id.empty()) {
+		track.request = true;
+		track.requestedBy = matchedRequest.requestedBy;
+		track.requesterId = matchedRequest.requesterId;
+		track.requesterLevel = matchedRequest.requesterLevel;
+	}
 	const bool changed = !g_hub.hasCurrent() || g_hub.current().id != track.id;
 	if (changed) {
+		if (!matchedRequest.id.empty()) g_hub.removeRequest(matchedRequest.id);
 		g_hub.recordStarted(track); syncHubQueueView();
 		if (g_player) g_player->setMetadata(track.title + "\t" + track.artist + "\t" + track.album + "\t" + track.artworkUrl);
 		writeTextOutput(track);
@@ -1997,16 +2033,53 @@ static ObsProcessInfo findObsProcess()
 	CloseHandle(snapshot); return found;
 }
 
+static std::wstring installedObsExecutable()
+{
+	auto registryFolder = [](const wchar_t *keyName, const wchar_t *valueName) {
+		HKEY key = nullptr;
+		if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, keyName, 0, KEY_READ | KEY_WOW64_64KEY, &key) != ERROR_SUCCESS)
+			return std::wstring{};
+		wchar_t value[32768]{}; DWORD type = 0; DWORD bytes = sizeof(value);
+		const LSTATUS result = RegQueryValueExW(key, valueName, nullptr, &type,
+			reinterpret_cast<BYTE *>(value), &bytes);
+		RegCloseKey(key);
+		return result == ERROR_SUCCESS && (type == REG_SZ || type == REG_EXPAND_SZ) && value[0] ?
+			std::wstring(value) : std::wstring{};
+	};
+	auto executableIn = [](const std::wstring &folder) {
+		if (folder.empty()) return std::wstring{};
+		const std::wstring path = (std::filesystem::path(folder) / L"bin" / L"64bit" / L"obs64.exe").wstring();
+		return GetFileAttributesW(path.c_str()) != INVALID_FILE_ATTRIBUTES ? path : std::wstring{};
+	};
+	std::wstring path = executableIn(registryFolder(
+		L"Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\RearSilver Stream Suite", L"OBSInstallLocation"));
+	if (!path.empty()) return path;
+	path = executableIn(registryFolder(
+		L"Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\OBS Studio", L"InstallLocation"));
+	if (!path.empty()) return path;
+	wchar_t programFiles[32768]{};
+	const DWORD length = GetEnvironmentVariableW(L"ProgramFiles", programFiles, DWORD(std::size(programFiles)));
+	return length && length < std::size(programFiles) ? executableIn(
+		(std::filesystem::path(std::wstring(programFiles, length)) / L"obs-studio").wstring()) : std::wstring{};
+}
+
 static std::wstring quotedArgument(const std::wstring &value) { return L"\"" + value + L"\""; }
 
 static bool startUpdaterHandoff(HWND window, bool handoffTest)
 {
 	if (g_updateDownloadProgress.status != UpdateDownloadStatus::Verified || g_updateDownloadProgress.verifiedPath.empty()) return false;
-	if (!g_hostPipeConnected) {
+	const ObsProcessInfo obs = findObsProcess();
+	if (obs.processId && !g_hostPipeConnected) {
 		MessageBoxW(window, L"OBS Studio is not connected to the Control Hub. Open OBS and wait for the connection before starting the update handoff.",
 			L"RearSilver Stream Suite Update", MB_OK | MB_ICONWARNING); return false;
 	}
-	const wchar_t *warning = handoffTest ?
+	const std::wstring obsPath = obs.path.empty() ? installedObsExecutable() : obs.path;
+	if (obsPath.empty()) {
+		MessageBoxW(window, L"The OBS Studio installation could not be located. The update was not started.",
+			L"RearSilver Stream Suite Update", MB_OK | MB_ICONERROR); return false;
+	}
+	const wchar_t *warning = !obs.processId ?
+		L"The RearSilver Control Hub will close while this update is installed. OBS Studio will open again when installation completes.\r\n\r\nContinue?" : handoffTest ?
 		L"This test will close the RearSilver Control Hub and request a normal OBS Studio close.\r\n\r\nOBS may ask you to confirm that active streams, recordings or the replay buffer will end. The test payload will not be executed, and OBS and the Control Hub will reopen after the handoff succeeds.\r\n\r\nContinue?" :
 		L"OBS Studio and the RearSilver Control Hub must close to install this update. OBS may ask you to confirm that active outputs will end.\r\n\r\nContinue?";
 	if (MessageBoxW(window, warning, L"RearSilver Stream Suite Update", MB_YESNO | MB_ICONWARNING) != IDYES) return false;
@@ -2030,14 +2103,13 @@ static bool startUpdaterHandoff(HWND window, bool handoffTest)
 		MessageBoxW(window, L"The update helper could not be prepared outside the installation folder.",
 			L"RearSilver Stream Suite Update", MB_OK | MB_ICONERROR); return false;
 	}
-	const ObsProcessInfo obs = findObsProcess();
 	std::wstring command = quotedArgument(helper) + L" --hub-pid " + std::to_wstring(GetCurrentProcessId()) +
 		L" --hub-path " + quotedArgument(executable) + L" --obs-pid " +
 		std::to_wstring(obs.processId) + L" --version " + quotedArgument(utf8ToWide(g_updateCheckResult.availableVersion)) +
 		L" --installer " + quotedArgument(g_updateDownloadProgress.verifiedPath);
-	if (!obs.path.empty()) command += L" --obs-path " + quotedArgument(obs.path);
+	command += L" --obs-path " + quotedArgument(obsPath);
 	if (handoffTest) command += L" --handoff-test";
-	if (g_hostPipeConnected) {
+	if (obs.processId && g_hostPipeConnected) {
 		std::lock_guard<std::mutex> lock(g_hostEventMutex);
 		g_hostEvents.push_back("HOST\tUPDATE_CLOSE_OBS\n");
 		g_updateHandoffAwaitingAck = true;
@@ -2048,7 +2120,8 @@ static bool startUpdaterHandoff(HWND window, bool handoffTest)
 		MessageBoxW(window, L"The update helper could not be started.", L"RearSilver Stream Suite Update", MB_OK | MB_ICONERROR); return false;
 	}
 	CloseHandle(process.hThread); CloseHandle(process.hProcess);
-	SetTimer(window, ID_TIMER_UPDATE_HANDOFF_CLOSE, 5000, nullptr);
+	if (obs.processId) SetTimer(window, ID_TIMER_UPDATE_HANDOFF_CLOSE, 5000, nullptr);
+	else PostMessageW(window, WM_CLOSE, 0, 0);
 	return true;
 }
 
@@ -2546,6 +2619,11 @@ private:
 		d->SetString("updateAvailableVersion", g_updateCheckResult.availableVersion);
 		d->SetString("updatePublishedAt", g_updateCheckResult.publishedAt);
 		d->SetString("updateReleaseNotesUrl", g_updateCheckResult.releaseNotesUrl);
+		CefRefPtr<CefListValue> updateReleaseNotes = CefListValue::Create();
+		updateReleaseNotes->SetSize(g_updateCheckResult.releaseNotes.size());
+		for (size_t index = 0; index < g_updateCheckResult.releaseNotes.size(); ++index)
+			updateReleaseNotes->SetString(index, g_updateCheckResult.releaseNotes[index]);
+		d->SetList("updateReleaseNotes", updateReleaseNotes);
 		d->SetDouble("updateInstallerSize", static_cast<double>(g_updateCheckResult.installerSize));
 		d->SetBool("updateMandatory", g_updateCheckResult.mandatory);
 		d->SetBool("updateCurrentVersionSupported", g_updateCheckResult.currentVersionSupported);
@@ -2825,6 +2903,11 @@ static void showUpdateCheckDialog(HWND window, const UpdateCheckResult &result)
 			: L"A RearSilver Stream Suite update is available.";
 		text += L"\r\n\r\nInstalled version: " + utf8ToWide(RsBeta::kVersion) +
 			L"\r\nAvailable version: " + utf8ToWide(result.availableVersion);
+		if (!result.releaseNotes.empty()) {
+			text += L"\r\n\r\nWhat's changed:";
+			for (const std::string &note : result.releaseNotes)
+				text += L"\r\n- " + utf8ToWide(note);
+		}
 		if (result.downloadAvailable) {
 			text += L"\r\n\r\nDownload this update now?";
 			flags = MB_YESNO | (required ? MB_ICONWARNING : MB_ICONINFORMATION);
@@ -4266,10 +4349,9 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int)
 			g_youtubePlayer->pollStatus(); lastYouTubePoll = GetTickCount64();
 		}
 		if (!betaExpired && externalActive() && GetTickCount64() - lastExternalPoll >= 500) {
-			const SpotifyClientState spotify=g_spotify.state();const SystemMediaState liveMedia=g_systemMedia.state();bool cancelledCurrent=false;
-			for(const auto &request:g_hub.requests())if(request.provider=="spotify"&&request.cancelled&&(request.providerId==spotify.current.uri||(!liveMedia.title.empty()&&request.title==liveMedia.title&&request.artist==liveMedia.artist))){commandExternalPlayer(SystemMediaProvider::Action::Next);g_hub.removeRequest(request.id);saveHubState();syncHubQueueView();cancelledCurrent=true;break;}
-			if(!cancelledCurrent)refreshExternalPlayer(window);
-			bool requestStarted=false;if(!spotify.current.uri.empty())for(const auto &request:g_hub.requests())if(request.provider=="spotify"&&request.providerId==spotify.current.uri){requestStarted=g_hub.removeRequest(request.id)||requestStarted;}if(requestStarted)saveHubState();
+			refreshExternalPlayer(window);
+			const SpotifyClientState spotify=g_spotify.state();
+			const SystemMediaState liveMedia=g_systemMedia.state();
 			// Spotify owns its real playback queue. Reconcile our persistent request ledger
 			// against a successfully checked live snapshot so old requests cannot cause false
 			// duplicate rejections after Spotify has played, removed, or discarded them.
@@ -4290,7 +4372,8 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int)
 							if(!protectedByGrace)g_recentSpotifyRequests.erase(recent);
 						}
 					}
-					if(!liveUris.count(request.providerId)&&!protectedByGrace)ledgerChanged=g_hub.removeRequest(request.id)||ledgerChanged;
+					const bool desktopCurrent = !liveMedia.title.empty() && request.title == liveMedia.title && request.artist == liveMedia.artist;
+					if(!liveUris.count(request.providerId)&&!protectedByGrace&&!desktopCurrent)ledgerChanged=g_hub.removeRequest(request.id)||ledgerChanged;
 				}
 				if(ledgerChanged){saveHubState();syncHubQueueView();}
 			}

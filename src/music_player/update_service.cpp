@@ -119,6 +119,17 @@ UpdateCheckResult checkForSuiteUpdate(const std::string &baseUrl, const std::str
 	result.availableVersion = manifest->GetString("version").ToString();
 	result.publishedAt = manifest->GetString("published_at").ToString();
 	result.releaseNotesUrl = manifest->GetString("release_notes_url").ToString();
+	if (manifest->HasKey("release_notes") && manifest->GetType("release_notes") == VTYPE_LIST) {
+		CefRefPtr<CefListValue> notes = manifest->GetList("release_notes");
+		const size_t count = std::min<size_t>(notes ? notes->GetSize() : 0, 6);
+		for (size_t index = 0; index < count; ++index) {
+			if (notes->GetType(index) != VTYPE_STRING)
+				continue;
+			const std::string note = notes->GetString(index).ToString();
+			if (!note.empty() && note.size() <= 180)
+				result.releaseNotes.push_back(note);
+		}
+	}
 	result.mandatory = manifest->GetBool("mandatory");
 	if (manifest->HasKey("installer")) {
 		CefRefPtr<CefDictionaryValue> installer = manifest->GetDictionary("installer");

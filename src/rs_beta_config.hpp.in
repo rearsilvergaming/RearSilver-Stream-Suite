@@ -12,6 +12,7 @@ inline constexpr const char kBuildId[] = "@RS_BETA_BUILD_ID@";
 inline constexpr const char kBuildDate[] = "@RS_BETA_BUILD_DATE@";
 inline constexpr bool kUpdateCheckEnabled = @RS_UPDATE_CHECK_ENABLED_VALUE@ != 0;
 inline constexpr const char kUpdateBaseUrl[] = "@RS_UPDATE_BASE_URL@";
+inline constexpr const char kUpdateDownloadToken[] = "@RS_UPDATE_DOWNLOAD_TOKEN@";
 inline constexpr bool kExpiryEnabled = @RS_BETA_EXPIRY_ENABLED_VALUE@ != 0;
 inline constexpr const char kExpiryDate[] = "@RS_BETA_EXPIRY_DATE@";
 inline constexpr const char kExpiryDisplay[] = "@RS_BETA_EXPIRY_DISPLAY@";

@@ -1,6 +1,11 @@
 name = "rearsilver-update-service"
 main = "src/index.js"
-compatibility_date = "2026-09-09"
+compatibility_date = "2026-09-10"
+preview_urls = false
+keep_vars = true
+
+[observability]
+enabled = true
 
 [[r2_buckets]]
 binding = "RELEASES"

@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <string>
+#include <vector>
 
 enum class UpdateCheckStatus { Disabled, Checking, UpToDate, Available, Error };
 
@@ -13,6 +14,7 @@ struct UpdateCheckResult {
 	std::string availableVersion;
 	std::string publishedAt;
 	std::string releaseNotesUrl;
+	std::vector<std::string> releaseNotes;
 	std::string installerFilename;
 	std::string installerSha256;
 	std::string downloadRequestUrl;

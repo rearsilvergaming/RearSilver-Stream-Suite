@@ -1,26 +1,32 @@
-# RearSilver update service — Phases 1–2
+# RearSilver update service
 
-This Worker exposes only the Owner Build manifest used to prove update detection. It does not serve installers and it is not part of the active Private Beta update path.
+This Worker serves isolated Owner Build and Private Beta update channels. Each channel has its own manifest, download credential, filename rules and private R2 release path.
 
 The Worker has a private R2 binding named `RELEASES` connected to the `rearsilver-releases` bucket. Public bucket access must remain disabled.
 
-The desktop client requests:
+The desktop clients request:
 
 ```text
 GET /v1/updates/owner-build/windows-x64
+GET /v1/updates/private-beta/windows-x64
 ```
 
-Set `OWNER_BUILD_MANIFEST` to a complete schema-1 JSON manifest before deploying. During local development, place it in `.dev.vars`; that file remains untracked. For a deployed test Worker, set the binding without committing its value:
+The required manifest variables are:
 
-```powershell
-npx wrangler secret put OWNER_BUILD_MANIFEST
+```text
+OWNER_BUILD_MANIFEST
+PRIVATE_BETA_MANIFEST
 ```
 
-Use the contract documented in `UPDATE_SYSTEM_PLAN.md`, with `channel` set to `owner-build` and `platform` set to `windows-x64`. An equal version exercises the up-to-date path. A newer Semantic Versioning value such as `1.0.0-owner.1` exercises update availability without enabling downloads.
+Use the contract documented in `UPDATE_SYSTEM_PLAN.md`. The manifest `channel` must match the requested URL and `platform` must be `windows-x64`. A mismatched manifest is rejected.
 
 `owner-manifest.example.json` is an inert starting point. For local Worker testing, copy its JSON onto one line as the value of `OWNER_BUILD_MANIFEST` in `.dev.vars`.
 
-Do not add Private Beta, Free or Pro routes until their authentication and entitlement rules are implemented. Deployment remains a separate, deliberate operation.
+The Private Beta manifest uses the same schema with `channel` set to `private-beta`, a Private Beta installer filename and a Private Beta download URL.
+
+Manifests may include up to six concise notes in an optional `release_notes` string array. Builds that support inline notes show this list in Suite Settings and in the native update prompt before download. Keep `release_notes_url` as the HTTPS link to the complete Wiki release history.
+
+Free and Pro channels are not configured. Deployment remains a separate, deliberate operation.
 
 ## Phase 2 Owner download-route test
 
@@ -30,7 +36,14 @@ Upload a small plain-text object to the private R2 bucket using this exact objec
 tests/owner-build/download-route.txt
 ```
 
-Set a strong Worker secret named `OWNER_DOWNLOAD_TOKEN`. The test route is:
+The download credentials are separate Worker secrets:
+
+```text
+OWNER_DOWNLOAD_TOKEN
+PRIVATE_BETA_DOWNLOAD_TOKEN
+```
+
+The existing Owner fixed-object test route is:
 
 ```text
 GET /v1/download/owner-build/test
@@ -39,17 +52,20 @@ Authorization: Bearer <OWNER_DOWNLOAD_TOKEN>
 
 The route returns only that fixed test object. It does not accept an object key from the request and cannot expose another R2 object. Missing or incorrect credentials return HTTP 401. A missing test object returns HTTP 404.
 
-After the fixed-object test passes, the Owner release route is:
+The release routes are:
 
 ```text
 GET /v1/download/owner-build/<manifest-version>/windows-x64
-Authorization: Bearer <OWNER_DOWNLOAD_TOKEN>
+GET /v1/download/private-beta/<manifest-version>/windows-x64
 ```
 
-The requested version must exactly match the current Owner manifest. The Worker derives the immutable R2 key from the validated manifest and only accepts the expected Owner installer filename format:
+Each request must use its channel's Bearer token. An Owner token does not authorise a Private Beta download, and a Private Beta token does not authorise an Owner download.
+
+The requested version must exactly match that channel's current manifest. The Worker derives the immutable R2 key from the validated manifest and accepts only that channel's installer filename format:
 
 ```text
 releases/owner-build/<version>/windows-x64/<manifest installer filename>
+releases/private-beta/<version>/windows-x64/<manifest installer filename>
 ```
 
-The caller cannot supply a bucket key or filename. Old manifests therefore stop authorising new downloads as soon as the manifest is advanced, while already installed files remain private in R2.
+The caller cannot supply a bucket key or filename. A channel cannot resolve an object from the other channel. Old manifests stop authorising new downloads as soon as that channel's manifest is advanced, while R2 remains private.

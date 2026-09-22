@@ -37,7 +37,8 @@
 #include "command_catalogue.hpp"
 #include "local_library.hpp"
 #include "youtube_resolver.hpp"
-#include "system_media_provider.hpp"
+#include "system_media_client.hpp"
+#include "diagnostic_package.hpp"
 #include "spotify_client.hpp"
 #include "twitch_accounts.hpp"
 #include "twitch_chat_service.hpp"
@@ -435,35 +436,7 @@ static std::string windowsDescription()
 		" build " + std::to_string(version.dwBuildNumber) + " · x64";
 }
 
-static void replaceAll(std::string &text, const std::string &from, const std::string &to)
-{
-	if (from.empty()) return;
-	for (size_t position = 0; (position = text.find(from, position)) != std::string::npos; position += to.size())
-		text.replace(position, from.size(), to);
-}
-
-static std::string redactDiagnosticText(std::string text)
-{
-	wchar_t userName[256]{}; DWORD userNameLength = DWORD(_countof(userName));
-	if (GetUserNameW(userName, &userNameLength)) replaceAll(text, wideToUtf8(userName), "<windows-user>");
-	wchar_t profile[MAX_PATH]{};
-	if (GetEnvironmentVariableW(L"USERPROFILE", profile, MAX_PATH)) replaceAll(text, wideToUtf8(profile), "<user-profile>");
-	std::istringstream input(text); std::ostringstream output; std::string line;
-	while (std::getline(input, line)) {
-		std::string lower = line;
-		std::transform(lower.begin(), lower.end(), lower.begin(), [](unsigned char value) { return char(std::tolower(value)); });
-		const bool credentialValue = lower.find('=') != std::string::npos || lower.find(':') != std::string::npos;
-		const bool sensitive = credentialValue && (lower.find("access_token") != std::string::npos ||
-			lower.find("refresh_token") != std::string::npos || lower.find("client_secret") != std::string::npos ||
-			lower.find("client id") != std::string::npos || lower.find("client_id") != std::string::npos ||
-			lower.find("oauth code") != std::string::npos || lower.find("device code") != std::string::npos ||
-			lower.find("stream key") != std::string::npos || lower.find("authorization:") != std::string::npos);
-		output << (sensitive ? "[REDACTED SENSITIVE LINE]" : line) << '\n';
-	}
-	return output.str();
-}
-
-static std::string relevantLogExcerpt(const std::wstring &path, const char *label)
+static std::string relevantLogExcerpt(const std::wstring &path, const char *label, const std::string &issueDate)
 {
 	std::ifstream input(path, std::ios::binary);
 	if (!input) return std::string(label) + ": unavailable\n";
@@ -472,6 +445,7 @@ static std::string relevantLogExcerpt(const std::wstring &path, const char *labe
 	std::string line; std::deque<std::string> selected;
 	if (start > 0) std::getline(input, line); // Discard the partial line at the read boundary.
 	while (std::getline(input, line)) {
+		if (!diagnosticLineMatchesDate(line, issueDate)) continue;
 		std::string lower = line;
 		std::transform(lower.begin(), lower.end(), lower.begin(), [](unsigned char value) { return char(std::tolower(value)); });
 		if (lower.find("event=process-start") != std::string::npos) continue;
@@ -485,24 +459,6 @@ static std::string relevantLogExcerpt(const std::wstring &path, const char *labe
 	if (selected.empty()) output << "  No recent warning or error lines found.\n";
 	else for (const std::string &entry : selected) output << "  " << entry << '\n';
 	return redactDiagnosticText(output.str());
-}
-
-static bool exportTextReport(HWND owner, const std::wstring &suggestedName, const std::string &report)
-{
-	ComPtr<IFileSaveDialog> dialog;
-	if (FAILED(CoCreateInstance(CLSID_FileSaveDialog, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&dialog)))) return false;
-	dialog->SetTitle(L"Export RearSilver Stream Suite beta feedback");
-	dialog->SetFileName(suggestedName.c_str());
-	const COMDLG_FILTERSPEC filters[] = {{L"Text files", L"*.txt"}, {L"All files", L"*.*"}};
-	dialog->SetFileTypes(2, filters); dialog->SetDefaultExtension(L"txt");
-	if (FAILED(dialog->Show(owner))) return false;
-	ComPtr<IShellItem> item; PWSTR rawPath = nullptr;
-	if (FAILED(dialog->GetResult(&item)) || FAILED(item->GetDisplayName(SIGDN_FILESYSPATH, &rawPath))) return false;
-	std::ofstream output(rawPath, std::ios::binary | std::ios::trunc); CoTaskMemFree(rawPath);
-	if (!output) return false;
-	const unsigned char bom[] = {0xef, 0xbb, 0xbf}; output.write(reinterpret_cast<const char *>(bom), sizeof(bom));
-	output.write(report.data(), std::streamsize(report.size()));
-	return output.good();
 }
 
 class WebViewYouTubePlayer {
@@ -1249,7 +1205,7 @@ private:
 
 static Player *g_player = nullptr;
 static CefRefPtr<CefYouTubePlayer> g_youtubePlayer;
-static SystemMediaProvider g_systemMedia;
+static SystemMediaClient g_systemMedia;
 static SystemMediaState g_externalState;
 static int64_t g_externalPositionAnchorMs = 0;
 static ULONGLONG g_externalPositionAnchorTick = 0;
@@ -1954,7 +1910,17 @@ static void launchManagedProgram(const std::wstring &program)
 	if (program.empty() || GetFileAttributesW(program.c_str()) == INVALID_FILE_ATTRIBUTES || !processIdsForProgram(program).empty()) return;
 	const size_t slash = program.find_last_of(L"\\/");
 	const std::wstring folder = slash == std::wstring::npos ? L"" : program.substr(0, slash);
-	ShellExecuteW(nullptr, L"open", program.c_str(), nullptr, folder.empty() ? nullptr : folder.c_str(), SW_SHOWNORMAL);
+	STARTUPINFOW startup{}; startup.cb = sizeof(startup);
+	PROCESS_INFORMATION process{};
+	if (!CreateProcessW(program.c_str(), nullptr, nullptr, nullptr, FALSE, CREATE_BREAKAWAY_FROM_JOB,
+		nullptr, folder.empty() ? nullptr : folder.c_str(), &startup, &process)) {
+		std::ostringstream detail;
+		detail << "error=" << GetLastError() << " path=" << wideToUtf8(program);
+		traceLog("managed-app-launch-failed", detail.str());
+		return;
+	}
+	CloseHandle(process.hThread);
+	CloseHandle(process.hProcess);
 }
 
 struct CloseProgramWindows { DWORD processId; bool foundWindow = false; };
@@ -2309,8 +2275,12 @@ public:
 									else if(action=="copy")m_feedbackStatus=copyTextToClipboard(m_parent,utf8ToWide(m_feedbackReport))?"Report copied to the clipboard.":"The report could not be copied to the clipboard.";
 									else if(action=="export"){
 										SYSTEMTIME time{};GetLocalTime(&time);wchar_t name[192]{};
-										swprintf_s(name,L"RearSilver-Stream-Suite-Beta-Feedback-%hs-%04u%02u%02u-%02u%02u%02u.txt",RsBeta::kVersion,time.wYear,time.wMonth,time.wDay,time.wHour,time.wMinute,time.wSecond);
-										m_feedbackStatus=exportTextReport(m_parent,name,m_feedbackReport)?"Report exported successfully.":"Export was cancelled or the report could not be written.";
+										swprintf_s(name,L"RearSilver-Stream-Suite-Diagnostics-%hs-%04u%02u%02u-%02u%02u%02u.zip",RsBeta::kVersion,time.wYear,time.wMonth,time.wDay,time.wHour,time.wMinute,time.wSecond);
+										const std::string issueDate=feedback&&feedback->HasKey("issueDate")?feedback->GetString("issueDate").ToString():std::string{};
+										const DiagnosticPackageResult package=exportDiagnosticPackage(m_parent,name,m_feedbackReport,issueDate);
+										if(package.exported)m_feedbackStatus="Diagnostic package exported: "+std::to_string(package.textFiles)+" text file(s), "+std::to_string(package.dumpFiles)+" crash dump(s), and "+std::to_string(package.skippedFiles)+" file(s) skipped.";
+										else if(package.cancelled)m_feedbackStatus="Diagnostic package export cancelled.";
+										else m_feedbackStatus=package.error.empty()?"The diagnostic package could not be created.":package.error;
 									}else if(action=="openLogs"){
 										const std::wstring folder=suiteDataFolder(false);HINSTANCE result=nullptr;if(!folder.empty())result=ShellExecuteW(m_parent,L"open",folder.c_str(),nullptr,nullptr,SW_SHOWNORMAL);
 										m_feedbackStatus=reinterpret_cast<INT_PTR>(result)>32?"Logs folder opened.":"The logs folder could not be opened.";
@@ -2684,6 +2654,7 @@ private:
 		const SpotifyClientState spotify = g_spotify.state();
 		const TwitchAccountState streamer = g_streamerTwitch.state(), bot = g_botTwitch.state();
 		std::ostringstream report;
+		const std::string issueDate = field("issueDate");
 		report << "RearSilver Stream Suite — " << RsBeta::kChannel << " Feedback Report\n"
 			<< "======================================================\n\n"
 			<< "1. Beta/build information\n"
@@ -2696,7 +2667,7 @@ private:
 			<< "\nDays remaining: " << (RsBeta::kExpiryEnabled ? std::to_string(beta.daysRemaining) : "Not applicable") << "\nReport created: " << localReportTime() << "\n\n"
 			<< "2. Tester feedback\n"
 			<< "------------------\n"
-			<< "Category: " << field("category") << "\nSummary: " << field("summary")
+			<< "Issue date: " << field("issueDate") << "\nCategory: " << field("category") << "\nSummary: " << field("summary")
 			<< "\nTrying to do: " << field("trying") << "\nFirst place looked: " << field("firstLook")
 			<< "\nFound without help: " << field("foundWithoutHelp") << "\nExpected: " << field("expected")
 			<< "\nActually happened: " << field("actual") << "\nReproducible: " << field("reproducible")
@@ -2739,19 +2710,20 @@ private:
 			<< "\nMusic Overlay conflict: " << (g_musicOverlayConflict ? "Yes" : "No") << "\n\n"
 			<< "5. Recent warnings/errors\n"
 			<< "--------------------------\n"
-			<< relevantLogExcerpt(traceLogPath(), "Control Hub trace")
-			<< relevantLogExcerpt(lifecycleLogPath(), "Control Hub lifecycle")
-			<< relevantLogExcerpt(suiteDataFolder(true) + L"\\spotify-diagnostics.log", "Spotify")
-			<< relevantLogExcerpt(suiteDataFolder(true) + L"\\twitch-diagnostics.log", "Twitch") << "\n"
-			<< "6. Included log excerpts\n"
-			<< "-------------------------\n"
+			<< relevantLogExcerpt(traceLogPath(), "Control Hub trace", issueDate)
+			<< relevantLogExcerpt(lifecycleLogPath(), "Control Hub lifecycle", issueDate)
+			<< relevantLogExcerpt(suiteDataFolder(true) + L"\\spotify-diagnostics.log", "Spotify", issueDate)
+			<< relevantLogExcerpt(suiteDataFolder(true) + L"\\twitch-diagnostics.log", "Twitch", issueDate) << "\n"
+			<< "6. Diagnostic package contents\n"
+			<< "------------------------------\n"
 			<< "Only the most recent warning/error-related lines (maximum 12 per log, read from at most the last 64 KiB) are included. Routine process-start entries are omitted.\n"
-			<< "Full log files remain local and are not uploaded automatically.\n"
+			<< "The exported ZIP also includes privacy-redacted Suite logs and any matching crash records and dump files from the selected issue date that Windows allows the Control Hub to read.\n"
+			<< "Nothing is uploaded automatically. The user chooses where to save the package and whether to share it.\n"
 			<< "Control Hub/CEF logs: <local-app-data>\\RearSilver Stream Suite\n"
 			<< "Spotify/Twitch logs: <roaming-app-data>\\RearSilver Stream Suite\n\n"
 			<< "7. Redaction notice\n"
 			<< "-------------------\n"
-			<< "Authentication tokens, OAuth/device codes, client secrets and IDs, stream keys, raw credentials, Windows usernames and profile paths are excluded or redacted. Chat contents and local music filenames/metadata are not collected. Review the preview before sharing.\n";
+			<< "Authentication tokens, OAuth/device codes, client secrets and IDs, stream keys, raw credentials, Windows usernames and profile paths are excluded or redacted from text reports and logs. Chat contents and local music filenames/metadata are not collected. Binary crash dumps cannot be redacted and may contain fragments of process memory. Review the package notice before sharing.\n";
 		return redactDiagnosticText(report.str());
 	}
 
@@ -3141,10 +3113,6 @@ static void releaseHubMediaKeys(HWND window)
 
 static void updateHubMediaKeyRegistration(HWND window)
 {
-	if (externalActive()) {
-		releaseHubMediaKeys(window);
-		return;
-	}
 	if (g_hubMediaKeysRegistered) return;
 	const bool playPause = RegisterHotKey(window, ID_MEDIA_PLAY_PAUSE, MOD_NOREPEAT, VK_MEDIA_PLAY_PAUSE) != FALSE;
 	const bool stop = RegisterHotKey(window, ID_MEDIA_STOP, MOD_NOREPEAT, VK_MEDIA_STOP) != FALSE;

@@ -30,7 +30,7 @@ constexpr const wchar_t *kClientIdValue = L"spotifyClientId";
 std::wstring dataFolder(){wchar_t value[MAX_PATH]{};GetEnvironmentVariableW(L"APPDATA",value,MAX_PATH);std::wstring folder=std::wstring(value)+L"\\RearSilver Stream Suite";CreateDirectoryW(folder.c_str(),nullptr);return folder;}
 std::wstring authFile(){return dataFolder()+L"\\spotify-auth.dat";}
 std::wstring logFile(){return dataFolder()+L"\\spotify-diagnostics.log";}
-void spotifyLog(const std::string &message){SYSTEMTIME t{};GetLocalTime(&t);std::ofstream out(logFile(),std::ios::app|std::ios::binary);out<<std::setfill('0')<<std::setw(2)<<t.wHour<<':'<<std::setw(2)<<t.wMinute<<':'<<std::setw(2)<<t.wSecond<<"  "<<message<<"\r\n";OutputDebugStringA(("[RS Spotify] "+message+"\n").c_str());}
+void spotifyLog(const std::string &message){SYSTEMTIME t{};GetLocalTime(&t);std::ofstream out(logFile(),std::ios::app|std::ios::binary);out<<std::setfill('0')<<std::setw(4)<<t.wYear<<'-'<<std::setw(2)<<t.wMonth<<'-'<<std::setw(2)<<t.wDay<<' '<<std::setw(2)<<t.wHour<<':'<<std::setw(2)<<t.wMinute<<':'<<std::setw(2)<<t.wSecond<<"  "<<message<<"\r\n";OutputDebugStringA(("[RS Spotify] "+message+"\n").c_str());}
 
 std::wstring wide(const std::string &value) {
 	if (value.empty()) return {}; int n=MultiByteToWideChar(CP_UTF8,0,value.data(),int(value.size()),nullptr,0);

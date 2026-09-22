@@ -23,7 +23,7 @@ Http call(const wchar_t*method,const std::wstring&url,const std::string&token={}
 std::string field(const JsonObject&o,const wchar_t*k){return o.HasKey(k)?utf8(o.GetNamedString(k,L"").c_str()):std::string{};}
 std::string oauthError(const std::string&body){JsonObject o;if(!JsonObject::TryParse(wide(body),o))return{};auto message=field(o,L"message");if(message.empty())message=field(o,L"error_description");if(message.empty())message=field(o,L"error");return message;}
 std::wstring folder(){wchar_t p[MAX_PATH]{};GetEnvironmentVariableW(L"APPDATA",p,MAX_PATH);std::wstring f=std::wstring(p)+L"\\RearSilver Stream Suite";CreateDirectoryW(f.c_str(),nullptr);return f;}
-void log(const std::string&a,const std::string&m){SYSTEMTIME t{};GetLocalTime(&t);std::ofstream o(folder()+L"\\twitch-diagnostics.log",std::ios::app|std::ios::binary);o<<std::setfill('0')<<std::setw(2)<<t.wHour<<':'<<std::setw(2)<<t.wMinute<<':'<<std::setw(2)<<t.wSecond<<"  "<<a<<": "<<m<<"\r\n";}
+void log(const std::string&a,const std::string&m){SYSTEMTIME t{};GetLocalTime(&t);std::ofstream o(folder()+L"\\twitch-diagnostics.log",std::ios::app|std::ios::binary);o<<std::setfill('0')<<std::setw(4)<<t.wYear<<'-'<<std::setw(2)<<t.wMonth<<'-'<<std::setw(2)<<t.wDay<<' '<<std::setw(2)<<t.wHour<<':'<<std::setw(2)<<t.wMinute<<':'<<std::setw(2)<<t.wSecond<<"  "<<a<<": "<<m<<"\r\n";}
 }
 
 TwitchAccount::TwitchAccount(std::string a):m_account(std::move(a)){} TwitchAccount::~TwitchAccount(){stop();}

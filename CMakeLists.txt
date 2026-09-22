@@ -100,8 +100,21 @@ if(WIN32)
 	add_executable(RearSilver-Stream-Suite-Control-Hub WIN32 src/music_player/main.cpp src/music_player/music_hub.cpp
 		src/music_player/youtube_resolver.cpp src/music_player/local_library.cpp
 		src/music_player/update_service.cpp src/music_player/update_version.cpp src/music_player/update_download.cpp
-		src/music_player/system_media_provider.cpp src/music_player/spotify_client.cpp
+		src/music_player/system_media_client.cpp src/music_player/diagnostic_package.cpp src/music_player/spotify_client.cpp
 		src/music_player/twitch_accounts.cpp src/music_player/twitch_chat_service.cpp src/music_player/app.rc)
+	add_executable(RearSilver-Stream-Suite-System-Media-Helper WIN32
+		src/music_player/system_media_helper_main.cpp
+		src/music_player/system_media_provider.cpp)
+	target_include_directories(RearSilver-Stream-Suite-System-Media-Helper PRIVATE
+		"${CMAKE_CURRENT_BINARY_DIR}/generated"
+		"${CMAKE_CURRENT_SOURCE_DIR}/src/music_player")
+	target_link_libraries(RearSilver-Stream-Suite-System-Media-Helper PRIVATE
+		dbghelp.lib ole32.lib Shell32.lib WindowsApp.lib)
+	target_compile_definitions(RearSilver-Stream-Suite-System-Media-Helper PRIVATE UNICODE _UNICODE)
+	set_target_properties(RearSilver-Stream-Suite-System-Media-Helper PROPERTIES
+		CXX_STANDARD 17
+		CXX_STANDARD_REQUIRED YES
+		MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 	add_executable(RearSilver-Stream-Suite-Updater WIN32 src/updater/updater_main.cpp)
 	target_link_libraries(RearSilver-Stream-Suite-Updater PRIVATE Shell32.lib)
 	target_compile_definitions(RearSilver-Stream-Suite-Updater PRIVATE UNICODE _UNICODE)
@@ -135,17 +148,25 @@ if(WIN32)
 		set_target_properties(RearSilver-Stream-Suite-Control-Hub PROPERTIES
 			RUNTIME_OUTPUT_DIRECTORY "${RS_HUB_ARTIFACT_DIR}"
 			RUNTIME_OUTPUT_DIRECTORY_RELWITHDEBINFO "${RS_HUB_ARTIFACT_DIR}"
-			PDB_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/symbols"
-			PDB_OUTPUT_DIRECTORY_RELWITHDEBINFO "${CMAKE_CURRENT_BINARY_DIR}/symbols/RelWithDebInfo"
+			PDB_OUTPUT_DIRECTORY "${RS_ARTIFACT_DIR}/symbols"
+			PDB_OUTPUT_DIRECTORY_RELWITHDEBINFO "${RS_ARTIFACT_DIR}/symbols"
 			COMPILE_PDB_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/symbols"
 			COMPILE_PDB_OUTPUT_DIRECTORY_RELWITHDEBINFO "${CMAKE_CURRENT_BINARY_DIR}/symbols/RelWithDebInfo")
 		set_target_properties(RearSilver-Stream-Suite-Updater PROPERTIES
 			RUNTIME_OUTPUT_DIRECTORY "${RS_HUB_ARTIFACT_DIR}"
 			RUNTIME_OUTPUT_DIRECTORY_RELWITHDEBINFO "${RS_HUB_ARTIFACT_DIR}")
+		set_target_properties(RearSilver-Stream-Suite-System-Media-Helper PROPERTIES
+			RUNTIME_OUTPUT_DIRECTORY "${RS_HUB_ARTIFACT_DIR}"
+			RUNTIME_OUTPUT_DIRECTORY_RELWITHDEBINFO "${RS_HUB_ARTIFACT_DIR}"
+			PDB_OUTPUT_DIRECTORY "${RS_ARTIFACT_DIR}/symbols"
+			PDB_OUTPUT_DIRECTORY_RELWITHDEBINFO "${RS_ARTIFACT_DIR}/symbols"
+			COMPILE_PDB_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/symbols"
+			COMPILE_PDB_OUTPUT_DIRECTORY_RELWITHDEBINFO "${CMAKE_CURRENT_BINARY_DIR}/symbols/RelWithDebInfo")
 	endif()
-	add_dependencies(RearSilver-Stream-Suite-Control-Hub RearSilver-Stream-Suite-Updater)
+	add_dependencies(RearSilver-Stream-Suite-Control-Hub RearSilver-Stream-Suite-Updater RearSilver-Stream-Suite-System-Media-Helper)
 	if(MSVC)
 		target_compile_options(RearSilver-Stream-Suite-Control-Hub PRIVATE /utf-8)
+		target_compile_options(RearSilver-Stream-Suite-System-Media-Helper PRIVATE /utf-8)
 	endif()
 	add_custom_command(TARGET RearSilver-Stream-Suite-Control-Hub POST_BUILD
 		COMMAND "${CMAKE_COMMAND}" -E rm -f

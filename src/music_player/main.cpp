@@ -2062,13 +2062,43 @@ static bool startUpdaterHandoff(HWND window, bool handoffTest)
 	const std::filesystem::path runnerFolder = std::filesystem::path(std::wstring(localAppData, localAppDataLength)) /
 		L"RearSilver Stream Suite" / L"Updates" / L"Runner";
 	std::error_code runnerError; std::filesystem::create_directories(runnerFolder, runnerError);
-	if (runnerError) return false;
-	const std::wstring helper = (runnerFolder / (L"RearSilver-Stream-Suite-Updater-" +
-		std::to_wstring(GetCurrentProcessId()) + L".exe")).wstring();
-	if (!CopyFileW(helperSource.c_str(), helper.c_str(), FALSE)) {
-		MessageBoxW(window, L"The update helper could not be prepared outside the installation folder.",
+	if (runnerError) {
+		traceLog("update-helper-runner-folder-failed", "error=" + std::to_string(runnerError.value()));
+		return false;
+	}
+	// A runner cannot delete itself while it is executing. Remove helpers left
+	// by completed attempts before choosing a new, collision-proof filename;
+	// deletion of a still-running helper simply fails and is safely ignored.
+	std::error_code scanError;
+	for (std::filesystem::directory_iterator item(runnerFolder, scanError), end; !scanError && item != end; item.increment(scanError)) {
+		const std::wstring name = item->path().filename().wstring();
+		if (name.rfind(L"RearSilver-Stream-Suite-Updater-", 0) != 0 || item->path().extension() != L".exe")
+			continue;
+		std::error_code cleanupError;
+		std::filesystem::remove(item->path(), cleanupError);
+	}
+	std::wstring helper;
+	DWORD copyError = ERROR_SUCCESS;
+	for (unsigned int attempt = 0; attempt < 8; ++attempt) {
+		helper = (runnerFolder / (L"RearSilver-Stream-Suite-Updater-" +
+			std::to_wstring(GetCurrentProcessId()) + L"-" + std::to_wstring(GetTickCount64()) +
+			L"-" + std::to_wstring(attempt) + L".exe")).wstring();
+		if (CopyFileW(helperSource.c_str(), helper.c_str(), TRUE)) {
+			copyError = ERROR_SUCCESS;
+			break;
+		}
+		copyError = GetLastError();
+		if (copyError != ERROR_FILE_EXISTS && copyError != ERROR_ALREADY_EXISTS)
+			break;
+	}
+	if (copyError != ERROR_SUCCESS) {
+		traceLog("update-helper-stage-failed", "win32=" + std::to_string(copyError));
+		const std::wstring message = L"The update helper could not be prepared outside the installation folder.\r\n\r\nWindows error " +
+			std::to_wstring(copyError) + L". Retry the update. If it fails again, include the Control Hub lifecycle log in your feedback report.";
+		MessageBoxW(window, message.c_str(),
 			L"RearSilver Stream Suite Update", MB_OK | MB_ICONERROR); return false;
 	}
+	traceLog("update-helper-staged", "runner=" + wideToUtf8(helper));
 	std::wstring command = quotedArgument(helper) + L" --hub-pid " + std::to_wstring(GetCurrentProcessId()) +
 		L" --hub-path " + quotedArgument(executable) + L" --obs-pid " +
 		std::to_wstring(obs.processId) + L" --version " + quotedArgument(utf8ToWide(g_updateCheckResult.availableVersion)) +
@@ -2083,6 +2113,9 @@ static bool startUpdaterHandoff(HWND window, bool handoffTest)
 	STARTUPINFOW startup{}; startup.cb = sizeof(startup); PROCESS_INFORMATION process{};
 	if (!CreateProcessW(helper.c_str(), command.data(), nullptr, nullptr, FALSE, CREATE_BREAKAWAY_FROM_JOB | CREATE_UNICODE_ENVIRONMENT,
 		nullptr, nullptr, &startup, &process)) {
+		const DWORD startError = GetLastError();
+		traceLog("update-helper-start-failed", "win32=" + std::to_string(startError));
+		std::error_code cleanupError; std::filesystem::remove(helper, cleanupError);
 		MessageBoxW(window, L"The update helper could not be started.", L"RearSilver Stream Suite Update", MB_OK | MB_ICONERROR); return false;
 	}
 	CloseHandle(process.hThread); CloseHandle(process.hProcess);

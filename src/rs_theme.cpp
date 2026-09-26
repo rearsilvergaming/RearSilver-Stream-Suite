@@ -2,6 +2,7 @@
 
 #include <QComboBox>
 #include <QSettings>
+#include <QStyle>
 #include <QString>
 #include <QWidget>
 
@@ -57,10 +58,36 @@ void RsMainDock::applyTheme()
 
 	// TRUE OBS DEFAULT: no stylesheet at all
 	if (m_currentTheme == "default") {
-		// Nothing else to apply. We want OBS/OS styling only.
+		// OBS has no native equivalent for the Suite's internal splitter. Keep
+		// the dock otherwise unstyled, but draw this handle from the active OBS
+		// palette so the resize boundary remains discoverable across themes.
+		if (m_splitter) {
+			m_splitter->setHandleWidth(6);
+			m_splitter->setStyleSheet(R"(
+QSplitter#rs-main-splitter::handle {
+	background-color: palette(highlight);
+}
+QSplitter#rs-main-splitter::handle:vertical {
+	margin-top: 2px;
+	margin-bottom: 2px;
+}
+QSplitter#rs-main-splitter::handle:horizontal {
+	margin-left: 2px;
+	margin-right: 2px;
+}
+QSplitter#rs-main-splitter::handle:hover,
+QSplitter#rs-main-splitter::handle:pressed {
+	background-color: palette(highlight);
+	margin: 0;
+}
+)");
+		}
 		refreshConnectionIndicators();
 		return;
 	}
+
+	if (m_splitter)
+		m_splitter->setHandleWidth(style()->pixelMetric(QStyle::PM_SplitterWidth, nullptr, m_splitter));
 
 	QString css;
 

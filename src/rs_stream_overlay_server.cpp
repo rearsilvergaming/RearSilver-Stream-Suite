@@ -17,7 +17,8 @@ RsStreamOverlayServer &RsStreamOverlayServer::instance()
 RsStreamOverlayServer::RsStreamOverlayServer(QObject *parent) : QObject(parent)
 {
 	m_quickTextState = {{"text", ""}, {"size", 120}, {"colour", "#ffffff"},
-		{"font", "Sora"}, {"fontWeight", 700}};
+		{"font", "Sora"}, {"fontWeight", 700}, {"stroke", false},
+		{"strokeColour", "#000000"}, {"strokeWidth", 4}};
 	m_timerState = {{"label", "Timer"}, {"mode", "countdown"}, {"seconds", 300},
 		{"displaySeconds", 300}, {"running", false}, {"textColour", "#ffffff"},
 		{"labelSize", 28}, {"timeSize", 84}, {"shadow", true}, {"background", false},

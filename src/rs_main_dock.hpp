@@ -210,7 +210,7 @@ private:
 
 	QToolButton *m_btnUiSettings = nullptr;
 	QToolButton *m_btnStreamToolsQuickActions = nullptr;
-	QToolButton *m_btnStreamToolQuickTextShow = nullptr;
+	QToolButton *m_btnStreamToolQuickTextToggle = nullptr;
 	QToolButton *m_btnStreamToolTimerStart = nullptr;
 	QToolButton *m_btnStreamToolTimerPause = nullptr;
 	QLabel *m_lblStreamToolReplay = nullptr;

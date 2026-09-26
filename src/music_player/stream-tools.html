@@ -99,9 +99,23 @@
 </div>
 </div>
 <div class="row">
-<button data-action="quickTextShow" class="primary" disabled>Show message</button>
+<label class="check"><input id="quickStroke" type="checkbox">Add text outline</label>
+<div>
+<label>Outline colour</label>
+<div class="colour">
+<input id="quickStrokeColour" type="color" value="#000000">
+<input id="quickStrokeColourHex" value="#000000" maxlength="7">
+</div>
+</div>
+<div>
+<label>Outline width</label>
+<input id="quickStrokeWidth" type="range" min="1" max="12" value="4">
+<div class="range-value"><span>Thin</span><strong id="quickStrokeWidthValue">4 px</strong><span>Bold</span></div>
+</div>
+</div>
+<div class="row">
+<button id="quickTextToggle" class="primary" disabled>Show message</button>
 <button id="savePreset">Save as preset</button>
-<button data-action="quickTextHide">Hide</button>
 </div>
 <div id="quickTextStatus" class="status">Quick Text has not been added to OBS yet.</div>
 <label>Presets</label>
@@ -226,23 +240,25 @@
 <script>
 (()=>{const byId=id=>document.getElementById(id),post=(action,value='')=>parent.rsNativePost(JSON.stringify({page:'tools',action,value}));
 document.querySelectorAll('[data-tool-tab]').forEach(tab=>tab.addEventListener('click',()=>{if(tab.dataset.toolTab==='quick-text')post('quickTextStatus');else if(tab.dataset.toolTab==='timer')post('timerStatus')}));
-const quick=()=>({text:byId('quickText').value,size:+byId('quickSize').value,colour:byId('quickColour').value,font:byId('quickFont').value,fontWeight:+byId('quickFontWeight').value});
+const quick=()=>({text:byId('quickText').value,size:+byId('quickSize').value,colour:byId('quickColour').value,font:byId('quickFont').value,fontWeight:+byId('quickFontWeight').value,stroke:byId('quickStroke').checked,strokeColour:byId('quickStrokeColour').value,strokeWidth:+byId('quickStrokeWidth').value});
 const quickForText=text=>({...quick(),text});
 let quickUpdate=0,requestedQuickStatus=false,retainedQuickText='',quickDraftInitialised=false;
 window.rsQuickObsConnected=false;
-const quickShowButton=document.querySelector('[data-action="quickTextShow"]');
-const quickHideButton=document.querySelector('[data-action="quickTextHide"]');
-const previewQuick=()=>{const preview=byId('quickPreview'),size=+(byId('quickSize').value||120),hasMessage=byId('quickText').value.trim().length>0;preview.textContent=hasMessage?byId('quickText').value:'Preview';quickShowButton.disabled=!window.rsQuickObsConnected||!hasMessage;preview.style.color=byId('quickColour').value;preview.style.fontFamily=byId('quickFont').value;preview.style.fontWeight=byId('quickFontWeight').value;preview.style.fontSize=Math.max(10,Math.min(68,size*.4))+'px'};
+window.rsQuickVisible=false;
+const quickToggleButton=byId('quickTextToggle');
+const refreshQuickToggle=()=>{const hasMessage=byId('quickText').value.trim().length>0;quickToggleButton.textContent=window.rsQuickVisible?'Hide message':'Show message';quickToggleButton.disabled=!window.rsQuickObsConnected||(!window.rsQuickVisible&&!hasMessage)};
+const previewQuick=()=>{const preview=byId('quickPreview'),size=+(byId('quickSize').value||120),scale=preview.clientWidth/1920;preview.textContent=byId('quickText').value.trim()?byId('quickText').value:'Preview';refreshQuickToggle();preview.style.color=byId('quickColour').value;preview.style.fontFamily=byId('quickFont').value;preview.style.fontWeight=byId('quickFontWeight').value;preview.style.fontSize=Math.max(10,Math.min(68,size*.4))+'px';preview.style.webkitTextStroke=byId('quickStroke').checked?`${Math.max(.25,(+byId('quickStrokeWidth').value||4)*scale)}px ${byId('quickStrokeColour').value}`:'0 transparent';preview.style.paintOrder='stroke fill';byId('quickStrokeWidthValue').textContent=`${byId('quickStrokeWidth').value} px`};
 const configureQuick=()=>{previewQuick();clearTimeout(quickUpdate);quickUpdate=setTimeout(()=>post('quickTextConfig',quickForText(retainedQuickText)),120)};
-['quickText','quickSize','quickFont','quickFontWeight'].forEach(id=>{byId(id).oninput=configureQuick;byId(id).onchange=configureQuick});
+['quickText','quickSize','quickFont','quickFontWeight','quickStroke','quickStrokeWidth'].forEach(id=>{byId(id).oninput=configureQuick;byId(id).onchange=configureQuick});
 byId('quickColour').oninput=()=>{byId('quickColourHex').value=byId('quickColour').value;configureQuick()};
 byId('quickColourHex').oninput=()=>{if(/^#[0-9a-f]{6}$/i.test(byId('quickColourHex').value)){byId('quickColour').value=byId('quickColourHex').value;configureQuick()}};
-quickShowButton.onclick=()=>{const text=byId('quickText').value.trim();if(window.rsQuickObsConnected&&text){retainedQuickText=text;post('quickTextShow',quickForText(text))}};
-quickHideButton.onclick=()=>{if(window.rsQuickObsConnected)post('quickTextHide')};
+byId('quickStrokeColour').oninput=()=>{byId('quickStrokeColourHex').value=byId('quickStrokeColour').value;configureQuick()};
+byId('quickStrokeColourHex').oninput=()=>{if(/^#[0-9a-f]{6}$/i.test(byId('quickStrokeColourHex').value)){byId('quickStrokeColour').value=byId('quickStrokeColourHex').value;configureQuick()}};
+quickToggleButton.onclick=()=>{if(!window.rsQuickObsConnected)return;if(window.rsQuickVisible){post('quickTextHide');return}const text=byId('quickText').value.trim();if(text){retainedQuickText=text;post('quickTextShow',quickForText(text))}};
 window.rsShowQuickPreset=text=>{text=String(text||'').trim();if(!window.rsQuickObsConnected||!text)return;retainedQuickText=text;post('quickTextShow',quickForText(text))};
 byId('presets').addEventListener('click',event=>{const button=event.target.closest('button');if(!button)return;event.preventDefault();event.stopImmediatePropagation();byId('quickText').value=button.textContent;previewQuick();post('quickTextShow',quick())},true);
 const applyTools=window.rsApplyTools;
-window.rsApplyTools=config=>{applyTools(config);window.rsQuickObsConnected=!!config.ipcConnected;retainedQuickText=config.quickText||retainedQuickText;if(!quickDraftInitialised){byId('quickText').value='';quickDraftInitialised=true}const select=byId('quickFont'),selected=config.quickFont||'Sora',families=Array.isArray(config.fontFamilies)?config.fontFamilies:[];select.innerHTML='';families.forEach(font=>{const option=document.createElement('option');option.value=option.textContent=font;select.appendChild(option)});if(!families.some(font=>font.toLowerCase()===selected.toLowerCase())){const option=document.createElement('option');option.value=option.textContent=selected;select.insertBefore(option,select.firstChild)}select.value=selected;byId('quickFontWeight').value=String(config.quickFontWeight||700);byId('quickTextStatus').textContent=config.quickTextMessage||'Quick Text has not been added to OBS yet.';byId('quickTextStatus').style.color=config.quickTextConflict?'#ff9caa':'';quickHideButton.disabled=!window.rsQuickObsConnected;previewQuick();post('quickTextConfig',quickForText(retainedQuickText));if(!requestedQuickStatus){requestedQuickStatus=true;post('quickTextStatus')}};
+window.rsApplyTools=config=>{applyTools(config);window.rsQuickObsConnected=!!config.ipcConnected;window.rsQuickVisible=!!config.quickTextVisible;retainedQuickText=config.quickText||retainedQuickText;if(!quickDraftInitialised){byId('quickText').value='';quickDraftInitialised=true}const select=byId('quickFont'),selected=config.quickFont||'Sora',families=Array.isArray(config.fontFamilies)?config.fontFamilies:[];select.innerHTML='';families.forEach(font=>{const option=document.createElement('option');option.value=option.textContent=font;select.appendChild(option)});if(!families.some(font=>font.toLowerCase()===selected.toLowerCase())){const option=document.createElement('option');option.value=option.textContent=selected;select.insertBefore(option,select.firstChild)}select.value=selected;byId('quickFontWeight').value=String(config.quickFontWeight||700);byId('quickStroke').checked=!!config.quickStroke;byId('quickStrokeColour').value=byId('quickStrokeColourHex').value=config.quickStrokeColour||'#000000';byId('quickStrokeWidth').value=String(config.quickStrokeWidth||4);byId('quickTextStatus').textContent=config.quickTextMessage||'Quick Text has not been added to OBS yet.';byId('quickTextStatus').style.color=config.quickTextConflict?'#ff9caa':'';previewQuick();post('quickTextConfig',quickForText(retainedQuickText));if(!requestedQuickStatus){requestedQuickStatus=true;post('quickTextStatus')}};
 byId('browseProgram').onclick=()=>post('pickProgram');
 window.rsSelectedProgram=path=>{byId('programPath').value=path||''};
 })();
@@ -345,13 +361,19 @@ text:String(value.text||''),
 font:value.font?String(value.font):'',
 fontWeight:Number(value.fontWeight)||0,
 size:Number(value.size)||0,
-colour:/^#[0-9a-f]{6}$/i.test(value.colour||'')?value.colour:''
+colour:/^#[0-9a-f]{6}$/i.test(value.colour||'')?value.colour:'',
+stroke:!!value.stroke,
+strokeColour:/^#[0-9a-f]{6}$/i.test(value.strokeColour||'')?value.strokeColour:'#000000',
+strokeWidth:Math.max(1,Math.min(12,Number(value.strokeWidth)||4))
 }:{text:''};
 const currentStyle=()=>({
 font:document.getElementById('quickFont').value,
 fontWeight:+document.getElementById('quickFontWeight').value,
 size:+document.getElementById('quickSize').value,
-colour:document.getElementById('quickColour').value
+colour:document.getElementById('quickColour').value,
+stroke:document.getElementById('quickStroke').checked,
+strokeColour:document.getElementById('quickStrokeColour').value,
+strokeWidth:+document.getElementById('quickStrokeWidth').value
 });
 const savePresets=()=>post('saveQuickPresets',presetList);
 const applyPreset=preset=>{
@@ -362,6 +384,10 @@ if(preset.colour){
 document.getElementById('quickColour').value=preset.colour;
 document.getElementById('quickColourHex').value=preset.colour;
 }
+document.getElementById('quickStroke').checked=!!preset.stroke;
+document.getElementById('quickStrokeColour').value=preset.strokeColour||'#000000';
+document.getElementById('quickStrokeColourHex').value=preset.strokeColour||'#000000';
+document.getElementById('quickStrokeWidth').value=String(preset.strokeWidth||4);
 window.rsShowQuickPreset(preset.text);
 };
 const renderPresets=()=>{
@@ -436,8 +462,12 @@ preview.style.textAlign='center';
 preview.style.whiteSpace='pre-wrap';
 preview.style.overflowWrap='anywhere';
 preview.style.padding=`${12*scale}px ${24*scale}px`;
+preview.style.webkitTextStroke=document.getElementById('quickStroke').checked
+?`${Math.max(.25,(+document.getElementById('quickStrokeWidth').value||4)*scale)}px ${document.getElementById('quickStrokeColour').value}`
+:'0 transparent';
+preview.style.paintOrder='stroke fill';
 };
-['quickText','quickSize','quickFont','quickFontWeight','quickColour','quickColourHex'].forEach(id=>{
+['quickText','quickSize','quickFont','quickFontWeight','quickColour','quickColourHex','quickStroke','quickStrokeColour','quickStrokeColourHex','quickStrokeWidth'].forEach(id=>{
 document.getElementById(id).addEventListener('input',syncQuickPreviewGeometry);
 document.getElementById(id).addEventListener('change',syncQuickPreviewGeometry);
 });

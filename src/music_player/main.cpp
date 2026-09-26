@@ -2348,7 +2348,7 @@ public:
 									else if(action=="setAutoClose")setMusicSetting(L"tool.autoClose",object->GetBool("value")?L"true":L"false");
 									else if(action=="dropText"||action=="quickTextConfig"||action=="quickTextShow"){
 										CefRefPtr<CefDictionaryValue>v=object->GetDictionary("value");
-										if(v){setMusicSetting(L"tool.quickText",utf8ToWide(v->GetString("text").ToString()));setMusicSetting(L"tool.quickSize",std::to_wstring(v->GetInt("size")));setMusicSetting(L"tool.quickColour",utf8ToWide(v->GetString("colour").ToString()));setMusicSetting(L"tool.quickFont",utf8ToWide(v->GetString("font").ToString()));if(v->HasKey("fontWeight"))setMusicSetting(L"tool.quickFontWeight",std::to_wstring(v->GetInt("fontWeight")));}
+										if(v){setMusicSetting(L"tool.quickText",utf8ToWide(v->GetString("text").ToString()));setMusicSetting(L"tool.quickSize",std::to_wstring(v->GetInt("size")));setMusicSetting(L"tool.quickColour",utf8ToWide(v->GetString("colour").ToString()));setMusicSetting(L"tool.quickFont",utf8ToWide(v->GetString("font").ToString()));if(v->HasKey("fontWeight"))setMusicSetting(L"tool.quickFontWeight",std::to_wstring(v->GetInt("fontWeight")));if(v->HasKey("stroke"))setMusicSetting(L"tool.quickStroke",v->GetBool("stroke")?L"true":L"false");if(v->HasKey("strokeColour"))setMusicSetting(L"tool.quickStrokeColour",utf8ToWide(v->GetString("strokeColour").ToString()));if(v->HasKey("strokeWidth"))setMusicSetting(L"tool.quickStrokeWidth",std::to_wstring(v->GetInt("strokeWidth")));}
 									}else if(action=="timerConfig"){
 										CefRefPtr<CefDictionaryValue>v=object->GetDictionary("value");
 										if(v){setMusicSetting(L"tool.timerLingerSeconds",std::to_wstring(v->GetInt("lingerSeconds")));setMusicSetting(L"tool.timerSoundPath",utf8ToWide(v->GetString("soundPath").ToString()));}
@@ -2478,6 +2478,9 @@ private:
 		d->SetString("quickColour",wideToUtf8(musicSetting(L"tool.quickColour",L"#ffffff")));
 		d->SetString("quickFont",wideToUtf8(normalisedMusicFontSetting(L"tool.quickFont",L"Sora")));
 		d->SetInt("quickFontWeight",_wtoi(musicSetting(L"tool.quickFontWeight",L"700").c_str()));
+		d->SetBool("quickStroke",musicBool(L"tool.quickStroke",false));
+		d->SetString("quickStrokeColour",wideToUtf8(musicSetting(L"tool.quickStrokeColour",L"#000000")));
+		d->SetInt("quickStrokeWidth",_wtoi(musicSetting(L"tool.quickStrokeWidth",L"4").c_str()));
 		d->SetBool("quickTextSourceExists",g_quickTextSourceExists);
 		d->SetBool("quickTextPlaced",g_quickTextPlaced);
 		d->SetBool("quickTextVisible",g_quickTextVisible);

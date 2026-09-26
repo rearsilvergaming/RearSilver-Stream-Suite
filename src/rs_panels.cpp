@@ -271,8 +271,7 @@ void RsMainDock::createPanels()
 		auto *showReplay = makeButton("Show", "Show the managed Instant Replay layout", "view-visible", "👁");
 		auto *hideReplay = makeButton("Hide", "Hide the managed Instant Replay layout", "view-hidden", "◉");
 		auto *triggerReplay = makeButton("Save & play replay", "Save and play the current Replay Buffer clip", "media-playback-start", "🎬");
-		m_btnStreamToolQuickTextShow = makeButton("Show message", "Show the current Hub Quick Text message", "view-visible", "💬");
-		auto *hideQuickText = makeButton("Hide", "Hide Quick Text without clearing its configured message", "view-hidden", "◉");
+		m_btnStreamToolQuickTextToggle = makeButton("Show message", "Show the current Hub Quick Text message", "view-visible", "💬");
 		m_btnStreamToolTimerStart = makeButton("Start countdown", "Start the Hub-configured Timer or Countdown in the current scene", "chronometer", "⏱");
 		m_btnStreamToolTimerPause = makeButton("Pause", "Pause or resume the current Timer or Countdown", "media-playback-pause", "⏯");
 		auto *resetTimer = makeButton("Reset timer", "Reset the Timer to its Hub-configured duration", "edit-undo", "↺");
@@ -294,8 +293,7 @@ void RsMainDock::createPanels()
 		replaySection.second->addWidget(triggerReplay, 1, 0, 1, 2);
 		auto quickTextSection = makeSection("Quick Text — waiting for Hub", &m_lblStreamToolQuickText);
 		m_streamToolActionLayouts.append(quickTextSection.second);
-		quickTextSection.second->addWidget(m_btnStreamToolQuickTextShow, 0, 0);
-		quickTextSection.second->addWidget(hideQuickText, 0, 1);
+		quickTextSection.second->addWidget(m_btnStreamToolQuickTextToggle, 0, 0, 1, 2);
 		auto timerSection = makeSection("Countdown — waiting for Hub", &m_lblStreamToolTimer);
 		m_streamToolActionLayouts.append(timerSection.second);
 		timerSection.second->addWidget(showTimer, 0, 0);
@@ -317,8 +315,7 @@ void RsMainDock::createPanels()
 
 		for (QToolButton *button : {showReplay, hideReplay, triggerReplay})
 			button->setProperty("requiresReplayConfiguration", true);
-		m_btnStreamToolQuickTextShow->setProperty("requiresQuickTextMessage", true);
-		hideQuickText->setProperty("requiresQuickTextConfiguration", true);
+		m_btnStreamToolQuickTextToggle->setProperty("quickTextToggle", true);
 		for (QToolButton *button : {m_btnStreamToolTimerStart, m_btnStreamToolTimerPause, resetTimer, showTimer, hideTimer})
 			button->setProperty("requiresTimerConfiguration", true);
 		showMusicOverlay->setProperty("requiresHub", true);
@@ -329,8 +326,11 @@ void RsMainDock::createPanels()
 		connect(showReplay, &QToolButton::clicked, this, []() { rsExecuteStreamToolQuickAction(RsStreamToolQuickAction::ShowReplay); });
 		connect(hideReplay, &QToolButton::clicked, this, []() { rsExecuteStreamToolQuickAction(RsStreamToolQuickAction::HideReplay); });
 		connect(triggerReplay, &QToolButton::clicked, this, []() { rsExecuteStreamToolQuickAction(RsStreamToolQuickAction::TriggerReplay); });
-		connect(m_btnStreamToolQuickTextShow, &QToolButton::clicked, this, []() { rsExecuteStreamToolQuickAction(RsStreamToolQuickAction::ShowQuickText); });
-		connect(hideQuickText, &QToolButton::clicked, this, []() { rsExecuteStreamToolQuickAction(RsStreamToolQuickAction::HideQuickText); });
+		connect(m_btnStreamToolQuickTextToggle, &QToolButton::clicked, this, [this]() {
+			rsExecuteStreamToolQuickAction(m_streamToolsQuickTextVisible
+				? RsStreamToolQuickAction::HideQuickText
+				: RsStreamToolQuickAction::ShowQuickText);
+		});
 		connect(m_btnStreamToolTimerStart, &QToolButton::clicked, this, []() { rsExecuteStreamToolQuickAction(RsStreamToolQuickAction::StartTimer); });
 		connect(m_btnStreamToolTimerPause, &QToolButton::clicked, this, []() { rsExecuteStreamToolQuickAction(RsStreamToolQuickAction::PauseTimer); });
 		connect(resetTimer, &QToolButton::clicked, this, []() { rsExecuteStreamToolQuickAction(RsStreamToolQuickAction::ResetTimer); });

@@ -163,7 +163,14 @@ void RsMainDock::updateStreamToolActionButtons()
 {
 	if (!m_pageStreamToolsQuickActions) return;
 	for (QToolButton *button : m_pageStreamToolsQuickActions->findChildren<QToolButton *>())
-		if (button->property("requiresReplayConfiguration").toBool())
+		if (button->property("quickTextToggle").toBool()) {
+			button->setText(m_streamToolsQuickTextVisible ? "Hide message" : "Show message");
+			button->setToolTip(m_streamToolsQuickTextVisible
+				? "Hide Quick Text without clearing its configured message"
+				: "Show the current Hub Quick Text message");
+			button->setEnabled(m_streamToolsHubConnected && m_streamToolsQuickTextReady &&
+				(m_streamToolsQuickTextVisible || m_streamToolsQuickTextHasMessage));
+		} else if (button->property("requiresReplayConfiguration").toBool())
 			button->setEnabled(m_streamToolsHubConnected && m_streamToolsReplayReady);
 		else if (button->property("requiresQuickTextMessage").toBool())
 			button->setEnabled(m_streamToolsHubConnected && m_streamToolsQuickTextReady &&
@@ -204,6 +211,7 @@ void RsMainDock::updateStreamToolState(const QString &command, const QString &ar
 			const QString activity = m_streamToolsQuickTextHasMessage ? "Message ready" : "No message selected";
 			m_lblStreamToolQuickText->setText(QString("Quick Text — %1 | %2").arg(visibility, activity));
 		}
+		updateStreamToolActionButtons();
 		return;
 	}
 	if (command == "REPLAY_STATE") {

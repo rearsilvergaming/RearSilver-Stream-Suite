@@ -27,12 +27,24 @@
 #include "rs_music/rs_music_controller.hpp"
 #include "rs_music/rs_music_twitch_auth.hpp"
 
-// Set Twitch status dot colour
+// Store the connection colour so it can be restored after a theme reset.
 static void RsSetTwitchDot(QLabel *dot, const char *hexColour)
 {
 	if (!dot)
 		return;
+	dot->setProperty("connectionColour", hexColour);
 	dot->setStyleSheet(QString("color: %1;").arg(hexColour));
+}
+
+void RsMainDock::refreshConnectionIndicators()
+{
+	for (QLabel *dot : {m_lblStreamerDot, m_lblBotDot}) {
+		if (!dot)
+			continue;
+
+		const QByteArray colour = dot->property("connectionColour").toByteArray();
+		RsSetTwitchDot(dot, colour.isEmpty() ? "#FF3B30" : colour.constData());
+	}
 }
 
 // Update Twitch status label
@@ -224,7 +236,7 @@ RsMainDock::RsMainDock(QWidget *parent) : QWidget(parent)
 	connect(m_streamerAuth, &RsMusicTwitchAuth::authCompleted, this, [this]() {
 		// GREEN = authenticated & usable
 		if (m_lblStreamerDot)
-			m_lblStreamerDot->setStyleSheet("color: #00C853;");
+			RsSetTwitchDot(m_lblStreamerDot, "#00C853");
 
 		if (m_lblStreamerText) {
 			const QString name = m_streamerAuth->userLogin();

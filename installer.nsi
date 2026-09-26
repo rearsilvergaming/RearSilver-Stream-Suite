@@ -2,6 +2,7 @@ Unicode True
 !include "MUI2.nsh"
 !include "FileFunc.nsh"
 !include "LogicLib.nsh"
+!include "nsDialogs.nsh"
 !include "WordFunc.nsh"
 
 !ifndef RS_VC_RUNTIME_MIN_VERSION
@@ -56,10 +57,14 @@ ManifestDPIAware true
 !define MUI_FINISHPAGE_RUN
 !define MUI_FINISHPAGE_RUN_TEXT "Launch OBS Studio"
 !define MUI_FINISHPAGE_RUN_FUNCTION LaunchOBS
+!define MUI_DIRECTORYPAGE_TEXT_TOP "Choose where to install the Control Hub and RearSilver Stream Suite files. The OBS plugin location is selected separately on the next page."
+!define MUI_DIRECTORYPAGE_TEXT_DESTINATION "Suite destination folder"
 
 !insertmacro MUI_PAGE_WELCOME
 !insertmacro MUI_PAGE_LICENSE "License.txt"
 !insertmacro MUI_PAGE_DIRECTORY
+Page custom ObsPageCreate ObsPageLeave
+Page custom InstallSummaryPageCreate
 !insertmacro MUI_PAGE_INSTFILES
 !define MUI_PAGE_CUSTOMFUNCTION_PRE FinishPagePre
 !insertmacro MUI_PAGE_FINISH
@@ -69,15 +74,155 @@ ManifestDPIAware true
 !insertmacro MUI_LANGUAGE "English"
 
 Var ObsDir
+Var ObsPathField
+Var ObsStatusLabel
 Var InstallInstance
 Var UpdateHandoff
 
 Function FindObsDirectory
-  StrCpy $ObsDir "$PROGRAMFILES64\obs-studio"
-  ReadRegStr $0 HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\OBS Studio" "InstallLocation"
+  ; An existing Suite installation is authoritative. This keeps updates on
+  ; the same OBS installation even when OBS is installed on another drive.
+  StrCpy $ObsDir ""
+  SetRegView 64
+  ReadRegStr $0 HKLM "${PRODUCT_REG_KEY}" "OBSInstallLocation"
   ${If} $0 != ""
-    StrCpy $ObsDir $0
+    IfFileExists "$0\bin\64bit\obs64.exe" 0 +2
+      StrCpy $ObsDir $0
   ${EndIf}
+
+  ${If} $ObsDir == ""
+    ReadRegStr $0 HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\OBS Studio" "InstallLocation"
+    ${If} $0 != ""
+      IfFileExists "$0\bin\64bit\obs64.exe" 0 +2
+        StrCpy $ObsDir $0
+    ${EndIf}
+  ${EndIf}
+
+  ${If} $ObsDir == ""
+    ReadRegStr $0 HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\OBS Studio" "InstallLocation"
+    ${If} $0 != ""
+      IfFileExists "$0\bin\64bit\obs64.exe" 0 +2
+        StrCpy $ObsDir $0
+    ${EndIf}
+  ${EndIf}
+
+  ; Some OBS installers register their uninstall entry in the 32-bit view.
+  ${If} $ObsDir == ""
+    SetRegView 32
+    ReadRegStr $0 HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\OBS Studio" "InstallLocation"
+    ${If} $0 != ""
+      IfFileExists "$0\bin\64bit\obs64.exe" 0 +2
+        StrCpy $ObsDir $0
+    ${EndIf}
+  ${EndIf}
+
+  ${If} $ObsDir == ""
+    ReadRegStr $0 HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\OBS Studio" "InstallLocation"
+    ${If} $0 != ""
+      IfFileExists "$0\bin\64bit\obs64.exe" 0 +2
+        StrCpy $ObsDir $0
+    ${EndIf}
+  ${EndIf}
+
+  SetRegView 64
+  ${If} $ObsDir == ""
+    StrCpy $ObsDir "$PROGRAMFILES64\obs-studio"
+  ${EndIf}
+FunctionEnd
+
+Function ValidateObsDirectory
+  IfFileExists "$ObsDir\bin\64bit\obs64.exe" obs_directory_valid
+    Push "0"
+    Return
+  obs_directory_valid:
+    Push "1"
+FunctionEnd
+
+Function BrowseForObsDirectory
+  ${NSD_GetText} $ObsPathField $ObsDir
+  nsDialogs::SelectFolderDialog "Select the OBS Studio folder" "$ObsDir"
+  Pop $0
+  ${If} $0 != "error"
+    StrCpy $ObsDir $0
+    ${NSD_SetText} $ObsPathField $ObsDir
+    Call UpdateObsStatus
+  ${EndIf}
+FunctionEnd
+
+Function UpdateObsStatus
+  ${NSD_GetText} $ObsPathField $ObsDir
+  Call ValidateObsDirectory
+  Pop $0
+  ${If} $0 == "1"
+    ${NSD_SetText} $ObsStatusLabel "OBS Studio was found. Only the RearSilver OBS plugin will be installed here."
+  ${Else}
+    ${NSD_SetText} $ObsStatusLabel "OBS Studio was not found in this folder. Choose the folder containing bin\64bit\obs64.exe."
+  ${EndIf}
+FunctionEnd
+
+Function ObsPageCreate
+  StrCmp $UpdateHandoff "1" 0 +2
+    Abort
+  IfSilent 0 +2
+    Abort
+
+  !insertmacro MUI_HEADER_TEXT "Locate OBS Studio" "Choose where the RearSilver OBS plugin will be installed"
+  nsDialogs::Create 1018
+  Pop $0
+  ${If} $0 == error
+    Abort
+  ${EndIf}
+
+  ${NSD_CreateLabel} 0 0 100% 28u "Setup detected the OBS Studio folder below. This location is used only for the OBS plugin; the Control Hub remains in the Suite destination selected on the previous page."
+  Pop $0
+  ${NSD_CreateText} 0 38u 78% 13u "$ObsDir"
+  Pop $ObsPathField
+  ${NSD_OnChange} $ObsPathField UpdateObsStatus
+  ${NSD_CreateBrowseButton} 82% 37u 18% 15u "Browse..."
+  Pop $0
+  ${NSD_OnClick} $0 BrowseForObsDirectory
+  ${NSD_CreateLabel} 0 59u 100% 26u ""
+  Pop $ObsStatusLabel
+  Call UpdateObsStatus
+  nsDialogs::Show
+FunctionEnd
+
+Function ObsPageLeave
+  ${NSD_GetText} $ObsPathField $ObsDir
+  Call ValidateObsDirectory
+  Pop $0
+  ${If} $0 != "1"
+    MessageBox MB_ICONSTOP|MB_OK "OBS Studio could not be found at:$\r$\n$ObsDir$\r$\n$\r$\nChoose the main OBS Studio folder containing bin\64bit\obs64.exe. The Control Hub installation folder is configured separately."
+    Abort
+  ${EndIf}
+FunctionEnd
+
+Function InstallSummaryPageCreate
+  StrCmp $UpdateHandoff "1" 0 +2
+    Abort
+  IfSilent 0 +2
+    Abort
+
+  !insertmacro MUI_HEADER_TEXT "Confirm install locations" "The Suite and OBS plugin use separate destinations"
+  nsDialogs::Create 1018
+  Pop $0
+  ${If} $0 == error
+    Abort
+  ${EndIf}
+
+  ${NSD_CreateLabel} 0 0 100% 12u "Control Hub and Suite files:"
+  Pop $0
+  ${NSD_CreateText} 0 15u 100% 13u "$INSTDIR"
+  Pop $0
+  SendMessage $0 ${EM_SETREADONLY} 1 0
+  ${NSD_CreateLabel} 0 42u 100% 12u "RearSilver OBS plugin:"
+  Pop $0
+  ${NSD_CreateText} 0 57u 100% 13u "$ObsDir"
+  Pop $0
+  SendMessage $0 ${EM_SETREADONLY} 1 0
+  ${NSD_CreateLabel} 0 82u 100% 22u "Click Back to change either location, or Install to continue."
+  Pop $0
+  nsDialogs::Show
 FunctionEnd
 
 Function .onInit
@@ -89,10 +234,19 @@ Function .onInit
   IfErrors +2 0
     StrCpy $UpdateHandoff "1"
   Call FindObsDirectory
-  IfFileExists "$ObsDir\bin\64bit\obs64.exe" obs_found
-    MessageBox MB_ICONSTOP|MB_OK "OBS Studio could not be found at $ObsDir. Install the 64-bit version of OBS Studio before installing RearSilver Stream Suite."
+
+  ; Interactive installs correct an undetected location on the OBS page.
+  ; Silent updater handoffs cannot prompt, so they require a valid saved or
+  ; automatically detected OBS location before any files are changed.
+  IfSilent 0 init_complete
+  Call ValidateObsDirectory
+  Pop $0
+  ${If} $0 != "1"
+    MessageBox MB_ICONSTOP|MB_OK "OBS Studio could not be found at $ObsDir. Re-run the full RearSilver Stream Suite installer to select the correct OBS Studio folder."
+    SetErrorLevel 2
     Abort
-  obs_found:
+  ${EndIf}
+  init_complete:
 FunctionEnd
 
 Function FinishPagePre
@@ -183,6 +337,16 @@ FunctionEnd
 
 Section "RearSilver Stream Suite" MainSection
   SetShellVarContext all
+
+  ; Revalidate immediately before installation so silent and command-line
+  ; installs can never place plugin files in an arbitrary folder.
+  Call ValidateObsDirectory
+  Pop $0
+  ${If} $0 != "1"
+    MessageBox MB_ICONSTOP|MB_OK "OBS Studio could not be found at $ObsDir. RearSilver Stream Suite was not installed."
+    SetErrorLevel 2
+    Abort
+  ${EndIf}
 
   ; Preserve the installation identity on upgrade. A missing installation
   ; gets a new identity even when the user's saved settings still exist.

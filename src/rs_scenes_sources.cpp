@@ -10,12 +10,16 @@
 #include <QSizePolicy>
 #include <QPushButton>
 #include <QHBoxLayout>
+#include <QSettings>
 
 // OBS
 #include <obs-frontend-api.h>
 
 RsScenesSourcesPage::RsScenesSourcesPage(QWidget *parent) : QWidget(parent)
 {
+	QSettings settings("RearSilver", "RearSilver-Stream-Suite");
+	m_shouldEmbed = settings.value("panels/scenesSourcesInSuite", true).toBool();
+
 	buildUi();
 
 	QTimer::singleShot(0, this, &RsScenesSourcesPage::tryEmbedNativeDocks);
@@ -99,6 +103,12 @@ void RsScenesSourcesPage::setStatus(const QString &text)
 	}
 }
 
+void RsScenesSourcesPage::saveLocationPreference() const
+{
+	QSettings settings("RearSilver", "RearSilver-Stream-Suite");
+	settings.setValue("panels/scenesSourcesInSuite", m_shouldEmbed);
+}
+
 // ------------------------------------------------------------
 // EMBED LOGIC (unchanged, safe)
 // ------------------------------------------------------------
@@ -130,6 +140,23 @@ void RsScenesSourcesPage::tryEmbedNativeDocks()
 
 	if (!m_nativeScenesDock || !m_nativeSourcesDock) {
 		scheduleRetry();
+		return;
+	}
+
+	// Respect the user's saved choice before taking either native widget from
+	// its OBS dock. This runs after OBS has restored its own dock layout.
+	if (!m_shouldEmbed) {
+		m_nativeScenesDock->setVisible(true);
+		m_nativeSourcesDock->setVisible(true);
+		m_nativeScenesDock.clear();
+		m_nativeSourcesDock.clear();
+		m_retryCount = 0;
+		showPlaceholders();
+		setStatus("Scenes and Sources are available in their normal OBS docks.");
+		if (m_toggleButton) {
+			m_toggleButton->setText("Bring panels into Suite");
+			m_toggleButton->setEnabled(true);
+		}
 		return;
 	}
 
@@ -185,6 +212,8 @@ void RsScenesSourcesPage::toggleNativeDocks()
 {
 	if (m_embedded) {
 		m_lastTabIndex = m_tabs ? m_tabs->currentIndex() : 0;
+		m_shouldEmbed = false;
+		saveLocationPreference();
 		restoreNativeDocks(true);
 		showPlaceholders();
 		setStatus("Scenes and Sources are available in their normal OBS docks.");
@@ -193,6 +222,8 @@ void RsScenesSourcesPage::toggleNativeDocks()
 		return;
 	}
 
+	m_shouldEmbed = true;
+	saveLocationPreference();
 	m_retryCount = 0;
 	setStatus("Connecting to OBS scene and source panels…");
 	if (m_toggleButton) {

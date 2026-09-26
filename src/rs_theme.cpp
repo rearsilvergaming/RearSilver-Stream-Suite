@@ -58,6 +58,7 @@ void RsMainDock::applyTheme()
 	// TRUE OBS DEFAULT: no stylesheet at all
 	if (m_currentTheme == "default") {
 		// Nothing else to apply. We want OBS/OS styling only.
+		refreshConnectionIndicators();
 		return;
 	}
 
@@ -807,12 +808,25 @@ QWidget {
 }
 
 #rs-content-card, #rs-card {
-    background: qlineargradient(
-        x1:0, y1:0, x2:0, y2:1,
-        stop:0 rgba(255,255,255,0.035),
-        stop:1 rgba(255,255,255,0.02)
+	background-color: #000000;
 	border: 2px solid #ffffff;
 	border-radius: 10px;
+}
+
+QTabBar::tab {
+	background-color: #000000;
+	color: #ffffff;
+	border: 2px solid #ffffff;
+	padding: 6px 12px;
+}
+
+QTabBar::tab:hover:!selected {
+	background-color: #151515;
+}
+
+QTabBar::tab:selected {
+	background-color: #ffffff;
+	color: #000000;
 }
 
 QPushButton#ControlButton,
@@ -827,6 +841,13 @@ QPushButton#ControlButton:hover,
 QPushButton#rs-primary-button:hover,
 QPushButton#rs-secondary-button:hover {
 	background-color: #151515;
+}
+
+QPushButton#ControlButton[active="true"],
+QPushButton#ControlButton[active="true"]:hover {
+	background-color: #ffffff;
+	color: #000000;
+	border: 2px solid #ffffff;
 }
 
 QFrame#rs-divider {
@@ -847,15 +868,6 @@ QLineEdit, QComboBox, QListWidget, QPlainTextEdit {
 QListWidget::item:selected {
 	background-color: #ffffff;
 	color: #000000;
-}
-
-QCheckBox::indicator:unchecked {
-	border: 2px solid #ffffff;
-	background-color: #000000;
-}
-QCheckBox::indicator:checked {
-	border: 2px solid #ffffff;
-	background-color: #ffffff;
 }
 
 /* Safety Lock – High Contrast */
@@ -1281,4 +1293,6 @@ QPushButton#ControlButton[pulse="true"] {
 		w->style()->polish(w);
 		w->update();
 	}
+
+	refreshConnectionIndicators();
 }

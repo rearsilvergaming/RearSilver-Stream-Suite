@@ -101,6 +101,7 @@ private:
 	void updateSceneSourceInfo();
 	void updateMusicStatusInfo();
 	void publishMusicAuthState();
+	void refreshConnectionIndicators();
 
 	// 🔒 Safety Lock helpers
 	void beginStopHold(QPushButton *btn, std::function<void()> action);

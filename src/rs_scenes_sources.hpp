@@ -48,9 +48,11 @@ private:
 	bool m_prevScenesDockVisible = false;
 	bool m_prevSourcesDockVisible = false;
 	bool m_embedded = false;
+	bool m_shouldEmbed = true;
 	int m_lastTabIndex = 0;
 
 	void buildUi();
+	void saveLocationPreference() const;
 	void setStatus(const QString &text);
 	void showPlaceholders();
 	void restoreNativeDocks(bool makeVisible = false);

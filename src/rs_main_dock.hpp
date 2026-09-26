@@ -4,6 +4,7 @@
 #include <QSplitter>
 #include <QTimer>
 #include <QPropertyAnimation>
+#include <QList>
 #include <functional>
 #include <obs-frontend-api.h>
 #include "rs_music/state/rs_music_state.hpp"
@@ -86,6 +87,10 @@ private:
 
 	void updateEffectiveLayout();
 	void applyOrientation();
+	void setCompactLayout(bool compact);
+	void applyNavigationLayout();
+	void applyStreamToolActionLayout();
+	void updateCompactTabNavigation();
 
 	void loadSettings();
 	void saveSettings();
@@ -126,9 +131,13 @@ private:
 	QVBoxLayout *m_sidebarLayout = nullptr;
 
 	QTabBar *m_tabBar = nullptr;
+	QToolButton *m_btnPreviousTabPage = nullptr;
+	QToolButton *m_btnNextTabPage = nullptr;
+	int m_compactTabPage = 0;
 	QStackedWidget *m_menuStack = nullptr;
 	QWidget *m_systemMenu = nullptr;
 	QVBoxLayout *m_systemMenuLayout = nullptr;
+	QGridLayout *m_systemMenuGrid = nullptr;
 	QWidget *m_enhMenu = nullptr;
 	QGridLayout *m_enhMenuLayout = nullptr;
 
@@ -143,6 +152,8 @@ private:
 	// Layout / theme
 	LayoutMode m_layoutMode = LayoutMode::Auto;
 	LayoutMode m_effectiveLayout = LayoutMode::Horizontal;
+	bool m_compactLayout = false;
+	QList<QGridLayout *> m_streamToolActionLayouts;
 
 	QComboBox *m_layoutCombo = nullptr;
 	QComboBox *m_themeCombo = nullptr;

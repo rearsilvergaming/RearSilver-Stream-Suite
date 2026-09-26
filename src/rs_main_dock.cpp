@@ -431,8 +431,45 @@ void RsMainDock::createUi()
 	m_tabBar->addTab("STREAM TOOLS");
 	m_tabBar->addTab("Music");
 	m_tabBar->setExpanding(true);
+	m_tabBar->setUsesScrollButtons(false);
+
+	auto *tabRow = new QWidget(m_navCard);
+	auto *tabRowLayout = new QHBoxLayout(tabRow);
+	tabRowLayout->setContentsMargins(0, 0, 0, 0);
+	tabRowLayout->setSpacing(3);
+
+	m_btnPreviousTabPage = new QToolButton(tabRow);
+	m_btnPreviousTabPage->setText("◀");
+	m_btnPreviousTabPage->setToolTip("Show System and Stream Tools tabs");
+	m_btnPreviousTabPage->setObjectName("SidebarButton");
+	m_btnPreviousTabPage->setFixedWidth(28);
+	m_btnPreviousTabPage->setAutoRaise(true);
+	m_btnPreviousTabPage->hide();
+
+	m_btnNextTabPage = new QToolButton(tabRow);
+	m_btnNextTabPage->setText("▶");
+	m_btnNextTabPage->setToolTip("Show Stream Tools and Music tabs");
+	m_btnNextTabPage->setObjectName("SidebarButton");
+	m_btnNextTabPage->setFixedWidth(28);
+	m_btnNextTabPage->setAutoRaise(true);
+	m_btnNextTabPage->hide();
+
+	tabRowLayout->addWidget(m_btnPreviousTabPage);
+	tabRowLayout->addWidget(m_tabBar, 1);
+	tabRowLayout->addWidget(m_btnNextTabPage);
+
 	connect(m_tabBar, &QTabBar::currentChanged, this, &RsMainDock::onTabChanged);
-	m_sidebarLayout->addWidget(m_tabBar);
+	connect(m_btnPreviousTabPage, &QToolButton::clicked, this, [this]() {
+		m_compactTabPage = 0;
+		m_tabBar->setCurrentIndex(0);
+		updateCompactTabNavigation();
+	});
+	connect(m_btnNextTabPage, &QToolButton::clicked, this, [this]() {
+		m_compactTabPage = 1;
+		m_tabBar->setCurrentIndex(2);
+		updateCompactTabNavigation();
+	});
+	m_sidebarLayout->addWidget(tabRow);
 
 	const RsBeta::State betaState = RsBeta::currentState();
 	const QString channel = QString::fromUtf8(RsBeta::kChannel).toUpper();

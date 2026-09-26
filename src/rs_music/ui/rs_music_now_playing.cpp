@@ -12,6 +12,7 @@
 #include <QSlider>
 #include <QSignalBlocker>
 #include <QPixmap>
+#include <QResizeEvent>
 
 static QLabel *makeTitle(const QString &text)
 {
@@ -50,7 +51,7 @@ RsMusicNowPlaying::RsMusicNowPlaying(RsMusicState *state, RsMusicController *con
 	m_lblAlbum = new QLabel("Album: —");
 	m_lblRequester = new QLabel("Requested by: —");
 	for (QLabel *label : {m_lblTitle, m_lblArtist, m_lblAlbum, m_lblRequester}) {
-		label->setWordWrap(true);
+		label->setWordWrap(false);
 		label->setMinimumWidth(0);
 		label->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
 	}
@@ -82,9 +83,9 @@ RsMusicNowPlaying::RsMusicNowPlaying(RsMusicState *state, RsMusicController *con
 	});
 
 // Controls grid (dock-consistent layout)
-	auto *controlsGrid = new QGridLayout();
-	controlsGrid->setHorizontalSpacing(8);
-	controlsGrid->setVerticalSpacing(8);
+	m_controlsGrid = new QGridLayout();
+	m_controlsGrid->setHorizontalSpacing(8);
+	m_controlsGrid->setVerticalSpacing(8);
 
 	// Buttons
 	m_btnPlay = new QPushButton("Play");
@@ -113,15 +114,15 @@ RsMusicNowPlaying::RsMusicNowPlaying(RsMusicState *state, RsMusicController *con
 	}
 
 	// Grid placement (2 rows, balanced)
-	controlsGrid->addWidget(m_btnPrevious, 0, 0);
-	controlsGrid->addWidget(m_btnPlay, 0, 1);
-	controlsGrid->addWidget(m_btnPause, 0, 2);
-	controlsGrid->addWidget(m_btnRestart, 1, 0);
-	controlsGrid->addWidget(m_btnSkip, 1, 1);
-	controlsGrid->addWidget(m_btnStop, 1, 2);
+	m_controlsGrid->addWidget(m_btnPrevious, 0, 0);
+	m_controlsGrid->addWidget(m_btnPlay, 0, 1);
+	m_controlsGrid->addWidget(m_btnPause, 0, 2);
+	m_controlsGrid->addWidget(m_btnRestart, 1, 0);
+	m_controlsGrid->addWidget(m_btnSkip, 1, 1);
+	m_controlsGrid->addWidget(m_btnStop, 1, 2);
 
 	// Add to main layout
-	layout->addLayout(controlsGrid);
+	layout->addLayout(m_controlsGrid);
 
 	auto *divider = new QFrame();
 	divider->setObjectName("rs-divider");
@@ -142,6 +143,61 @@ RsMusicNowPlaying::RsMusicNowPlaying(RsMusicState *state, RsMusicController *con
 	updateFromState();
 }
 
+void RsMusicNowPlaying::setCompactLayout(bool compact)
+{
+	if (!m_controlsGrid || m_compactLayout == compact)
+		return;
+
+	m_compactLayout = compact;
+	for (QPushButton *button : {m_btnPrevious, m_btnPlay, m_btnPause, m_btnRestart, m_btnSkip, m_btnStop})
+		m_controlsGrid->removeWidget(button);
+
+	if (compact) {
+		m_controlsGrid->addWidget(m_btnPrevious, 0, 0);
+		m_controlsGrid->addWidget(m_btnPlay, 0, 1);
+		m_controlsGrid->addWidget(m_btnPause, 1, 0);
+		m_controlsGrid->addWidget(m_btnRestart, 1, 1);
+		m_controlsGrid->addWidget(m_btnSkip, 2, 0);
+		m_controlsGrid->addWidget(m_btnStop, 2, 1);
+	} else {
+		m_controlsGrid->addWidget(m_btnPrevious, 0, 0);
+		m_controlsGrid->addWidget(m_btnPlay, 0, 1);
+		m_controlsGrid->addWidget(m_btnPause, 0, 2);
+		m_controlsGrid->addWidget(m_btnRestart, 1, 0);
+		m_controlsGrid->addWidget(m_btnSkip, 1, 1);
+		m_controlsGrid->addWidget(m_btnStop, 1, 2);
+	}
+
+	updateGeometry();
+}
+
+void RsMusicNowPlaying::resizeEvent(QResizeEvent *event)
+{
+	QWidget::resizeEvent(event);
+	refreshTrackLabelElision();
+}
+
+void RsMusicNowPlaying::setTrackLabelText(QLabel *label, const QString &text)
+{
+	if (!label)
+		return;
+	label->setProperty("fullText", text);
+	label->setToolTip(text);
+	const int availableWidth = qMax(80, label->width());
+	label->setText(label->fontMetrics().elidedText(text, Qt::ElideRight, availableWidth));
+}
+
+void RsMusicNowPlaying::refreshTrackLabelElision()
+{
+	for (QLabel *label : {m_lblTitle, m_lblArtist, m_lblAlbum, m_lblRequester}) {
+		if (!label)
+			continue;
+		const QString text = label->property("fullText").toString();
+		if (!text.isEmpty())
+			setTrackLabelText(label, text);
+	}
+}
+
 void RsMusicNowPlaying::setHubConnected(bool connected)
 {
 	m_hubConnected = connected;
@@ -158,10 +214,10 @@ void RsMusicNowPlaying::updateFromState()
 
 	// --- Track info (may be empty early on) ---
 	if (!m_state->hasCurrentTrack()) {
-		m_lblTitle->setText("Title: —");
-		m_lblArtist->setText("Artist: —");
-		m_lblAlbum->setText("Album: —");
-		m_lblRequester->setText("Requested by: —");
+		setTrackLabelText(m_lblTitle, "Title: —");
+		setTrackLabelText(m_lblArtist, "Artist: —");
+		setTrackLabelText(m_lblAlbum, "Album: —");
+		setTrackLabelText(m_lblRequester, "Requested by: —");
 		m_lblArtwork->clear();
 		m_loadedArtworkUri.clear();
 		QSignalBlocker blocker(m_progress);
@@ -172,10 +228,9 @@ void RsMusicNowPlaying::updateFromState()
 	} else {
 		const auto &track = m_state->currentTrack();
 
-		m_lblTitle->setText(QString("Title: %1").arg(track.title));
-		m_lblTitle->setToolTip(track.title);
-		m_lblArtist->setText(QString("Artist: %1").arg(track.artist));
-		m_lblAlbum->setText(QString("Album: %1").arg(track.album.isEmpty() ? "—" : track.album));
+		setTrackLabelText(m_lblTitle, QString("Title: %1").arg(track.title));
+		setTrackLabelText(m_lblArtist, QString("Artist: %1").arg(track.artist));
+		setTrackLabelText(m_lblAlbum, QString("Album: %1").arg(track.album.isEmpty() ? "—" : track.album));
 		if (m_loadedArtworkUri != track.artworkUri) {
 			QPixmap artwork;
 			artwork.loadFromData(RsMusicMetadata::artworkBytes(track.artworkUri));
@@ -186,9 +241,9 @@ void RsMusicNowPlaying::updateFromState()
 
 		if (track.isFromPlaylist) {
 			const QString label = track.requestedBy.trimmed().isEmpty() ? m_state->playlistLabel() : track.requestedBy;
-			m_lblRequester->setText(QString("Requested by: %1").arg(label));
+			setTrackLabelText(m_lblRequester, QString("Requested by: %1").arg(label));
 		} else {
-			m_lblRequester->setText(QString("Requested by: %1").arg(track.requestedBy));
+			setTrackLabelText(m_lblRequester, QString("Requested by: %1").arg(track.requestedBy));
 		}
 
 		const int duration = qMax(0, track.durationSeconds * 1000);

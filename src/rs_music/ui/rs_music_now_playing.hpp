@@ -6,6 +6,8 @@ class QLabel;
 class QPushButton;
 class QSlider;
 class QPixmap;
+class QGridLayout;
+class QResizeEvent;
 
 class RsMusicState;
 class RsMusicController;
@@ -16,6 +18,10 @@ class RsMusicNowPlaying : public QWidget {
 public:
 	explicit RsMusicNowPlaying(RsMusicState *state, RsMusicController *controller, QWidget *parent = nullptr);
 	void setHubConnected(bool connected);
+	void setCompactLayout(bool compact);
+
+protected:
+	void resizeEvent(QResizeEvent *event) override;
 
 private slots:
 	void updateFromState();
@@ -42,4 +48,8 @@ private:
 	QPushButton *m_btnSkip = nullptr;
 	QPushButton *m_btnRestart = nullptr;
 	QPushButton *m_btnStop = nullptr;
+	QGridLayout *m_controlsGrid = nullptr;
+	bool m_compactLayout = false;
+	void setTrackLabelText(QLabel *label, const QString &text);
+	void refreshTrackLabelElision();
 };

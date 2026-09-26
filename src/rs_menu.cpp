@@ -73,23 +73,23 @@ void RsMainDock::createSidebarMenus()
 		makeButton("OBS Settings", "Open or mirror OBS settings (placeholder)", "preferences-system", "⚙");
 
 	// SYSTEM menu buttons laid out as a grid (prevents extra vertical space)
-	auto *sysGrid = new QGridLayout();
-	sysGrid->setContentsMargins(0, 0, 0, 0);
-	sysGrid->setHorizontalSpacing(6);
-	sysGrid->setVerticalSpacing(6);
+	m_systemMenuGrid = new QGridLayout();
+	m_systemMenuGrid->setContentsMargins(0, 0, 0, 0);
+	m_systemMenuGrid->setHorizontalSpacing(6);
+	m_systemMenuGrid->setVerticalSpacing(6);
 
-	sysGrid->addWidget(m_btnControls, 0, 0);
-	sysGrid->addWidget(m_btnScenesSources, 0, 1);
-	sysGrid->addWidget(m_btnStats, 1, 0);
-	sysGrid->addWidget(m_btnObsSettings, 1, 1);
+	m_systemMenuGrid->addWidget(m_btnControls, 0, 0);
+	m_systemMenuGrid->addWidget(m_btnScenesSources, 0, 1);
+	m_systemMenuGrid->addWidget(m_btnStats, 1, 0);
+	m_systemMenuGrid->addWidget(m_btnObsSettings, 1, 1);
 
-	sysGrid->setColumnStretch(0, 1);
-	sysGrid->setColumnStretch(1, 1);
-	sysGrid->setRowStretch(0, 0);
-	sysGrid->setRowStretch(1, 0);
+	m_systemMenuGrid->setColumnStretch(0, 1);
+	m_systemMenuGrid->setColumnStretch(1, 1);
+	m_systemMenuGrid->setRowStretch(0, 0);
+	m_systemMenuGrid->setRowStretch(1, 0);
 
 	// Insert grid into the existing VBox layout
-	m_systemMenuLayout->addLayout(sysGrid);
+	m_systemMenuLayout->addLayout(m_systemMenuGrid);
 
 	// IMPORTANT: stop VBox from adding free space below
 	m_systemMenuLayout->addStretch(0);

@@ -283,23 +283,28 @@ void RsMainDock::createPanels()
 
 		QLabel *browserRefreshHeading = nullptr;
 		auto browserSection = makeSection("Browser Refresh", &browserRefreshHeading);
+		m_streamToolActionLayouts.append(browserSection.second);
 		browserRefreshHeading->setObjectName("browserRefreshState");
 		browserSection.second->addWidget(refreshCurrent, 0, 0);
 		browserSection.second->addWidget(refreshAll, 0, 1);
 		auto replaySection = makeSection("Instant Replay — waiting for Hub", &m_lblStreamToolReplay);
+		m_streamToolActionLayouts.append(replaySection.second);
 		replaySection.second->addWidget(showReplay, 0, 0);
 		replaySection.second->addWidget(hideReplay, 0, 1);
 		replaySection.second->addWidget(triggerReplay, 1, 0, 1, 2);
 		auto quickTextSection = makeSection("Quick Text — waiting for Hub", &m_lblStreamToolQuickText);
+		m_streamToolActionLayouts.append(quickTextSection.second);
 		quickTextSection.second->addWidget(m_btnStreamToolQuickTextShow, 0, 0);
 		quickTextSection.second->addWidget(hideQuickText, 0, 1);
 		auto timerSection = makeSection("Countdown — waiting for Hub", &m_lblStreamToolTimer);
+		m_streamToolActionLayouts.append(timerSection.second);
 		timerSection.second->addWidget(showTimer, 0, 0);
 		timerSection.second->addWidget(hideTimer, 0, 1);
 		timerSection.second->addWidget(m_btnStreamToolTimerStart, 1, 0);
 		timerSection.second->addWidget(m_btnStreamToolTimerPause, 1, 1);
 		timerSection.second->addWidget(resetTimer, 2, 0, 1, 2);
 		auto musicOverlaySection = makeSection("Music Overlay — waiting for Hub", &m_lblStreamToolMusicOverlay);
+		m_streamToolActionLayouts.append(musicOverlaySection.second);
 		musicOverlaySection.second->addWidget(showMusicOverlay, 0, 0);
 		musicOverlaySection.second->addWidget(hideMusicOverlay, 0, 1);
 

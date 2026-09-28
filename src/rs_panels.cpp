@@ -28,6 +28,7 @@
 #include "enhancements/rs_browser_refresh.hpp"
 #include "enhancements/rs_auto_start.hpp"
 #include "rs_music/rs_music_controller.hpp"
+#include "rs_stream_overlay_manager.hpp"
 
 static QIcon makeStreamToolFallbackIcon(const QString &emoji)
 {
@@ -422,7 +423,13 @@ void RsMainDock::createPanels()
 	auto *musicSettings = new RsMusicSettings(musicState, m_musicController, m_streamerAuth, m_botAuth, m_contentCard);
 	m_pageMusicSettings = musicSettings;
 	m_pageMusicSetup = new RsMusicSetup(m_contentCard);
-	RsMusicServer::instance().start(musicState);
+	const bool musicOverlayServerStarted = RsMusicServer::instance().start(musicState);
+	if (musicOverlayServerStarted) {
+		// Scene collections restore browser sources before this dock creates the
+		// Music Overlay server. Reload the managed source once the server is ready
+		// so a failed first request does not leave the overlay blank for the session.
+		QTimer::singleShot(250, this, [] { RsStreamOverlayManager::refreshMusicOverlaySettings(); });
+	}
 	m_pageMusicOverlay = new RsMusicOverlay(m_contentCard);
 
 	// Stack registration (order determines page index)

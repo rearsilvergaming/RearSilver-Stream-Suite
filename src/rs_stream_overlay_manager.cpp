@@ -56,6 +56,21 @@ bool isManagedTimer(obs_source_t *source)
 	return managed;
 }
 
+bool reloadBrowserSource(obs_source_t *source)
+{
+	if (!source || std::strcmp(obs_source_get_unversioned_id(source), "browser_source") != 0)
+		return false;
+
+	obs_properties_t *properties = obs_source_properties(source);
+	obs_property_t *refresh = properties ? obs_properties_get(properties, "refreshnocache") : nullptr;
+	const bool reloaded = refresh && obs_property_get_type(refresh) == OBS_PROPERTY_BUTTON;
+	if (reloaded)
+		obs_property_button_clicked(refresh, source);
+	if (properties)
+		obs_properties_destroy(properties);
+	return reloaded;
+}
+
 bool isManagedMusicOverlay(obs_source_t *source)
 {
 	if (!source || obs_source_removed(source) || std::strcmp(obs_source_get_unversioned_id(source), "browser_source") != 0)
@@ -881,6 +896,9 @@ QJsonObject RsStreamOverlayManager::refreshMusicOverlaySettings()
 		return result;
 	}
 	applyMusicOverlaySettings(source);
+	const bool reloaded = reloadBrowserSource(source);
+	blog(reloaded ? LOG_INFO : LOG_WARNING, "[RS Music Overlay] Managed browser source %s after settings refresh.",
+	     reloaded ? "reloaded" : "did not accept a reload request");
 	const QJsonObject result = simplePlacementEnabled()
 		? musicOverlaySimpleStatusFor(source, false) : musicOverlayAdvancedStatusFor(source, false);
 	obs_source_release(source);

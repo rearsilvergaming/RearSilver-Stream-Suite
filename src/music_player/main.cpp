@@ -1905,6 +1905,126 @@ static std::vector<DWORD> processIdsForProgram(const std::wstring &program)
 	return ids;
 }
 
+enum class AvatarCompanionInstallState { NotRegistered, Invalid, ExecutableMissing, Valid };
+
+struct AvatarCompanionState {
+	AvatarCompanionInstallState installState = AvatarCompanionInstallState::NotRegistered;
+	bool launchEnabled = false;
+	std::wstring executable;
+	std::string failureDetail;
+};
+
+static std::wstring avatarSettingsFilePath()
+{
+	wchar_t localAppData[32768]{};
+	const DWORD length = GetEnvironmentVariableW(L"LOCALAPPDATA", localAppData, DWORD(std::size(localAppData)));
+	if (!length || length >= std::size(localAppData)) return {};
+	return std::wstring(localAppData, length) + L"\\RearSilver Avatar\\settings.ini";
+}
+
+static bool avatarCompanionLaunchEnabled()
+{
+	const std::wstring settings = avatarSettingsFilePath();
+	if (settings.empty()) return false;
+	return GetPrivateProfileIntW(L"Avatar", L"OpenWithStreamSuite", 0, settings.c_str()) == 1;
+}
+
+static AvatarCompanionState avatarCompanionState()
+{
+	AvatarCompanionState state;
+	state.launchEnabled = avatarCompanionLaunchEnabled();
+
+	constexpr wchar_t uninstallKey[] =
+		L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\RearSilver Avatar Suite";
+	HKEY key = nullptr;
+	const LSTATUS openResult = RegOpenKeyExW(HKEY_LOCAL_MACHINE, uninstallKey, 0,
+		KEY_READ | KEY_WOW64_64KEY, &key);
+	if (openResult == ERROR_FILE_NOT_FOUND || openResult == ERROR_PATH_NOT_FOUND)
+		return state;
+	if (openResult != ERROR_SUCCESS) {
+		state.installState = AvatarCompanionInstallState::Invalid;
+		state.failureDetail = "stage=registry-open win32=" + std::to_string(openResult);
+		return state;
+	}
+
+	wchar_t installLocation[32768]{};
+	DWORD bytes = sizeof(installLocation);
+	const LSTATUS readResult = RegGetValueW(key, nullptr, L"InstallLocation", RRF_RT_REG_SZ,
+		nullptr, installLocation, &bytes);
+	RegCloseKey(key);
+	state.installState = AvatarCompanionInstallState::Invalid;
+	if (readResult != ERROR_SUCCESS) {
+		state.failureDetail = "stage=install-location-read win32=" + std::to_string(readResult);
+		return state;
+	}
+	if (!installLocation[0]) {
+		state.failureDetail = "stage=install-location-empty";
+		return state;
+	}
+
+	const std::filesystem::path installPath(installLocation);
+	if (!installPath.is_absolute()) {
+		state.failureDetail = "stage=install-location-not-absolute";
+		return state;
+	}
+	const std::filesystem::path executable = installPath / L"RearSilver Avatar Suite.exe";
+	const DWORD attributes = GetFileAttributesW(executable.c_str());
+	if (attributes == INVALID_FILE_ATTRIBUTES || (attributes & FILE_ATTRIBUTE_DIRECTORY)) {
+		state.installState = AvatarCompanionInstallState::ExecutableMissing;
+		state.failureDetail = "win32=" + std::to_string(
+			attributes == INVALID_FILE_ATTRIBUTES ? GetLastError() : ERROR_DIRECTORY);
+		return state;
+	}
+
+	state.installState = AvatarCompanionInstallState::Valid;
+	state.executable = executable.wstring();
+	return state;
+}
+
+enum class AvatarCompanionLaunchResult { Disabled, NotRegistered, Invalid, AlreadyRunning, Launched, Failed };
+
+static AvatarCompanionLaunchResult launchAvatarCompanion(bool requireEnabledPreference)
+{
+	const AvatarCompanionState state = avatarCompanionState();
+	if (requireEnabledPreference && !state.launchEnabled) {
+		traceLog("avatar-companion-preference-disabled");
+		return AvatarCompanionLaunchResult::Disabled;
+	}
+	if (state.installState == AvatarCompanionInstallState::NotRegistered) {
+		traceLog("avatar-companion-not-registered");
+		return AvatarCompanionLaunchResult::NotRegistered;
+	}
+	if (state.installState == AvatarCompanionInstallState::ExecutableMissing) {
+		traceLog("avatar-companion-executable-missing", state.failureDetail);
+		return AvatarCompanionLaunchResult::Invalid;
+	}
+	if (state.installState != AvatarCompanionInstallState::Valid) {
+		traceLog("avatar-companion-install-invalid", state.failureDetail);
+		return AvatarCompanionLaunchResult::Invalid;
+	}
+	if (!processIdsForProgram(state.executable).empty()) {
+		traceLog("avatar-companion-already-running");
+		return AvatarCompanionLaunchResult::AlreadyRunning;
+	}
+
+	const std::filesystem::path executable(state.executable);
+	const std::wstring folder = executable.parent_path().wstring();
+	STARTUPINFOW startup{};
+	startup.cb = sizeof(startup);
+	PROCESS_INFORMATION process{};
+	if (!CreateProcessW(state.executable.c_str(), nullptr, nullptr, nullptr, FALSE,
+		CREATE_BREAKAWAY_FROM_JOB, nullptr, folder.empty() ? nullptr : folder.c_str(),
+		&startup, &process)) {
+		const DWORD error = GetLastError();
+		traceLog("avatar-companion-launch-failed", "win32=" + std::to_string(error));
+		return AvatarCompanionLaunchResult::Failed;
+	}
+	CloseHandle(process.hThread);
+	CloseHandle(process.hProcess);
+	traceLog("avatar-companion-launched");
+	return AvatarCompanionLaunchResult::Launched;
+}
+
 static void launchManagedProgram(const std::wstring &program)
 {
 	if (program.empty() || GetFileAttributesW(program.c_str()) == INVALID_FILE_ATTRIBUTES || !processIdsForProgram(program).empty()) return;
@@ -2275,6 +2395,7 @@ public:
 										if(value){setMusicSetting(L"suiteSettings.setupCompleted",value->GetBool("completed")?L"true":L"false");setMusicSetting(L"suiteSettings.setupStep",std::to_wstring(std::clamp(value->GetInt("step"),0,4)));setMusicSetting(L"suiteSettings.setupSchemaVersion",std::to_wstring(std::max(1,value->GetInt("schemaVersion"))));}
 									}
 									else if(object->GetString("action").ToString()=="setOpenHubWithObs")setMusicSetting(L"openHubWithObs",object->GetBool("value")?L"true":L"false");
+									else if(object->GetString("action").ToString()=="launchAvatarSuite")launchAvatarCompanion(false);
 								else if(object->GetString("action").ToString()=="openCommands"){
 									g_page=6;showPage(g_page);InvalidateRect(m_parent,nullptr,FALSE);return S_OK;
 								}
@@ -2607,6 +2728,17 @@ private:
 		d->SetInt("setupStep", std::clamp(_wtoi(musicSetting(L"suiteSettings.setupStep", L"0").c_str()), 0, 4));
 		d->SetInt("setupSchemaVersion", std::max(1, _wtoi(musicSetting(L"suiteSettings.setupSchemaVersion", L"1").c_str())));
 		d->SetBool("openHubWithObs", musicBool(L"openHubWithObs", false));
+		const AvatarCompanionState avatar = avatarCompanionState();
+		d->SetBool("avatarCompanionSupported", true);
+		d->SetBool("avatarSuiteRegistered", avatar.installState != AvatarCompanionInstallState::NotRegistered);
+		d->SetBool("avatarSuiteInstalled", avatar.installState == AvatarCompanionInstallState::Valid);
+		d->SetBool("avatarSuiteLaunchEnabled", avatar.launchEnabled);
+		d->SetBool("avatarSuiteInstallValid", avatar.installState == AvatarCompanionInstallState::Valid);
+		d->SetString("avatarSuiteStatus",
+			avatar.installState == AvatarCompanionInstallState::NotRegistered ? "Avatar Suite is not installed." :
+			avatar.installState != AvatarCompanionInstallState::Valid ? "The saved Avatar Suite installation is invalid or its executable is missing." :
+			avatar.launchEnabled ? "Avatar Suite is installed and will open with Stream Suite." :
+			"Avatar Suite is installed, but companion launch is off.");
 		d->SetString("overlayPlacementMode", wideToUtf8(overlayPlacementMode()));
 		d->SetBool("ipcConnected", g_hostPipeConnected);
 		d->SetBool("captureExists", g_captureExists);
@@ -2689,6 +2821,7 @@ private:
 		const RsBeta::State beta = RsBeta::currentState();
 		const SpotifyClientState spotify = g_spotify.state();
 		const TwitchAccountState streamer = g_streamerTwitch.state(), bot = g_botTwitch.state();
+		const AvatarCompanionState avatar = avatarCompanionState();
 		std::ostringstream report;
 		const std::string issueDate = field("issueDate");
 		report << "RearSilver Stream Suite — " << RsBeta::kChannel << " Feedback Report\n"
@@ -2720,6 +2853,9 @@ private:
 			<< "--------------------------------\n"
 			<< "Control Hub process: Running\nControl Hub/OBS IPC: " << (g_hostPipeConnected ? "Connected" : "Disconnected")
 			<< "\nFeature access: " << (beta.expired ? "Disabled (private beta expired)" : "Enabled")
+			<< "\nAvatar Suite detected: " << (avatar.installState != AvatarCompanionInstallState::NotRegistered ? "Yes" : "No")
+			<< "\nAvatar companion launch enabled: " << (avatar.launchEnabled ? "Yes" : "No")
+			<< "\nAvatar installation valid: " << (avatar.installState == AvatarCompanionInstallState::Valid ? "Yes" : "No")
 			<< "\nActive music provider: " << (g_hub.activeSource().empty() ? "None" : g_hub.activeSource())
 			<< "\nYouTube fallback availability: " << (!g_hub.youtubeFallback().empty() ? "Available" : "No playlist loaded")
 			<< "\nLocal library availability: " << (!g_hub.localLibrary().empty() ? "Available" : "No local library loaded")
@@ -4334,7 +4470,10 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int)
 	}
 	if (!betaExpired) updateHubMediaKeyRegistration(window);
 	// OBS launches the Hub; the Hub is the sole owner of its optional apps.
-	if (!betaExpired) launchManagedPrograms();
+	if (!betaExpired) {
+		launchManagedPrograms();
+		launchAvatarCompanion(true);
+	}
 	HANDLE pipe = CreateNamedPipeW(L"\\\\.\\pipe\\RearSilverStreamSuiteMusicPlayer", PIPE_ACCESS_DUPLEX,
 		PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_NOWAIT, 1, 1024 * 1024, 1024 * 1024, 0, nullptr);
 	if (pipe == INVALID_HANDLE_VALUE) return 3;

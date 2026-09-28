@@ -395,6 +395,7 @@ Section "RearSilver Stream Suite" MainSection
   WriteRegStr HKLM "${PRODUCT_REG_KEY}" "DisplayIcon" "$INSTDIR\Control Hub\RearSilver-Stream-Suite-Control-Hub.exe"
   WriteRegStr HKLM "${PRODUCT_REG_KEY}" "InstallLocation" "$INSTDIR"
   WriteRegStr HKLM "${PRODUCT_REG_KEY}" "OBSInstallLocation" "$ObsDir"
+  WriteRegDWORD HKLM "${PRODUCT_REG_KEY}" "AvatarCompanionSchema" 1
   WriteRegStr HKLM "${PRODUCT_REG_KEY}" "UninstallString" '"$INSTDIR\Uninstall.exe"'
   WriteRegStr HKLM "${PRODUCT_REG_KEY}" "QuietUninstallString" '"$INSTDIR\Uninstall.exe" /S'
   WriteRegDWORD HKLM "${PRODUCT_REG_KEY}" "NoModify" 1
